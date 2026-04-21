@@ -10,7 +10,7 @@
 #   sh scripts/openwrt-allow-client.sh 192.168.1.55 --permanent
 #
 # Por defecto, la autorizacion expira en 30 minutos (timeout del set nftables).
-# Con --permanent, la IP se agrega con timeout 0 y nunca expira.
+# Con --permanent, la IP se agrega con timeout 0s y nunca expira.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib/common.sh"
@@ -53,9 +53,9 @@ if router_ip_in_set "$IP"; then
     if [ "$PERMANENT" -eq 1 ]; then
         # Puede estar en el set pero con timeout — re-agregar con timeout 0
         log_info "$IP ya esta en el set — re-agregando como permanente..."
-        router_ssh "nft add element $NFT_TABLE $NFT_SET { $IP timeout 0 }" || \
-            die "No se pudo re-agregar $IP con timeout 0"
-        log_ok "$IP marcada como permanente (timeout 0)"
+        router_ssh "nft add element $NFT_TABLE $NFT_SET { $IP timeout 0s }" || \
+            die "No se pudo re-agregar $IP con timeout 0s"
+        log_ok "$IP marcada como permanente (timeout 0s)"
     else
         log_info "$IP ya esta autorizada en $NFT_SET"
         # Mostrar tiempo restante si el set tiene timeout
@@ -69,8 +69,8 @@ fi
 log_info "Autorizando $IP en $NFT_SET..."
 
 if [ "$PERMANENT" -eq 1 ]; then
-    # timeout 0 = nunca expira
-    router_ssh "nft add element $NFT_TABLE $NFT_SET { $IP timeout 0 }" || \
+    # timeout 0s = nunca expira
+    router_ssh "nft add element $NFT_TABLE $NFT_SET { $IP timeout 0s }" || \
         die "No se pudo agregar $IP con timeout 0 al set $NFT_SET"
     MSG="$IP autorizada permanentemente (no expira)"
 else

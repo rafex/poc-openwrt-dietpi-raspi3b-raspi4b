@@ -90,11 +90,11 @@ log_info "Limpiando set $NFT_SET..."
 router_ssh "nft flush set $NFT_TABLE $NFT_SET" || \
     die "No se pudo hacer flush del set $NFT_SET"
 
-# Restaurar IPs base como permanentes (timeout 0 = nunca expiran)
+# Restaurar IPs base como permanentes (timeout 0s = nunca expiran)
 log_info "Restaurando IPs base (admin y portal como permanentes)..."
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0 }" || \
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0s }" || \
     die "No se pudo restaurar $ADMIN_IP"
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0 }" || \
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" || \
     die "No se pudo restaurar $PORTAL_IP"
 
 # Verificar que las IPs base estan presentes

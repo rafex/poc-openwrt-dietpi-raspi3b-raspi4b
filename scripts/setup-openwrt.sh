@@ -170,12 +170,12 @@ table ip captive {
     #   → el cliente vuelve al portal sin necesidad de bloquearlo manualmente
     #   → combinado con DHCP lease=30m: al reconectar obtiene nueva IP → portal
     #
-    # Admin ($ADMIN_IP) y portal ($PORTAL_IP): timeout 0 = NUNCA expiran
+    # Admin ($ADMIN_IP) y portal ($PORTAL_IP): timeout 0s = NUNCA expiran
     set $NFT_SET {
         type ipv4_addr
         flags dynamic, timeout
         timeout 30m
-        elements = { $ADMIN_IP timeout 0, $PORTAL_IP timeout 0 }
+        elements = { $ADMIN_IP timeout 0s, $PORTAL_IP timeout 0s }
     }
 
     # Redireccion HTTP: clientes WiFi no autorizados -> portal en $PORTAL_IP
