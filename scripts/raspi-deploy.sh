@@ -173,21 +173,32 @@ if [ "$DO_APPLY" -eq 1 ]; then
         log_ok "$manifest ✓"
     done
 
-    # Detectar si el configmap cambió — nginx no recarga automáticamente
+    # Determinar si hace falta un rollout restart — un solo restart aunque
+    # hayan cambiado varias cosas (evita el error "already triggered within past second")
+    NEED_RESTART=0
+    RESTART_REASON=""
+
+    # Razón 1: ConfigMap nginx cambió (nginx no recarga automáticamente)
     CM_HASH_AFTER=$($KUBECTL get configmap captive-portal-nginx-conf \
         -n default -o jsonpath='{.data}' 2>/dev/null | md5sum | cut -d' ' -f1 || echo "none")
-
     if [ "$CM_HASH_BEFORE" != "$CM_HASH_AFTER" ]; then
-        log_warn "ConfigMap nginx cambió — forzando rollout restart para que nginx recargue..."
-        $KUBECTL rollout restart deployment/captive-portal -n default
-        log_ok "Rollout restart lanzado"
+        NEED_RESTART=1
+        RESTART_REASON="ConfigMap nginx cambió"
     fi
 
-    # Si cambió el backend, forzar restart también (imagePullPolicy: Never
-    # no re-descarga, pero sí necesita restart para tomar la nueva imagen importada)
+    # Razón 2: imagen reconstruida (imagePullPolicy: Never no re-descarga,
+    # el pod debe reiniciarse para tomar la nueva imagen de containerd)
     if [ "$DO_BUILD" -eq 1 ]; then
-        log_info "Imagen reconstruida — forzando rollout restart del deployment..."
+        NEED_RESTART=1
+        RESTART_REASON="${RESTART_REASON:+$RESTART_REASON + }imagen backend reconstruida"
+    fi
+
+    if [ "$NEED_RESTART" -eq 1 ]; then
+        log_warn "Rollout restart necesario — motivo: $RESTART_REASON"
         $KUBECTL rollout restart deployment/captive-portal -n default
+        log_ok "Rollout restart lanzado"
+    else
+        log_info "Sin cambios relevantes — no se requiere rollout restart"
     fi
 
     # =============================================================================
