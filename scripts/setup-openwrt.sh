@@ -159,7 +159,13 @@ NFT_CONTENT="#!/usr/sbin/nft -f
 # captive-portal.nft — Generado por setup-openwrt.sh
 # Tabla de control de acceso para captive portal en OpenWrt 25.x
 #
-# SEGURIDAD: $ADMIN_IP (admin) NUNCA es bloqueada
+# NOTA DE DISEÑO:
+#   Las reglas usan matching por IP de origen (ip saddr) en lugar de
+#   interfaz (iifname), porque en OpenWrt los clientes WiFi pasan por el
+#   bridge br-lan y el hook forward ve br-lan, no la interfaz AP (phy0-ap0).
+#   Matching por subred LAN es más robusto y funciona con cualquier topología.
+#
+# SEGURIDAD: $ADMIN_IP (admin) y $PORTAL_IP (portal) NUNCA son bloqueadas.
 # Para resetear: nft delete table ip captive
 
 add table ip captive
@@ -167,9 +173,8 @@ add table ip captive
 table ip captive {
     # Set de clientes autorizados — IPs que pueden navegar libremente
     #
-    # timeout 30m: las autorizaciones de clientes WiFi expiran solas
-    #   → el cliente vuelve al portal sin necesidad de bloquearlo manualmente
-    #   → combinado con DHCP lease=30m: al reconectar obtiene nueva IP → portal
+    # timeout 30m: las autorizaciones expiran solas
+    #   → combinado con DHCP lease=30m: al reconectar pasan de nuevo por el portal
     #
     # Admin ($ADMIN_IP) y portal ($PORTAL_IP): timeout 0s = NUNCA expiran
     set $NFT_SET {
@@ -179,39 +184,46 @@ table ip captive {
         elements = { $ADMIN_IP timeout 0s, $PORTAL_IP timeout 0s }
     }
 
-    # Redireccion HTTP: clientes WiFi no autorizados -> portal en $PORTAL_IP
+    # Redireccion HTTP: clientes de la LAN no autorizados → portal en $PORTAL_IP
+    # Matching por subred: funciona con WiFi (br-lan) y cualquier otro bridge
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
 
-        # Clientes autorizados: no redirigir
-        iifname \"$AP_IFACE\" tcp dport 80 ip saddr @$NFT_SET accept
+        # No redirigir tráfico que ya va al portal
+        ip daddr $PORTAL_IP accept
 
-        # Redirigir todo HTTP de la WiFi al portal
-        iifname \"$AP_IFACE\" tcp dport 80 dnat to $PORTAL_IP:80
+        # Clientes autorizados: no redirigir
+        ip saddr @$NFT_SET accept
+
+        # Redirigir HTTP de la LAN que no está autorizado al portal
+        ip saddr $LAN_SUBNET tcp dport 80 dnat to $PORTAL_IP:80
     }
 
-    # Control de forward: bloquear trafico no autorizado de la WiFi
-    # priority filter - 1 = se evalua ANTES que las cadenas de inet fw4
+    # Control de forward: bloquear trafico de clientes no autorizados
+    # priority filter - 1 = se evalua ANTES que las reglas de inet fw4
     chain forward_captive {
         type filter hook forward priority filter - 1; policy accept;
 
-        # Admin: acceso total siempre (REGLA DE ORO)
-        iifname \"$AP_IFACE\" ip saddr $ADMIN_IP accept
+        # Tráfico que sale del router hacia internet (no LAN): no tocar
+        ip saddr != $LAN_SUBNET accept
 
-        # Trafico hacia el portal: siempre permitido
-        iifname \"$AP_IFACE\" ip daddr $PORTAL_IP accept
+        # Admin: acceso total siempre (REGLA DE ORO — nunca bloquear)
+        ip saddr $ADMIN_IP accept
 
-        # DHCP: necesario para que los clientes obtengan IP
-        iifname \"$AP_IFACE\" udp dport { 67, 68 } accept
+        # Portal: siempre permitido en ambas direcciones
+        ip saddr $PORTAL_IP accept
+        ip daddr $PORTAL_IP accept
 
-        # DNS: necesario para resolver el captive portal
-        iifname \"$AP_IFACE\" th dport 53 accept
+        # DHCP y DNS: necesarios para que los clientes obtengan IP y lleguen al portal
+        udp dport { 67, 68 } accept
+        tcp dport 53 accept
+        udp dport 53 accept
 
-        # Clientes autorizados: acceso total
-        iifname \"$AP_IFACE\" ip saddr @$NFT_SET accept
+        # Clientes autorizados: acceso total a internet
+        ip saddr @$NFT_SET accept
 
-        # Bloquear todo lo demas de la WiFi
-        iifname \"$AP_IFACE\" drop
+        # Todo lo demás de la LAN sin autorización: bloquear
+        ip saddr $LAN_SUBNET drop
     }
 }
 "

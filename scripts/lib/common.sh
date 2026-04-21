@@ -8,13 +8,14 @@
 ROUTER_IP="192.168.1.1"
 PORTAL_IP="192.168.1.167"
 ADMIN_IP="192.168.1.113"
+LAN_SUBNET="192.168.1.0/24"    # subred LAN completa — usada en reglas nftables
 SSH_KEY="/opt/keys/captive-portal"
 SSH_KEY_PUB="/opt/keys/captive-portal.pub"
 NFT_TABLE="ip captive"
 NFT_SET="allowed_clients"
 NFT_FILE="/etc/nftables.d/captive-portal.nft"
 DNSMASQ_CONF="/etc/dnsmasq.d/captive-portal.conf"
-AP_IFACE="phy0-ap0"
+AP_IFACE="phy0-ap0"            # solo usado en pre-flight check de interfaz WiFi
 
 # =============================================================================
 # Logging
