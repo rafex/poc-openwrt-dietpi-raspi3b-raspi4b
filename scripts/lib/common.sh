@@ -7,7 +7,7 @@
 # =============================================================================
 ROUTER_IP="192.168.1.1"
 PORTAL_IP="192.168.1.167"
-ADMIN_IP="192.168.1.128"
+ADMIN_IP="192.168.1.113"
 SSH_KEY="/opt/keys/captive-portal"
 SSH_KEY_PUB="/opt/keys/captive-portal.pub"
 NFT_TABLE="ip captive"
