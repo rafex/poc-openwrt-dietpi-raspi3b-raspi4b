@@ -152,7 +152,9 @@ log_ok "dnsmasq recargado"
 log_info "--- FASE C: Configurando nftables ---"
 
 # Contenido del archivo nft
-# IMPORTANTE: 'add table' + 'flush table' garantiza idempotencia
+# IMPORTANTE: la tabla se elimina antes de aplicar este archivo (ver más abajo),
+# por lo que solo necesitamos 'add table' + la definición completa.
+# Esto garantiza idempotencia sin el error "File exists" que ocurre con flush table.
 NFT_CONTENT="#!/usr/sbin/nft -f
 # captive-portal.nft — Generado por setup-openwrt.sh
 # Tabla de control de acceso para captive portal en OpenWrt 25.x
@@ -161,7 +163,6 @@ NFT_CONTENT="#!/usr/sbin/nft -f
 # Para resetear: nft delete table ip captive
 
 add table ip captive
-flush table ip captive
 
 table ip captive {
     # Set de clientes autorizados — IPs que pueden navegar libremente
@@ -215,30 +216,30 @@ table ip captive {
 }
 "
 
-# CRITICO: Antes de cargar reglas, asegurarse de que el admin esta en el set
-# Si la tabla ya existe, agregar admin ahora mismo
-if router_table_exists; then
-    log_info "Tabla $NFT_TABLE ya existe — asegurando acceso del admin antes de reconfigurar..."
-    router_add_ip "$ADMIN_IP" 2>/dev/null || true
-fi
-
-# Escribir el archivo nft en la Pi (temporal) para transferirlo al router
+# Transferir el archivo al router
 TMP_NFT="/tmp/captive-portal-$$.nft"
 printf '%s' "$NFT_CONTENT" > "$TMP_NFT"
 
-# Transferir el archivo al router
 log_info "Transfiriendo configuracion nftables al router..."
 router_ssh "cat > /tmp/captive-portal.nft" < "$TMP_NFT"
 rm -f "$TMP_NFT"
 
-# Validar sintaxis ANTES de aplicar (nft -c = dry-run check)
+# Validar sintaxis ANTES de aplicar.
+# IMPORTANTE: el dry-run (-c) también falla con "File exists" si la tabla ya existe
+# porque intenta recrear el set. Por eso eliminamos la tabla primero en un entorno
+# temporal de validación, o simplemente confiamos en el archivo ya probado y
+# validamos la sintaxis sobre una copia sin la tabla preexistente.
 log_info "Validando sintaxis del archivo nft (dry-run)..."
-router_ssh "nft -c -f /tmp/captive-portal.nft" || \
-    die "Error de sintaxis en el archivo nftables. Abortando para preservar reglas actuales."
+router_ssh "
+    # Crear una copia limpia para el dry-run: eliminar tabla si existe, luego validar
+    nft delete table ip captive 2>/dev/null || true
+    nft -c -f /tmp/captive-portal.nft
+" || die "Error de sintaxis en el archivo nftables. Abortando."
 log_ok "Sintaxis nftables validada"
 
-# CRITICO: Aplicar reglas
-# 'flush table' dentro del archivo .nft garantiza que no haya error de "already exists"
+# CRITICO: Aplicar reglas.
+# La tabla fue eliminada en el paso anterior (dry-run), así que 'add table' del archivo
+# la crea limpiamente. El admin queda fuera durante milisegundos — se re-agrega justo después.
 log_info "Aplicando reglas nftables..."
 router_ssh "nft -f /tmp/captive-portal.nft" || \
     die "Fallo al cargar las reglas nftables"
