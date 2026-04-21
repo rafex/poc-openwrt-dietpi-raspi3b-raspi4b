@@ -3,6 +3,7 @@
 ## 🔴 Bloqueante — necesario para el flujo completo
 
 ### Router OpenWrt
+- [ ] Ejecutar `bash scripts/openwrt-reserve-raspi.sh` para fijar IP 192.168.1.167 permanentemente en DHCP
 - [ ] Ejecutar `bash scripts/setup-openwrt.sh` desde la Pi
   - Configura nftables (tabla `ip captive`, redirección HTTP, bloqueo de forward)
   - Configura dnsmasq (dominios de detección → 192.168.1.167)
@@ -89,6 +90,8 @@
 - [x] Admin (192.168.1.128) y portal (192.168.1.167) con `timeout 0` (nunca expiran)
 - [x] `openwrt-allow-client.sh` soporta `--permanent` para autorizar sin expiración
 - [x] `openwrt-list-clients.sh` muestra tiempo restante de cada autorización
+- [x] Script `openwrt-flush-clients.sh` para resetear clientes al portal (conserva admin+portal permanentes)
+- [x] Script `openwrt-reserve-raspi.sh` para reserva DHCP permanente de la Pi (leasetime=infinite, detecta MAC automáticamente)
 
 - [x] Pod captive-portal 2/2 Running en k3s (nginx + backend Python sidecar)
 - [x] Traefik 3.6.10 expone el portal en 192.168.1.167:80

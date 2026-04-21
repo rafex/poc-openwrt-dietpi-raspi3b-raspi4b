@@ -150,6 +150,31 @@ Muestra:
 
 ---
 
+## openwrt-reserve-raspi.sh
+
+**Propósito:** Reservar permanentemente la IP 192.168.1.167 para la Raspberry Pi en el DHCP del router.  
+**Ejecutar en:** Raspberry Pi (conecta al router via SSH)  
+**Idempotente:** Sí
+
+```bash
+bash scripts/openwrt-reserve-raspi.sh              # detecta MAC automáticamente
+bash scripts/openwrt-reserve-raspi.sh --mac DC:A6:32:XX:XX:XX  # MAC manual
+```
+
+| Paso | Qué hace |
+|---|---|
+| 1 | Detecta la MAC de la Pi desde ARP del router; fallbacks a `/tmp/dhcp.leases` y `arp -n` |
+| 2 | Valida que la IP 192.168.1.167 no esté reservada a otra MAC (protección de conflictos) |
+| 3 | Crea o actualiza reserva UCI `dhcp.@host[N]` con `leasetime=infinite` |
+| 4 | Verifica que la DHCP option 6 (DNS) apunte al router |
+| 5 | Recarga dnsmasq |
+| 6 | Muestra tabla de todas las reservas DHCP actuales |
+
+> **Por qué es necesario:** Todos los scripts y manifiestos k8s usan `192.168.1.167` como IP fija.  
+> Sin esta reserva, un reinicio de la Pi podría asignarle otra IP y el captive portal dejaría de funcionar.
+
+---
+
 ## openwrt-flush-clients.sh
 
 **Propósito:** Resetear clientes autorizados — todos vuelven al portal.
