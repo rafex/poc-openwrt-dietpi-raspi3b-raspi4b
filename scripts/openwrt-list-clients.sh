@@ -41,16 +41,50 @@ printf ' CLIENTES AUTORIZADOS en nftables (%s)\n' "$NFT_SET"
 printf '=%.0s' $(seq 1 60); printf '\n'
 
 if router_set_exists; then
-    # Extraer solo las IPs del set (sin metadata de nft)
-    router_ssh "nft list set $NFT_TABLE $NFT_SET 2>/dev/null" | \
-        grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | sort | \
-        while read -r ip; do
-            if [ "$ip" = "$ADMIN_IP" ]; then
-                printf '  %-18s  [ADMIN - nunca bloqueado]\n' "$ip"
-            elif [ "$ip" = "$PORTAL_IP" ]; then
-                printf '  %-18s  [PORTAL]\n' "$ip"
+    # Obtener salida completa del set — incluye timeout y expires si el set tiene flags timeout
+    SET_RAW=$(router_ssh "nft list set $NFT_TABLE $NFT_SET 2>/dev/null")
+
+    # Verificar si el set usa timeout
+    HAS_TIMEOUT=0
+    printf '%s' "$SET_RAW" | grep -q 'flags.*timeout' && HAS_TIMEOUT=1
+
+    if [ "$HAS_TIMEOUT" -eq 1 ]; then
+        printf '  %-18s  %-12s  %s\n' "IP" "EXPIRA EN" "ROL"
+        printf '  %-18s  %-12s  %s\n' "------------------" "------------" "---"
+    else
+        printf '  %-18s  %s\n' "IP" "ROL"
+        printf '  %-18s  %s\n' "------------------" "---"
+    fi
+
+    # nft list set muestra las IPs con formato:
+    #   elements = { 192.168.1.128 timeout 0s expires 0s, 192.168.1.55 expires 28m30s, ... }
+    # Extraemos IP + expires con awk
+    printf '%s' "$SET_RAW" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[^,}]*' | \
+        while IFS= read -r entry; do
+            ip=$(printf '%s' "$entry" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+            expires=$(printf '%s' "$entry" | grep -oE 'expires [0-9hms]+' | sed 's/expires //')
+
+            # Timeout 0 o sin expires = permanente
+            if printf '%s' "$entry" | grep -q 'timeout 0'; then
+                time_str="permanente"
+            elif [ -n "$expires" ]; then
+                time_str="$expires"
             else
-                printf '  %-18s  [autorizado]\n' "$ip"
+                time_str="30m (nuevo)"
+            fi
+
+            if [ "$ip" = "$ADMIN_IP" ]; then
+                role="ADMIN (nunca expira)"
+            elif [ "$ip" = "$PORTAL_IP" ]; then
+                role="PORTAL (nunca expira)"
+            else
+                role="cliente WiFi"
+            fi
+
+            if [ "$HAS_TIMEOUT" -eq 1 ]; then
+                printf '  %-18s  %-12s  %s\n' "$ip" "$time_str" "$role"
+            else
+                printf '  %-18s  %s\n' "$ip" "$role"
             fi
         done || printf '  (set vacio)\n'
 else

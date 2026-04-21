@@ -150,6 +150,32 @@ Muestra:
 
 ---
 
+## openwrt-flush-clients.sh
+
+**Propósito:** Resetear clientes autorizados — todos vuelven al portal.
+**Ejecutar en:** Raspberry Pi
+
+```bash
+sh scripts/openwrt-flush-clients.sh              # pide confirmación
+sh scripts/openwrt-flush-clients.sh --force      # sin confirmación (scripts)
+```
+
+Qué hace:
+- `nft flush set ip captive allowed_clients` — vacía todos los clientes
+- Restaura `192.168.1.128` (admin) y `192.168.1.167` (portal) con `timeout 0`
+- `conntrack -F` — fuerza que conexiones existentes no bypaseen el bloqueo
+
+**Diferencia con `openwrt-reset-firewall.sh`:**
+
+| | `flush-clients` | `reset-firewall` |
+|---|---|---|
+| Elimina clientes autorizados | ✅ | ✅ |
+| Mantiene nftables activo | ✅ | ❌ (elimina todo) |
+| Portal sigue funcionando | ✅ | ❌ |
+| Uso típico | Reset entre demos | Emergencia |
+
+---
+
 ## openwrt-reset-firewall.sh
 
 **Propósito:** Emergencia — desactiva todo el captive portal.  

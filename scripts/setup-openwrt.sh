@@ -131,7 +131,16 @@ else
     log_ok "Configuracion dnsmasq insertada en /etc/dnsmasq.conf"
 fi
 
-# Recargar dnsmasq (sin systemd — usar /etc/init.d/)
+# Configurar DHCP lease time a 30 minutos via UCI
+# Razon: al reconectar, el dispositivo obtiene nueva IP → no esta en allowed_clients → portal
+log_info "Configurando DHCP lease time a 30 minutos..."
+router_ssh "
+    uci set dhcp.lan.leasetime='30m'
+    uci commit dhcp
+" && log_ok "DHCP lease time = 30m configurado" || \
+    log_warn "No se pudo configurar DHCP lease time via UCI (puede que la interfaz no se llame 'lan')"
+
+# Recargar dnsmasq — aplica tanto la config de captive portal como el nuevo lease time
 log_info "Recargando dnsmasq..."
 router_ssh "/etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart" || \
     log_warn "No se pudo recargar dnsmasq automaticamente"
@@ -156,11 +165,17 @@ flush table ip captive
 
 table ip captive {
     # Set de clientes autorizados — IPs que pueden navegar libremente
-    # Siempre incluye: admin ($ADMIN_IP) y portal ($PORTAL_IP)
+    #
+    # timeout 30m: las autorizaciones de clientes WiFi expiran solas
+    #   → el cliente vuelve al portal sin necesidad de bloquearlo manualmente
+    #   → combinado con DHCP lease=30m: al reconectar obtiene nueva IP → portal
+    #
+    # Admin ($ADMIN_IP) y portal ($PORTAL_IP): timeout 0 = NUNCA expiran
     set $NFT_SET {
         type ipv4_addr
-        flags dynamic
-        elements = { $ADMIN_IP, $PORTAL_IP }
+        flags dynamic, timeout
+        timeout 30m
+        elements = { $ADMIN_IP timeout 0, $PORTAL_IP timeout 0 }
     }
 
     # Redireccion HTTP: clientes WiFi no autorizados -> portal en $PORTAL_IP
