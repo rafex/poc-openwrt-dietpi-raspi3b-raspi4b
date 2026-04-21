@@ -5,6 +5,15 @@ metadata:
   namespace: kube-system
 spec:
   valuesContent: |-
+    # externalTrafficPolicy: Local — preserva la IP real del cliente en todo el camino.
+    # Sin esto, kube-proxy hace SNAT al reenviar a Traefik y la IP original se pierde
+    # (aparece 10.42.0.1 en lugar de 192.168.1.X).
+    service:
+      spec:
+        externalTrafficPolicy: Local
+
+    # Traefik confía en X-Forwarded-For de cualquier origen.
+    # Necesario porque el router hace DNAT hacia la Pi antes de llegar a Traefik.
     additionalArguments:
       - "--entryPoints.web.forwardedHeaders.insecure"
       - "--entryPoints.web.forwardedHeaders.trustedIPs=0.0.0.0/0"
