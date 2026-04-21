@@ -9,7 +9,7 @@ log = logging.getLogger(__name__)
 ROUTER_IP = "192.168.1.1"
 ROUTER_USER = "root"
 SSH_KEY = "/opt/keys/captive-portal"
-NFT_SET = "ip captive_fw allowed_clients"
+NFT_SET = "ip captive allowed_clients"
 
 def get_client_ip_from_router() -> str:
     ssh_cmd = "cat /proc/net/nf_conntrack | grep dport=80 | grep ESTABLISHED | awk '{print $7}' | sed 's/src=//' | grep '192.168.1.' | grep -v '192.168.1.167' | head -1"

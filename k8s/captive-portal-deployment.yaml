@@ -14,21 +14,44 @@ spec:
         app: captive-portal
     spec:
       containers:
-      - name: portal
-        image: nginx:alpine
-        ports:
-        - containerPort: 80
-        volumeMounts:
-        - name: nginx-conf
-          mountPath: /etc/nginx/conf.d/default.conf
-          subPath: default.conf
-        - name: nginx-conf
-          mountPath: /usr/share/nginx/html/index.html
-          subPath: index.html
-        - name: nginx-conf
-          mountPath: /usr/share/nginx/html/accepted.html
-          subPath: accepted.html
+        # --- Contenedor 1: nginx (portal HTML + proxy) ---
+        - name: portal
+          image: nginx:alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            - name: nginx-conf
+              mountPath: /etc/nginx/conf.d/default.conf
+              subPath: default.conf
+            - name: nginx-conf
+              mountPath: /usr/share/nginx/html/index.html
+              subPath: index.html
+            - name: nginx-conf
+              mountPath: /usr/share/nginx/html/accepted.html
+              subPath: accepted.html
+            - name: ssh-keys
+              mountPath: /opt/keys
+              readOnly: true
+
+        # --- Contenedor 2: backend Python (sidecar) ---
+        # Escucha en :8080. nginx hace proxy_pass http://localhost:8080/accept
+        # Detecta la IP del cliente via SSH+conntrack al router OpenWrt
+        # y autoriza via SSH+nft al set "ip captive allowed_clients"
+        - name: backend
+          image: localhost/captive-backend:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: ssh-keys
+              mountPath: /opt/keys
+              readOnly: true
+
       volumes:
-      - name: nginx-conf
-        configMap:
-          name: captive-portal-nginx-conf
+        - name: nginx-conf
+          configMap:
+            name: captive-portal-nginx-conf
+        - name: ssh-keys
+          hostPath:
+            path: /opt/keys
+            type: Directory

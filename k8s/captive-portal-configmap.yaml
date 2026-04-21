@@ -9,32 +9,51 @@ data:
         listen 80 default_server;
         server_name _;
 
+        # --- Detección de captive portal por SO ---
+        # iOS / macOS
         location /hotspot-detect.html {
             return 302 http://192.168.1.167/portal;
         }
+        # Android
         location /generate_204 {
             return 302 http://192.168.1.167/portal;
         }
+        # Windows
         location /connecttest.txt {
             return 302 http://192.168.1.167/portal;
         }
+        # Firefox
         location /success.txt {
             return 302 http://192.168.1.167/portal;
         }
+
+        # --- Portal principal ---
         location /portal {
             default_type text/html;
             root /usr/share/nginx/html;
             try_files /index.html =404;
         }
+
         location /accepted {
             default_type text/html;
             root /usr/share/nginx/html;
             try_files /accepted.html =404;
         }
+
+        # --- Proxy al backend Python (sidecar en localhost:8080) ---
+        # $http_x_real_ip viene de Traefik (HelmChartConfig con forwardedHeaders.insecure)
+        location /accept {
+            proxy_pass http://localhost:8080/accept;
+            proxy_set_header X-Real-IP      $http_x_real_ip;
+            proxy_set_header X-Forwarded-For $http_x_forwarded_for;
+        }
+
+        # Redirigir todo lo demás al portal
         location / {
             return 302 http://192.168.1.167/portal;
         }
     }
+
   index.html: |
     <!DOCTYPE html>
     <html>
@@ -60,12 +79,14 @@ data:
       <script>
         function accept() {
           fetch('/accept', { method: 'POST' })
+            .then(r => r.json())
             .then(() => window.location.href = '/accepted')
             .catch(() => window.location.href = '/accepted');
         }
       </script>
     </body>
     </html>
+
   accepted.html: |
     <!DOCTYPE html>
     <html>

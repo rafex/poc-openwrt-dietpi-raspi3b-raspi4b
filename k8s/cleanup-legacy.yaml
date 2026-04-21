@@ -1,0 +1,8 @@
+# cleanup-legacy.yaml — Elimina recursos residuales de versiones anteriores
+# Aplicar UNA SOLA VEZ: kubectl delete -f k8s/cleanup-legacy.yaml
+# Después de aplicar, este archivo puede borrarse del repo.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: captive-portal-html
+  namespace: default

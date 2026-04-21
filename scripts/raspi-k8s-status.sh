@@ -245,9 +245,16 @@ done
 sep "10. LOGS RECIENTES (pods captive-portal)"
 
 for pod in $($KUBECTL get pods -n default -o name 2>/dev/null | grep -i 'captive\|portal\|backend'); do
-    echo ""
-    echo "--- $pod ---"
-    $KUBECTL logs "$pod" -n default --tail=30 2>/dev/null || echo "  (no hay logs)"
+    # Obtener los nombres de contenedores del pod
+    containers=$($KUBECTL get "$pod" -n default \
+        -o jsonpath='{.spec.containers[*].name}' 2>/dev/null)
+
+    for container in $containers; do
+        echo ""
+        echo "--- $pod  [contenedor: $container] ---"
+        $KUBECTL logs "$pod" -n default -c "$container" --tail=40 2>/dev/null \
+            || echo "  (no hay logs para $container)"
+    done
 done
 
 printf '\n%s\n FIN DEL DIAGNÓSTICO\n%s\n\n' "$SEP" "$SEP"

@@ -14,7 +14,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKEND_DIR="$REPO_DIR/backend/captive-portal"
-K8S_DIR="$BACKEND_DIR/k8s"
+K8S_DIR="$REPO_DIR/k8s"
 
 # Constantes
 SSH_KEY="/opt/keys/captive-portal"

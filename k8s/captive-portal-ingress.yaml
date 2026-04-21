@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: captive-portal
+  namespace: default
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    # Traefik configurado con forwardedHeaders.insecure via HelmChartConfig
+    # (ver k8s/traefik-helmchartconfig.yaml)
+    traefik.ingress.kubernetes.io/forwarded-headers: "true"
+    traefik.ingress.kubernetes.io/forwarded-headers-insecure: "true"
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: captive-portal
+                port:
+                  number: 80
