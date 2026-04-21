@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: captive-portal-nginx-conf
+  namespace: default
+data:
+  default.conf: |
+    server {
+        listen 80 default_server;
+        server_name _;
+
+        location /hotspot-detect.html {
+            return 302 http://192.168.1.167/portal;
+        }
+        location /generate_204 {
+            return 302 http://192.168.1.167/portal;
+        }
+        location /connecttest.txt {
+            return 302 http://192.168.1.167/portal;
+        }
+        location /success.txt {
+            return 302 http://192.168.1.167/portal;
+        }
+        location /portal {
+            default_type text/html;
+            root /usr/share/nginx/html;
+            try_files /index.html =404;
+        }
+        location /accepted {
+            default_type text/html;
+            root /usr/share/nginx/html;
+            try_files /accepted.html =404;
+        }
+        location / {
+            return 302 http://192.168.1.167/portal;
+        }
+    }
+  index.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Portal RafexPi - Demo Seguridad</title>
+      <style>
+        body { font-family: sans-serif; max-width: 400px; margin: 40px auto; padding: 20px; text-align: center; }
+        button { background: #2563eb; color: white; border: none; padding: 14px 28px; font-size: 16px; border-radius: 8px; cursor: pointer; margin-top: 20px; width: 100%; }
+        button:hover { background: #1d4ed8; }
+        .warning { background: #fef3c7; border: 1px solid #f59e0b; padding: 12px; border-radius: 8px; margin: 16px 0; font-size: 14px; }
+      </style>
+    </head>
+    <body>
+      <h1>🔒 Red WiFi Demo</h1>
+      <p>Esta es una demostración educativa de seguridad en redes públicas con IA.</p>
+      <div class="warning">
+        ⚠️ Esta red monitorea metadatos de tráfico con fines educativos.
+      </div>
+      <p>Al continuar, aceptas participar en la demo.</p>
+      <button onclick="accept()">Entendido, quiero navegar</button>
+      <script>
+        function accept() {
+          fetch('/accept', { method: 'POST' })
+            .then(() => window.location.href = '/accepted')
+            .catch(() => window.location.href = '/accepted');
+        }
+      </script>
+    </body>
+    </html>
+  accepted.html: |
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Conectado</title>
+      <style>
+        body { font-family: sans-serif; max-width: 400px; margin: 40px auto; padding: 20px; text-align: center; }
+        .ok { color: #16a34a; font-size: 48px; }
+      </style>
+    </head>
+    <body>
+      <div class="ok">✓</div>
+      <h2>¡Conectado!</h2>
+      <p>Ya puedes navegar libremente.</p>
+      <p><a href="https://google.com">Ir a internet</a></p>
+    </body>
+    </html>
