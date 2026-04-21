@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Llaves privadas (nunca al repo)
+*.pem
+*.key
+/opt/keys/
+
+# Logs
+*.log
+
+# Output de diagnósticos — solo conservar los .md (reportes de estado)
+output/*
+!output/*.md
