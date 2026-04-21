@@ -9,6 +9,14 @@ data:
         listen 80 default_server;
         server_name _;
 
+        # --- Confiar en headers de Traefik ---
+        # Traefik (frente al cluster k3s) envía X-Forwarded-For con la IP real del cliente.
+        # Configurar nginx para extraer la IP real de ese header.
+        set_real_ip_from 10.42.0.0/16;      # rango de red k3s
+        real_ip_header X-Forwarded-For;
+        real_ip_recursive on;
+        # Ahora $remote_addr = IP real del cliente (192.168.1.X)
+
         # --- Detección de captive portal por SO ---
         # iOS / macOS
         location /hotspot-detect.html {
@@ -41,10 +49,10 @@ data:
         }
 
         # --- Proxy al backend Python (sidecar en localhost:8080) ---
-        # $http_x_real_ip viene de Traefik (HelmChartConfig con forwardedHeaders.insecure)
+        # $remote_addr ahora contiene la IP real del cliente (gracias a set_real_ip_from arriba)
         location /accept {
             proxy_pass http://127.0.0.1:8080/accept;
-            proxy_set_header X-Real-IP      $http_x_real_ip;
+            proxy_set_header X-Real-IP      $remote_addr;
             proxy_set_header X-Forwarded-For $http_x_forwarded_for;
         }
 
