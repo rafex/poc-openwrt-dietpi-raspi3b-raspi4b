@@ -211,6 +211,60 @@ Qué hace:
 
 ---
 
+## openwrt-dns-spoof-enable.sh
+
+**Propósito:** Activar la demo de DNS poisoning — suplantar dominios para que resuelvan a la Pi.  
+**Ejecutar en:** Raspberry Pi  
+**Idempotente:** Sí (elimina bloque anterior antes de escribir)
+
+```bash
+bash scripts/openwrt-dns-spoof-enable.sh                        # activa rafex.dev
+bash scripts/openwrt-dns-spoof-enable.sh --domain otro.com      # dominio extra
+bash scripts/openwrt-dns-spoof-enable.sh --domain a.com --domain b.com
+```
+
+Qué hace:
+- Añade entradas `address=/dominio/192.168.1.167` en dnsmasq del router
+- Recarga dnsmasq
+- Verifica que la resolución está envenenada
+
+Al visitar `http://rafex.dev` desde un dispositivo conectado al WiFi, nginx en la Pi
+sirve [`dns-poison.html`](../k8s/captive-portal-configmap.yaml) — una página que explica
+paso a paso qué acaba de ocurrir y qué es el DNS poisoning.
+
+> ⚠️ Solo funciona con **HTTP** (puerto 80). Con HTTPS el navegador mostrará error de
+> certificado — que en sí mismo es parte del aprendizaje.
+
+---
+
+## openwrt-dns-spoof-disable.sh
+
+**Propósito:** Desactivar la demo de DNS poisoning — devolver resolución DNS normal.  
+**Ejecutar en:** Raspberry Pi
+
+```bash
+bash scripts/openwrt-dns-spoof-disable.sh
+```
+
+Qué hace:
+- Elimina el bloque de dnsmasq añadido por `openwrt-dns-spoof-enable.sh`
+- Recarga dnsmasq
+- Verifica que los dominios ya no resuelven a la Pi
+
+**Flujo de uso en una demo:**
+
+```
+[antes de mostrar el ataque]
+bash scripts/openwrt-dns-spoof-enable.sh
+
+[audiencia visita http://rafex.dev → ve la página de explicación]
+
+[al terminar la demo]
+bash scripts/openwrt-dns-spoof-disable.sh
+```
+
+---
+
 ## openwrt-reset-firewall.sh
 
 **Propósito:** Emergencia — desactiva todo el captive portal.  

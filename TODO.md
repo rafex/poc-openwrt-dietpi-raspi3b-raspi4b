@@ -2,14 +2,15 @@
 
 ## 🔴 Bloqueante — necesario para el flujo completo
 
-### Router OpenWrt
-- [ ] Ejecutar `bash scripts/openwrt-reserve-raspi.sh` para fijar IP 192.168.1.167 permanentemente en DHCP
-- [ ] Ejecutar `bash scripts/setup-openwrt.sh` desde la Pi
-  - Configura nftables (tabla `ip captive`, redirección HTTP, bloqueo de forward)
-  - Configura dnsmasq (dominios de detección → 192.168.1.167)
-  - Persiste reglas en `/etc/nftables.d/captive-portal.nft`
-- [ ] Validar con `bash scripts/raspi-logs.sh --test` (Tests 3, 4 y 5)
-- [ ] Prueba real: conectar dispositivo al WiFi "INFINITUM MOVIL" y verificar redirección
+### Integración LLM
+- [ ] Instalar llama.cpp en la Pi
+- [ ] Seleccionar modelo (recomendado: Qwen2.5-0.5B-Instruct o similar para arm64)
+- [ ] Definir el rol del LLM en el portal:
+  - Opción A: chatbot en la página del portal (educativo)
+  - Opción B: análisis de tráfico de metadatos capturados
+  - Opción C: ambos
+- [ ] Integrar endpoint del LLM en el backend Python
+- [ ] Actualizar el HTML del portal para incluir la interfaz con el LLM
 
 ---
 
@@ -25,7 +26,7 @@
 ### k3s / Kubernetes
 - [ ] Aplicar y eliminar `k8s/cleanup-legacy.yaml` (borra ConfigMap `captive-portal-html`)
   ```bash
-  k3s kubectl delete -f k8s/cleanup-legacy.yaml
+  kubectl delete -f k8s/cleanup-legacy.yaml
   git rm k8s/cleanup-legacy.yaml
   ```
 - [ ] Agregar `livenessProbe` y `readinessProbe` al contenedor backend
@@ -38,7 +39,6 @@
     periodSeconds: 10
   ```
 - [ ] Configurar k3s para arrancar automáticamente en DietPi (sin systemd)
-  (actualmente hay que arrancarlo manualmente o via `raspi-k8s-status.sh`)
 
 ### nginx
 - [ ] Agregar `location /health` propio en nginx (actualmente redirige al portal)
@@ -53,16 +53,6 @@
 ---
 
 ## 🟢 Deseable — funcionalidades adicionales
-
-### Integración LLM
-- [ ] Instalar llama.cpp en la Pi
-- [ ] Seleccionar modelo (recomendado: Qwen2.5-0.5B-Instruct o similar para arm64)
-- [ ] Definir el rol del LLM en el portal:
-  - Opción A: chatbot en la página del portal (educativo)
-  - Opción B: análisis de tráfico de metadatos capturados
-  - Opción C: ambos
-- [ ] Integrar endpoint del LLM en el backend Python
-- [ ] Actualizar el HTML del portal para incluir la interfaz con el LLM
 
 ### Portal web
 - [ ] Mejorar el diseño del portal (actualmente funcional pero básico)
@@ -85,24 +75,53 @@
 
 ## ✅ Completado
 
+### Flujo core — funciona end-to-end
+- [x] Cliente WiFi ve el portal captivo al intentar navegar
+- [x] Al aceptar el portal, el cliente obtiene acceso a internet
+- [x] Sin aceptar, el forward está bloqueado
+- [x] Tras 30 minutos, el cliente vuelve al portal automáticamente
+
+### Correcciones críticas de IP real del cliente
+- [x] `externalTrafficPolicy: Local` en Traefik — preserva IP real del cliente (fix SNAT de kube-proxy)
+- [x] nginx: `set_real_ip_from 10.42.0.0/16` + `real_ip_header X-Forwarded-For` → `$remote_addr` = IP real
+- [x] nginx: `proxy_set_header X-Real-IP $remote_addr` al backend
+- [x] Backend Python: prioriza `X-Real-IP` header; fallback a `X-Forwarded-For`; fallback a conntrack
+
+### Correcciones nftables
+- [x] Reglas usan `ip saddr 192.168.1.0/24` (subred) en lugar de `iifname "phy0-ap0"`
+  — fix crítico: con bridge br-lan, iifname nunca hacía match
+- [x] `timeout 0` → `timeout 0s` (sintaxis correcta en esta versión de nftables)
+- [x] `router_add_ip` en common.sh aplica `timeout 0s` automáticamente para admin y portal
+- [x] setup-openwrt.sh elimina la tabla antes del dry-run (fix "File exists" en nft -c)
+- [x] Admin y portal siempre permanentes (timeout 0s), clientes con timeout 30m
+
+### DHCP y lease time
 - [x] DHCP lease time = 30 minutos en OpenWrt (UCI `dhcp.lan.leasetime=30m`)
 - [x] nftables set `allowed_clients` con `timeout 30m` — autorizaciones expiran solas
-- [x] Admin (192.168.1.128) y portal (192.168.1.167) con `timeout 0` (nunca expiran)
+- [x] Admin (192.168.1.113) y portal (192.168.1.167) con `timeout 0s` (nunca expiran)
 - [x] `openwrt-allow-client.sh` soporta `--permanent` para autorizar sin expiración
 - [x] `openwrt-list-clients.sh` muestra tiempo restante de cada autorización
-- [x] Script `openwrt-flush-clients.sh` para resetear clientes al portal (conserva admin+portal permanentes)
-- [x] Script `openwrt-reserve-raspi.sh` para reserva DHCP permanente de la Pi (leasetime=infinite, detecta MAC automáticamente)
+- [x] Reserva DHCP permanente para la Pi (`openwrt-reserve-raspi.sh --auto`)
 
+### Backend y stack k8s
 - [x] Pod captive-portal 2/2 Running en k3s (nginx + backend Python sidecar)
 - [x] Traefik 3.6.10 expone el portal en 192.168.1.167:80
-- [x] Backend Python con SSH+conntrack para detección de IP
-- [x] Backend Python con SSH+nft para autorización de clientes
-- [x] Fix: `NFT_SET = "ip captive allowed_clients"` (era `captive_fw`)
-- [x] Fix: `proxy_pass http://127.0.0.1:8080` (fix IPv6 `localhost` en Alpine)
+- [x] Backend Python con logging detallado (headers, tiempos, IP, SSH)
+- [x] `NFT_SET = "ip captive allowed_clients"` (corregido de `captive_fw`)
+- [x] `proxy_pass http://127.0.0.1:8080` (fix IPv6 `localhost` en Alpine)
 - [x] Llave SSH ed25519 generada y registrada en el router
-- [x] ConfigMap nginx con proxy_pass, HTML del portal y página de aceptado
-- [x] HelmChartConfig Traefik con forwardedHeaders para IP real del cliente
+- [x] HelmChartConfig Traefik con `externalTrafficPolicy:Local` + `forwardedHeaders`
 - [x] YAMLs k8s sincronizados con la realidad del cluster
-- [x] Scripts: setup-raspi, setup-openwrt, raspi-deploy, raspi-logs, raspi-k8s-status
-- [x] Scripts: openwrt-allow/block/list-clients, openwrt-reset-firewall
-- [x] Documentación: arquitectura, setup, scripts, troubleshooting
+
+### Scripts
+- [x] setup-raspi, setup-openwrt, raspi-deploy, raspi-logs, raspi-k8s-status
+- [x] openwrt-allow/block/list/flush-clients, openwrt-reset-firewall
+- [x] openwrt-reserve-raspi (modo --auto detecta MAC local)
+- [x] lib/common.sh con LAN_SUBNET y router_add_ip con timeout 0s para admin/portal
+
+### Documentación
+- [x] AGENTS.md actualizado con estado real y notas de diseño
+- [x] docs/arquitectura.md con explicación de por qué subred en lugar de interfaz
+- [x] docs/setup.md con pasos completos incluyendo reserve-raspi y Traefik Local
+- [x] docs/scripts.md con referencia de todos los scripts
+- [x] docs/troubleshooting.md con todos los problemas encontrados y sus fixes

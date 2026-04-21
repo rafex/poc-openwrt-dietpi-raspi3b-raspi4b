@@ -73,9 +73,10 @@ fi
 log_info "--- FASE B: Configurando dnsmasq para captive portal ---"
 
 # Contenido del archivo de configuracion dnsmasq
-# Dominios que los SO usan para detectar captive portals
+# Dominios que los SO usan para detectar captive portals +
+# dominios de demo de DNS poisoning (suplantacion educativa)
 DNSMASQ_CONTENT="# captive-portal.conf — Generado por setup-openwrt.sh
-# Redirige dominios de deteccion de captive portal a la Pi (192.168.1.167)
+# Redirige dominios de deteccion de captive portal a la Pi ($PORTAL_IP)
 
 # Android / Google
 address=/connectivitycheck.gstatic.com/$PORTAL_IP
@@ -104,6 +105,7 @@ address=/connectivity-check.ubuntu.com/$PORTAL_IP
 # Linux / GNOME / Debian
 address=/network-test.debian.org/$PORTAL_IP
 address=/nmcheck.gnome.org/$PORTAL_IP
+
 "
 
 # Verificar si /etc/dnsmasq.d/ existe en el router

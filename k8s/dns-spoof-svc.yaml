@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-spoof
+  namespace: default
+spec:
+  selector:
+    app: dns-spoof
+  ports:
+    - port: 80
+      targetPort: 80

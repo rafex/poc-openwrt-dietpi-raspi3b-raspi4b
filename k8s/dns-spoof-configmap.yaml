@@ -1,0 +1,244 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dns-spoof-nginx-conf
+  namespace: default
+data:
+  default.conf: |
+    log_format spoof '$remote_addr [$time_local] "$request" $status '
+                     'rt=$request_time xff="$http_x_forwarded_for"';
+
+    server {
+        listen 80 default_server;
+        server_name rafex.dev www.rafex.dev _;
+
+        access_log /dev/stdout spoof;
+        error_log  /dev/stderr warn;
+
+        set_real_ip_from 10.42.0.0/16;
+        real_ip_header X-Forwarded-For;
+        real_ip_recursive on;
+
+        location / {
+            default_type text/html;
+            root /usr/share/nginx/html;
+            try_files /dns-poison.html =404;
+        }
+    }
+
+  dns-poison.html: |
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>rafex.dev — Demo DNS Poisoning</title>
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; min-height: 100vh; }
+
+        .alert-bar {
+          background: #dc2626;
+          color: white;
+          text-align: center;
+          padding: 10px 16px;
+          font-size: 13px;
+          font-weight: 600;
+          letter-spacing: 0.5px;
+        }
+
+        .container { max-width: 680px; margin: 0 auto; padding: 32px 20px 60px; }
+
+        .badge {
+          display: inline-block;
+          background: #dc2626;
+          color: white;
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 1px;
+          padding: 4px 10px;
+          border-radius: 4px;
+          margin-bottom: 16px;
+        }
+
+        h1 { font-size: 26px; font-weight: 700; margin-bottom: 8px; color: #f1f5f9; }
+        .subtitle { color: #94a3b8; font-size: 15px; margin-bottom: 32px; }
+
+        .what-happened {
+          background: #1e293b;
+          border: 1px solid #334155;
+          border-left: 4px solid #dc2626;
+          border-radius: 8px;
+          padding: 24px;
+          margin-bottom: 24px;
+        }
+        .what-happened h2 { font-size: 16px; color: #f87171; margin-bottom: 12px; }
+        .what-happened p { font-size: 14px; color: #cbd5e1; line-height: 1.7; }
+
+        .flow {
+          background: #1e293b;
+          border: 1px solid #334155;
+          border-radius: 8px;
+          padding: 24px;
+          margin-bottom: 24px;
+        }
+        .flow h2 { color: #94a3b8; margin-bottom: 16px; text-transform: uppercase; font-size: 12px; letter-spacing: 1px; }
+
+        .step { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
+        .step:last-child { margin-bottom: 0; }
+        .step-num {
+          background: #334155; color: #94a3b8; font-size: 11px; font-weight: 700;
+          width: 22px; height: 22px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          flex-shrink: 0; margin-top: 1px;
+        }
+        .step-num.red { background: #7f1d1d; color: #fca5a5; }
+        .step-text { font-size: 13px; color: #cbd5e1; line-height: 1.5; }
+        .step-text strong { color: #f1f5f9; }
+        .step-text code {
+          background: #0f172a; border: 1px solid #334155;
+          padding: 1px 6px; border-radius: 3px; font-size: 12px; color: #7dd3fc;
+        }
+        .arrow { color: #475569; font-size: 11px; margin-left: 34px; margin-bottom: 14px; }
+
+        .concepts {
+          display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px;
+        }
+        @media (max-width: 500px) { .concepts { grid-template-columns: 1fr; } }
+        .concept { background: #1e293b; border: 1px solid #334155; border-radius: 8px; padding: 16px; }
+        .concept-icon { font-size: 22px; margin-bottom: 8px; }
+        .concept h3 { font-size: 13px; font-weight: 700; color: #f1f5f9; margin-bottom: 6px; }
+        .concept p { font-size: 12px; color: #94a3b8; line-height: 1.6; }
+
+        .protect {
+          background: #14532d; border: 1px solid #166534;
+          border-radius: 8px; padding: 20px 24px; margin-bottom: 24px;
+        }
+        .protect h2 { font-size: 14px; color: #86efac; margin-bottom: 10px; }
+        .protect ul { list-style: none; }
+        .protect li {
+          font-size: 13px; color: #bbf7d0; padding: 4px 0;
+          padding-left: 20px; position: relative; line-height: 1.5;
+        }
+        .protect li::before { content: "✓"; position: absolute; left: 0; color: #4ade80; font-weight: 700; }
+
+        .footer { text-align: center; font-size: 12px; color: #475569; }
+        .footer strong { color: #64748b; }
+      </style>
+    </head>
+    <body>
+
+      <div class="alert-bar">
+        ⚠️ DEMOSTRACIÓN EDUCATIVA — Esta página NO es rafex.dev real
+      </div>
+
+      <div class="container">
+
+        <div class="badge">DNS Poisoning Demo</div>
+        <h1>Acabas de ser "hackeado"</h1>
+        <p class="subtitle">
+          Escribiste <strong>rafex.dev</strong> en el navegador — pero nunca llegaste ahí.
+          Esta página la sirve una Raspberry Pi dentro de esta misma red WiFi.
+        </p>
+
+        <div class="what-happened">
+          <h2>¿Qué acaba de pasar?</h2>
+          <p>
+            El router WiFi al que estás conectado tiene un servidor DNS malicioso (dnsmasq)
+            que respondió con una mentira: le dijo a tu dispositivo que
+            <code>rafex.dev = 192.168.1.167</code> (la IP de esta Pi), en lugar de la IP real
+            del servidor de hosting donde vive la página verdadera.
+            Tu navegador confió en esa respuesta y conectó aquí.
+            <strong>En ningún momento tu dispositivo detectó nada sospechoso.</strong>
+          </p>
+        </div>
+
+        <div class="flow">
+          <h2>Flujo del ataque paso a paso</h2>
+
+          <div class="step">
+            <div class="step-num">1</div>
+            <div class="step-text">Tu dispositivo se conecta al WiFi y obtiene como servidor DNS
+            la IP del router: <code>192.168.1.1</code></div>
+          </div>
+          <div class="arrow">↓</div>
+
+          <div class="step">
+            <div class="step-num">2</div>
+            <div class="step-text">Escribes <code>rafex.dev</code> en el navegador. El navegador
+            pregunta al DNS: <em>"¿cuál es la IP de rafex.dev?"</em></div>
+          </div>
+          <div class="arrow">↓</div>
+
+          <div class="step">
+            <div class="step-num red">3</div>
+            <div class="step-text"><strong>El DNS malicioso miente:</strong> responde
+            <code>rafex.dev → 192.168.1.167</code> (esta Pi) en lugar de la IP real</div>
+          </div>
+          <div class="arrow">↓</div>
+
+          <div class="step">
+            <div class="step-num">4</div>
+            <div class="step-text">Tu navegador conecta a <code>192.168.1.167</code> pensando
+            que es rafex.dev. La barra de dirección muestra <code>rafex.dev</code> — pero el
+            contenido viene de aquí</div>
+          </div>
+          <div class="arrow">↓</div>
+
+          <div class="step">
+            <div class="step-num red">5</div>
+            <div class="step-text"><strong>En un ataque real:</strong> esta página sería una
+            copia visual exacta de rafex.dev con un formulario de login falso.
+            Cualquier credencial que introduzcas va al atacante</div>
+          </div>
+        </div>
+
+        <div class="concepts">
+          <div class="concept">
+            <div class="concept-icon">🧪</div>
+            <h3>DNS Poisoning</h3>
+            <p>El servidor DNS devuelve registros falsos. El dispositivo no puede verificar
+            si la respuesta es legítima con DNS clásico (UDP/53).</p>
+          </div>
+          <div class="concept">
+            <div class="concept-icon">🎭</div>
+            <h3>Phishing de red</h3>
+            <p>Sin necesidad de engañar al usuario para que haga clic en un enlace.
+            Basta con controlar el DNS de la red WiFi.</p>
+          </div>
+          <div class="concept">
+            <div class="concept-icon">🔓</div>
+            <h3>HTTP vs HTTPS</h3>
+            <p>Con HTTP este ataque es invisible. Con HTTPS el navegador mostraría
+            un error de certificado — primera señal de alerta.</p>
+          </div>
+          <div class="concept">
+            <div class="concept-icon">📡</div>
+            <h3>WiFi público</h3>
+            <p>Cualquier persona que controle el router de una red WiFi pública puede
+            hacer exactamente esto. Cafeterías, aeropuertos, hoteles.</p>
+          </div>
+        </div>
+
+        <div class="protect">
+          <h2>Cómo protegerte en redes WiFi públicas</h2>
+          <ul>
+            <li>Usa siempre <strong>HTTPS</strong> — verifica el candado en la barra del navegador</li>
+            <li>Si el navegador muestra un <strong>error de certificado</strong>, detente</li>
+            <li>Usa una <strong>VPN</strong> de confianza — cifra todo el tráfico</li>
+            <li>Usa <strong>DNS over HTTPS (DoH)</strong> — el DNS va cifrado y no puede ser manipulado</li>
+            <li>Desconfía de redes WiFi <strong>sin contraseña</strong> o con nombres genéricos</li>
+          </ul>
+        </div>
+
+        <div class="footer">
+          <p>
+            <strong>Demo educativa</strong> — PoC Captive Portal + IA Local<br>
+            Esta Pi es el servidor. El router WiFi es el atacante. Tu dispositivo, la víctima.
+          </p>
+        </div>
+
+      </div>
+    </body>
+    </html>

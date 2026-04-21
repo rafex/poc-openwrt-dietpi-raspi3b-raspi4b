@@ -58,7 +58,7 @@ data:
         }
 
         # --- Proxy al backend Python (sidecar en localhost:8080) ---
-        # $remote_addr ahora contiene la IP real del cliente (gracias a set_real_ip_from arriba)
+        # $remote_addr contiene la IP real del cliente (gracias a set_real_ip_from arriba)
         location /accept {
             proxy_pass http://127.0.0.1:8080/accept;
             proxy_set_header X-Real-IP      $remote_addr;
