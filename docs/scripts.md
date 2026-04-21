@@ -157,21 +157,31 @@ Muestra:
 **Idempotente:** Sí
 
 ```bash
-bash scripts/openwrt-reserve-raspi.sh              # detecta MAC automáticamente
-bash scripts/openwrt-reserve-raspi.sh --mac DC:A6:32:XX:XX:XX  # MAC manual
+# Modo recomendado: ejecutar desde la misma Pi que se quiere reservar
+bash scripts/openwrt-reserve-raspi.sh --auto              # reserva 192.168.1.167
+bash scripts/openwrt-reserve-raspi.sh --auto 192.168.1.167  # IP explícita
+
+# Alternativas
+bash scripts/openwrt-reserve-raspi.sh --mac DC:A6:32:XX:XX:XX          # MAC manual
+bash scripts/openwrt-reserve-raspi.sh --mac DC:A6:32:XX:XX:XX --ip 192.168.1.167
+bash scripts/openwrt-reserve-raspi.sh                                  # detecta MAC via ARP del router (legacy)
 ```
 
 | Paso | Qué hace |
 |---|---|
-| 1 | Detecta la MAC de la Pi desde ARP del router; fallbacks a `/tmp/dhcp.leases` y `arp -n` |
-| 2 | Valida que la IP 192.168.1.167 no esté reservada a otra MAC (protección de conflictos) |
+| 1 | **`--auto`**: lee la MAC de `eth0`/`eth1`/`wlan0` de esta máquina directamente |
+| 1 | **`--mac`**: usa la MAC proporcionada |
+| 1 | **sin flags**: consulta ARP/`dhcp.leases`/`arp -n` del router (modo legacy) |
+| 2 | Detecta conflicto: si la IP ya está reservada para otra MAC → error claro |
 | 3 | Crea o actualiza reserva UCI `dhcp.@host[N]` con `leasetime=infinite` |
 | 4 | Verifica que la DHCP option 6 (DNS) apunte al router |
 | 5 | Recarga dnsmasq |
-| 6 | Muestra tabla de todas las reservas DHCP actuales |
+| 6 | Muestra tabla de todas las reservas DHCP actuales y confirma con `uci show` |
 
 > **Por qué es necesario:** Todos los scripts y manifiestos k8s usan `192.168.1.167` como IP fija.  
 > Sin esta reserva, un reinicio de la Pi podría asignarle otra IP y el captive portal dejaría de funcionar.
+>
+> **`--auto` es el modo recomendado** porque la MAC se lee localmente — no depende de que el router tenga la Pi en el ARP (útil en el primer arranque antes de que la Pi haya hecho DHCP).
 
 ---
 
