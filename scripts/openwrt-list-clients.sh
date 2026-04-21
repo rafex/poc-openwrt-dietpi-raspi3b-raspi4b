@@ -18,6 +18,21 @@ check_ssh_key
 test_router_ssh
 
 # =============================================================================
+# 0. Tabla nftables completa
+# =============================================================================
+printf '\n'
+printf '=%.0s' $(seq 1 60); printf '\n'
+printf ' TABLA NFTABLES: %s\n' "$NFT_TABLE"
+printf '=%.0s' $(seq 1 60); printf '\n'
+
+if router_table_exists; then
+    router_ssh "nft list table $NFT_TABLE 2>/dev/null"
+else
+    printf '  [AVISO] La tabla %s no existe.\n' "$NFT_TABLE"
+    printf '  Ejecuta: sh scripts/setup-openwrt.sh\n'
+fi
+
+# =============================================================================
 # 1. Clientes autorizados en nftables
 # =============================================================================
 printf '\n'
