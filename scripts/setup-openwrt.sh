@@ -168,10 +168,10 @@ table ip captive {
         type nat hook prerouting priority dstnat; policy accept;
 
         # Clientes autorizados: no redirigir
-        iifname \"$AP_IFACE\" meta l4proto tcp dport 80 ip saddr @$NFT_SET accept
+        iifname \"$AP_IFACE\" tcp dport 80 ip saddr @$NFT_SET accept
 
         # Redirigir todo HTTP de la WiFi al portal
-        iifname \"$AP_IFACE\" meta l4proto tcp dport 80 dnat to $PORTAL_IP:80
+        iifname \"$AP_IFACE\" tcp dport 80 dnat to $PORTAL_IP:80
     }
 
     # Control de forward: bloquear trafico no autorizado de la WiFi
@@ -186,10 +186,10 @@ table ip captive {
         iifname \"$AP_IFACE\" ip daddr $PORTAL_IP accept
 
         # DHCP: necesario para que los clientes obtengan IP
-        iifname \"$AP_IFACE\" meta l4proto udp udp dport { 67, 68 } accept
+        iifname \"$AP_IFACE\" udp dport { 67, 68 } accept
 
         # DNS: necesario para resolver el captive portal
-        iifname \"$AP_IFACE\" meta l4proto { tcp, udp } th dport 53 accept
+        iifname \"$AP_IFACE\" th dport 53 accept
 
         # Clientes autorizados: acceso total
         iifname \"$AP_IFACE\" ip saddr @$NFT_SET accept
