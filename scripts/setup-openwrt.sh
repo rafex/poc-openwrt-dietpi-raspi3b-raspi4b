@@ -256,13 +256,14 @@ log_info "Aplicando reglas nftables..."
 router_ssh "nft -f /tmp/captive-portal.nft" || \
     die "Fallo al cargar las reglas nftables"
 
-# CRITICO: Inmediatamente despues de cargar, re-confirmar que admin esta en el set
-log_info "Re-confirmando acceso del admin ($ADMIN_IP)..."
-router_add_ip "$ADMIN_IP"
-log_ok "Admin $ADMIN_IP asegurado en $NFT_SET"
-
-# Tambien asegurar que el portal esta en el set
-router_add_ip "$PORTAL_IP" 2>/dev/null || true
+# CRITICO: Re-confirmar admin y portal como PERMANENTES (timeout 0s).
+# No usar router_add_ip aquí — esa función no especifica timeout y heredaría
+# el default de 30m del set, sobreescribiendo el timeout 0s del archivo nft.
+log_info "Re-confirmando admin y portal como permanentes (timeout 0s)..."
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0s }" || \
+    die "No se pudo asegurar $ADMIN_IP como permanente"
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" 2>/dev/null || true
+log_ok "Admin $ADMIN_IP y portal $PORTAL_IP asegurados como permanentes"
 
 # Limpiar conntrack para que el bloqueo sea efectivo inmediatamente
 # (conexiones ESTABLISHED bypasean el hook forward)

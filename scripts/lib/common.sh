@@ -100,11 +100,17 @@ router_ip_in_set() {
     router_ssh "nft list set $NFT_TABLE $NFT_SET 2>/dev/null" | grep -qw "$ip"
 }
 
-# Agregar IP al set (nft add element es idempotente con sets tipo ipv4_addr)
+# Agregar IP al set.
+# Admin y portal se agregan siempre con timeout 0s (permanentes).
+# El resto hereda el timeout del set (30m por defecto).
 router_add_ip() {
     local ip="$1"
-    router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip }" 2>/dev/null || \
-    router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip }"
+    local timeout_flag=""
+    if [ "$ip" = "$ADMIN_IP" ] || [ "$ip" = "$PORTAL_IP" ]; then
+        timeout_flag=" timeout 0s"
+    fi
+    router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip$timeout_flag }" 2>/dev/null || \
+    router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip$timeout_flag }"
 }
 
 # Eliminar IP del set
