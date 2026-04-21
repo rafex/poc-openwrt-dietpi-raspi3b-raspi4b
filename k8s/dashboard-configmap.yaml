@@ -1,0 +1,561 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-nginx-conf
+  namespace: default
+data:
+  default.conf: |
+    server {
+        listen 80 default_server;
+        server_name _;
+        root /usr/share/nginx/html;
+        access_log /dev/stdout;
+        error_log  /dev/stderr warn;
+
+        location /dashboard {
+            try_files /dashboard.html =404;
+            add_header Cache-Control "no-cache";
+        }
+        location /terminal {
+            try_files /terminal.html =404;
+            add_header Cache-Control "no-cache";
+        }
+        location / {
+            return 302 /dashboard;
+        }
+    }
+
+  dashboard.html: |
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>RafexPi — Network AI Dashboard</title>
+      <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;min-height:100vh}
+        header{background:#1e293b;border-bottom:1px solid #334155;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px}
+        header h1{font-size:18px;font-weight:700;color:#f1f5f9}
+        header h1 span{color:#38bdf8}
+        .nav a{color:#94a3b8;text-decoration:none;font-size:13px;padding:6px 14px;border:1px solid #334155;border-radius:6px;margin-left:8px;transition:.2s}
+        .nav a:hover,.nav a.active{background:#38bdf8;color:#0f172a;border-color:#38bdf8}
+        .status-bar{display:flex;gap:8px;align-items:center;font-size:12px;color:#64748b}
+        .dot{width:8px;height:8px;border-radius:50%;background:#22c55e;animation:pulse 2s infinite}
+        .dot.off{background:#ef4444;animation:none}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+        .container{max-width:1200px;margin:0 auto;padding:20px}
+        .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
+        .card{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:16px}
+        .card-label{font-size:11px;color:#64748b;text-transform:uppercase;letter-spacing:.8px;margin-bottom:6px}
+        .card-value{font-size:26px;font-weight:700;color:#f1f5f9}
+        .card-value.green{color:#22c55e}
+        .card-value.red{color:#ef4444}
+        .card-value.yellow{color:#f59e0b}
+        .card-sub{font-size:11px;color:#64748b;margin-top:4px}
+        .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px}
+        @media(max-width:700px){.grid2{grid-template-columns:1fr}}
+        .panel{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:20px}
+        .panel h2{font-size:13px;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px;margin-bottom:14px;display:flex;align-items:center;gap:8px}
+        .panel h2 .badge{background:#334155;color:#94a3b8;font-size:10px;padding:2px 7px;border-radius:4px}
+        .bar-row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+        .bar-label{font-size:12px;color:#cbd5e1;width:130px;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .bar-track{flex:1;background:#0f172a;border-radius:4px;height:14px;overflow:hidden}
+        .bar-fill{height:100%;border-radius:4px;background:linear-gradient(90deg,#38bdf8,#818cf8);transition:width .4s}
+        .bar-count{font-size:11px;color:#64748b;width:55px;text-align:right;flex-shrink:0}
+        .proto-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+        .proto-item{background:#0f172a;border-radius:6px;padding:10px;text-align:center}
+        .proto-name{font-size:12px;color:#94a3b8;margin-bottom:4px}
+        .proto-val{font-size:18px;font-weight:700;color:#f1f5f9}
+        .ai-panel{background:#1e293b;border:1px solid #334155;border-radius:10px;padding:20px;margin-bottom:20px}
+        .ai-panel h2{font-size:13px;color:#94a3b8;text-transform:uppercase;letter-spacing:.8px;margin-bottom:14px}
+        .risk-badge{display:inline-block;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:.5px;margin-bottom:12px}
+        .risk-BAJO{background:#14532d;color:#86efac}
+        .risk-MEDIO{background:#78350f;color:#fde68a}
+        .risk-ALTO{background:#7f1d1d;color:#fca5a5}
+        .ai-text{font-size:13px;color:#cbd5e1;line-height:1.75;white-space:pre-wrap;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:16px;min-height:80px}
+        .ai-meta{font-size:11px;color:#475569;margin-top:8px}
+        .dns-list{display:flex;flex-wrap:wrap;gap:6px}
+        .dns-tag{background:#0f172a;border:1px solid #334155;border-radius:4px;padding:3px 8px;font-size:11px;color:#7dd3fc}
+        .suspicious-list{list-style:none}
+        .suspicious-list li{display:flex;align-items:flex-start;gap:8px;padding:8px;background:#0f172a;border-radius:6px;margin-bottom:6px;font-size:12px;color:#fca5a5}
+        .suspicious-list li .type{background:#7f1d1d;color:#fca5a5;font-size:10px;padding:2px 6px;border-radius:3px;font-weight:700;flex-shrink:0}
+        .empty{font-size:13px;color:#475569;text-align:center;padding:20px}
+        .refresh-info{font-size:11px;color:#475569;text-align:right;margin-bottom:12px}
+        .history-list{max-height:180px;overflow-y:auto}
+        .history-item{display:flex;align-items:center;gap:10px;padding:8px;border-bottom:1px solid #1e293b;cursor:pointer;border-radius:4px;transition:.15s}
+        .history-item:hover{background:#1e293b}
+        .history-item .ts{font-size:11px;color:#475569;flex-shrink:0}
+        .history-item .hr{font-size:12px;color:#cbd5e1;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .history-item .rk{font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;flex-shrink:0}
+      </style>
+    </head>
+    <body>
+      <header>
+        <h1>🛡️ RafexPi — <span>Network AI</span></h1>
+        <div class="nav">
+          <a href="/dashboard" class="active">Dashboard</a>
+          <a href="/terminal">Terminal</a>
+        </div>
+        <div class="status-bar">
+          <div class="dot" id="dot"></div>
+          <span id="status-txt">conectando...</span>
+          <span>|</span>
+          <span id="last-update">—</span>
+        </div>
+      </header>
+
+      <div class="container">
+        <div class="refresh-info">Actualización automática cada 30s · <a href="#" onclick="fetchLatest();return false" style="color:#38bdf8">actualizar ahora</a></div>
+
+        <!-- KPI cards -->
+        <div class="cards" id="cards">
+          <div class="card"><div class="card-label">Paquetes</div><div class="card-value" id="kpi-pkt">—</div><div class="card-sub" id="kpi-pps">—</div></div>
+          <div class="card"><div class="card-label">Tráfico</div><div class="card-value" id="kpi-bytes">—</div><div class="card-sub" id="kpi-bps">—</div></div>
+          <div class="card"><div class="card-label">IPs activas</div><div class="card-value" id="kpi-ips">—</div><div class="card-sub">origen</div></div>
+          <div class="card"><div class="card-label">Dispositivos LAN</div><div class="card-value" id="kpi-lan">—</div><div class="card-sub">en la red</div></div>
+          <div class="card"><div class="card-label">Análisis IA</div><div class="card-value" id="kpi-analyses">—</div><div class="card-sub">realizados</div></div>
+          <div class="card"><div class="card-label">Alertas</div><div class="card-value red" id="kpi-alerts">—</div><div class="card-sub">sospechosas</div></div>
+        </div>
+
+        <!-- Análisis IA más reciente -->
+        <div class="ai-panel">
+          <h2>🤖 Análisis IA más reciente</h2>
+          <div id="ai-risk" class="risk-badge risk-BAJO">BAJO</div>
+          <div id="ai-text" class="ai-text">Esperando datos del sensor...</div>
+          <div id="ai-meta" class="ai-meta"></div>
+        </div>
+
+        <div class="grid2">
+          <!-- Top talkers -->
+          <div class="panel">
+            <h2>📤 Top Emisores <span class="badge" id="talkers-badge">—</span></h2>
+            <div id="talkers-bars"></div>
+          </div>
+
+          <!-- Top puertos -->
+          <div class="panel">
+            <h2>🔌 Top Puertos Destino <span class="badge" id="ports-badge">—</span></h2>
+            <div id="ports-bars"></div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <!-- Protocolos -->
+          <div class="panel">
+            <h2>📊 Protocolos</h2>
+            <div id="proto-grid" class="proto-grid"></div>
+          </div>
+
+          <!-- DNS -->
+          <div class="panel">
+            <h2>🌐 DNS Queries <span class="badge" id="dns-badge">—</span></h2>
+            <div id="dns-list" class="dns-list"></div>
+          </div>
+        </div>
+
+        <div class="grid2">
+          <!-- Actividad sospechosa -->
+          <div class="panel">
+            <h2>⚠️ Actividad Sospechosa</h2>
+            <ul id="suspicious-list" class="suspicious-list"></ul>
+          </div>
+
+          <!-- Historial -->
+          <div class="panel">
+            <h2>📋 Historial de Análisis</h2>
+            <div id="history-list" class="history-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <script>
+        const API = '';
+        let totalAnalyses = 0;
+        let totalAlerts   = 0;
+
+        function fmtTime(iso) {
+          const d = new Date(iso);
+          return d.toLocaleTimeString('es-MX', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+        }
+
+        function renderBars(containerId, items, labelKey, valueKey, max) {
+          const el = document.getElementById(containerId);
+          if (!items || !items.length) { el.innerHTML = '<div class="empty">Sin datos</div>'; return; }
+          const maxV = max || Math.max(...items.map(i => i[valueKey]));
+          el.innerHTML = items.slice(0,8).map(item => {
+            const pct = maxV > 0 ? Math.round(item[valueKey] / maxV * 100) : 0;
+            const label = String(item[labelKey]).length > 18 ? String(item[labelKey]).slice(0,18)+'…' : item[labelKey];
+            return `<div class="bar-row">
+              <div class="bar-label" title="${item[labelKey]}">${label}</div>
+              <div class="bar-track"><div class="bar-fill" style="width:${pct}%"></div></div>
+              <div class="bar-count">${item.label || item[valueKey]}</div>
+            </div>`;
+          }).join('');
+        }
+
+        function renderProtos(protos) {
+          const el = document.getElementById('proto-grid');
+          if (!protos || !Object.keys(protos).length) { el.innerHTML = '<div class="empty">Sin datos</div>'; return; }
+          const total = Object.values(protos).reduce((a,b)=>a+b,0);
+          el.innerHTML = Object.entries(protos)
+            .sort((a,b)=>b[1]-a[1]).slice(0,6)
+            .map(([k,v]) => `<div class="proto-item">
+              <div class="proto-name">${k}</div>
+              <div class="proto-val">${total>0?Math.round(v/total*100):0}%</div>
+            </div>`).join('');
+        }
+
+        function renderDNS(queries) {
+          const el = document.getElementById('dns-list');
+          document.getElementById('dns-badge').textContent = queries ? queries.length : 0;
+          if (!queries || !queries.length) { el.innerHTML = '<div class="empty">Sin consultas DNS</div>'; return; }
+          el.innerHTML = queries.slice(0,30).map(q =>
+            `<span class="dns-tag">${q}</span>`).join('');
+        }
+
+        function renderSuspicious(items) {
+          const el = document.getElementById('suspicious-list');
+          if (!items || !items.length) {
+            el.innerHTML = '<li style="color:#22c55e;font-size:12px;padding:8px">✓ Sin actividad sospechosa detectada</li>';
+            return;
+          }
+          el.innerHTML = items.map(s => `<li>
+            <span class="type">${(s.type||'').toUpperCase()}</span>
+            <span>${s.src||s.port||''} — ${s.detail||''}</span>
+          </li>`).join('');
+        }
+
+        function renderHistory(items) {
+          const el = document.getElementById('history-list');
+          if (!items || !items.length) { el.innerHTML = '<div class="empty">Sin historial</div>'; return; }
+          const riskColor = {BAJO:'#22c55e', MEDIO:'#f59e0b', ALTO:'#ef4444'};
+          el.innerHTML = [...items].reverse().slice(0,15).map(item => `
+            <div class="history-item" onclick="showAnalysis(${JSON.stringify(item.analysis||'').replace(/"/g,'&quot;')}, '${item.risk}', '${item.timestamp}', ${item.elapsed_s})">
+              <span class="ts">${fmtTime(item.timestamp)}</span>
+              <span class="hr">${item.packets||0} pkt · ${item.bytes_fmt||'?'}</span>
+              <span class="rk" style="background:${riskColor[item.risk]||'#334155'};color:#0f172a">${item.risk||'?'}</span>
+            </div>`).join('');
+        }
+
+        function showAnalysis(text, risk, ts, elapsed) {
+          document.getElementById('ai-risk').textContent = risk;
+          document.getElementById('ai-risk').className = 'risk-badge risk-' + (risk||'BAJO');
+          document.getElementById('ai-text').textContent = text || '(sin texto)';
+          document.getElementById('ai-meta').textContent =
+            `Generado: ${fmtTime(ts)} · ${elapsed}s de inferencia`;
+        }
+
+        async function fetchLatest() {
+          try {
+            const resp = await fetch(API + '/api/history?limit=50');
+            if (!resp.ok) throw new Error('HTTP ' + resp.status);
+            const data = await resp.json();
+            const items = data.items || [];
+
+            document.getElementById('dot').classList.remove('off');
+            document.getElementById('status-txt').textContent = 'online';
+            document.getElementById('last-update').textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-MX');
+
+            // Stats globales
+            totalAnalyses = items.length;
+            totalAlerts   = items.reduce((a,i) => a + (i.suspicious_count||0), 0);
+            document.getElementById('kpi-analyses').textContent = totalAnalyses;
+            document.getElementById('kpi-alerts').textContent   = totalAlerts;
+
+            if (items.length === 0) return;
+            const latest = items[items.length - 1];
+            const s = latest.summary || {};
+
+            // KPIs
+            document.getElementById('kpi-pkt').textContent   = (latest.packets||0).toLocaleString();
+            document.getElementById('kpi-pps').textContent   = (s.pps||0) + ' pps';
+            document.getElementById('kpi-bytes').textContent  = latest.bytes_fmt || s.total_bytes_fmt || '—';
+            document.getElementById('kpi-bps').textContent   = s.bps ? Math.round(s.bps/1000) + ' Kbps' : '—';
+            document.getElementById('kpi-ips').textContent   = s.active_src_ips || '—';
+            document.getElementById('kpi-lan').textContent   = (s.lan_devices||[]).length || '—';
+
+            // Análisis IA
+            document.getElementById('ai-risk').textContent = latest.risk||'BAJO';
+            document.getElementById('ai-risk').className   = 'risk-badge risk-' + (latest.risk||'BAJO');
+            document.getElementById('ai-text').textContent  = latest.analysis || 'Sin análisis aún';
+            document.getElementById('ai-meta').textContent  =
+              `Generado: ${fmtTime(latest.timestamp)} · ${latest.elapsed_s}s de inferencia · Batch de ${s.duration_seconds||30}s`;
+
+            // Barras
+            renderBars('talkers-bars', s.top_talkers||[], 'ip', 'bytes', null);
+            document.getElementById('talkers-badge').textContent = (s.top_talkers||[]).length;
+
+            renderBars('ports-bars', (s.top_dst_ports||[]).map(p=>({...p, label:p.count+' req'})), 'port', 'count', null);
+            document.getElementById('ports-badge').textContent = (s.top_dst_ports||[]).length;
+
+            // Protocolos, DNS, Sospechosos
+            renderProtos(s.protocols||{});
+            renderDNS(s.dns_queries||[]);
+            renderSuspicious(latest.suspicious||[]);
+            renderHistory(items);
+
+          } catch(e) {
+            document.getElementById('dot').classList.add('off');
+            document.getElementById('status-txt').textContent = 'offline — ' + e.message;
+          }
+        }
+
+        fetchLatest();
+        setInterval(fetchLatest, 30000);
+      </script>
+    </body>
+    </html>
+
+  terminal.html: |
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>RafexPi — Network Terminal</title>
+      <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{background:#020617;color:#22d3ee;font-family:'Courier New',Courier,monospace;font-size:13px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+        header{background:#0f172a;border-bottom:1px solid #1e3a5f;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;gap:10px;flex-wrap:wrap}
+        header h1{font-size:14px;font-weight:700;color:#38bdf8;letter-spacing:1px}
+        .nav a{color:#475569;text-decoration:none;font-size:12px;padding:5px 12px;border:1px solid #1e3a5f;border-radius:4px;margin-left:6px;transition:.2s}
+        .nav a:hover,.nav a.active{background:#38bdf8;color:#020617;border-color:#38bdf8}
+        .toolbar{display:flex;gap:8px;align-items:center;font-size:12px;flex-wrap:wrap}
+        .btn{background:#0f172a;border:1px solid #1e3a5f;color:#94a3b8;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-family:inherit}
+        .btn:hover{background:#1e3a5f;color:#e2e8f0}
+        .filter-btn.active{background:#1e3a5f;color:#38bdf8;border-color:#38bdf8}
+        #conn-status{font-size:11px;padding:3px 8px;border-radius:4px;background:#0f172a;border:1px solid #1e3a5f}
+        #conn-status.ok{color:#22c55e;border-color:#14532d}
+        #conn-status.err{color:#ef4444;border-color:#7f1d1d}
+        #terminal{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:4px}
+        .line{display:flex;gap:10px;align-items:flex-start;border-radius:4px;padding:3px 6px;transition:.15s}
+        .line:hover{background:#0f172a}
+        .ts{color:#334155;flex-shrink:0;font-size:11px;margin-top:1px}
+        .tag{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;flex-shrink:0;letter-spacing:.5px;margin-top:1px}
+        .tag-SENSOR{background:#1e3a5f;color:#38bdf8}
+        .tag-AI{background:#1e1b4b;color:#818cf8}
+        .tag-ALERTA{background:#7f1d1d;color:#fca5a5;animation:blink .8s infinite}
+        .tag-INFO{background:#1e293b;color:#64748b}
+        @keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
+        .msg{color:#cbd5e1;line-height:1.5;word-break:break-word;flex:1}
+        .msg .hi{color:#38bdf8}
+        .msg .warn{color:#f59e0b}
+        .msg .danger{color:#ef4444}
+        .msg .ok{color:#22c55e}
+        .msg pre{background:#0a0f1e;border:1px solid #1e3a5f;padding:10px;border-radius:4px;margin-top:6px;overflow-x:auto;font-size:12px;white-space:pre-wrap;color:#a5f3fc}
+        .sep{border-top:1px solid #1e3a5f;margin:6px 0;opacity:.5}
+        #input-line{background:#0f172a;border-top:1px solid #1e3a5f;padding:8px 16px;display:flex;align-items:center;gap:8px;flex-shrink:0}
+        #prompt-label{color:#22c55e;flex-shrink:0}
+        #cmd-input{flex:1;background:transparent;border:none;outline:none;color:#e2e8f0;font-family:inherit;font-size:13px}
+        #cmd-input::placeholder{color:#334155}
+      </style>
+    </head>
+    <body>
+      <header>
+        <h1>⚡ NETWORK TERMINAL</h1>
+        <div class="toolbar">
+          <button class="btn filter-btn active" data-filter="all"     onclick="setFilter('all',this)">TODO</button>
+          <button class="btn filter-btn"        data-filter="SENSOR"  onclick="setFilter('SENSOR',this)">SENSOR</button>
+          <button class="btn filter-btn"        data-filter="AI"      onclick="setFilter('AI',this)">IA</button>
+          <button class="btn filter-btn"        data-filter="ALERTA"  onclick="setFilter('ALERTA',this)">ALERTAS</button>
+          <button class="btn" onclick="clearTerminal()">LIMPIAR</button>
+          <button class="btn" onclick="toggleScroll()" id="scroll-btn">⬇ AUTO</button>
+          <span id="conn-status">conectando...</span>
+        </div>
+        <div class="nav">
+          <a href="/dashboard">Dashboard</a>
+          <a href="/terminal" class="active">Terminal</a>
+        </div>
+      </header>
+
+      <div id="terminal"></div>
+
+      <div id="input-line">
+        <span id="prompt-label">sensor@rafexpi:~$</span>
+        <input type="text" id="cmd-input" placeholder="escribe 'help' para ver comandos disponibles..." onkeydown="handleCmd(event)">
+      </div>
+
+      <script>
+        const API = '';
+        let autoScroll  = true;
+        let activeFilter = 'all';
+        let lineCount   = 0;
+        const MAX_LINES = 300;
+        const term      = document.getElementById('terminal');
+
+        function ts() {
+          return new Date().toISOString().replace('T',' ').slice(0,19);
+        }
+
+        function addLine(tag, html, raw='') {
+          lineCount++;
+          const show = activeFilter === 'all' || activeFilter === tag;
+          const div = document.createElement('div');
+          div.className = 'line';
+          div.dataset.tag = tag;
+          div.style.display = show ? 'flex' : 'none';
+          div.innerHTML = `
+            <span class="ts">${ts()}</span>
+            <span class="tag tag-${tag}">${tag}</span>
+            <span class="msg">${html}</span>`;
+          term.appendChild(div);
+
+          // Limitar historial
+          const lines = term.querySelectorAll('.line');
+          if (lines.length > MAX_LINES) lines[0].remove();
+
+          if (autoScroll) term.scrollTop = term.scrollHeight;
+        }
+
+        function addSep() {
+          const div = document.createElement('div');
+          div.className = 'sep';
+          div.dataset.tag = 'sep';
+          term.appendChild(div);
+          if (autoScroll) term.scrollTop = term.scrollHeight;
+        }
+
+        function setFilter(filter, btn) {
+          activeFilter = filter;
+          document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          document.querySelectorAll('.line').forEach(el => {
+            el.style.display = (filter === 'all' || el.dataset.tag === filter) ? 'flex' : 'none';
+          });
+        }
+
+        function clearTerminal() {
+          term.innerHTML = '';
+          lineCount = 0;
+          addLine('INFO', '<span class="ok">Terminal limpiada.</span>');
+        }
+
+        function toggleScroll() {
+          autoScroll = !autoScroll;
+          document.getElementById('scroll-btn').textContent = autoScroll ? '⬇ AUTO' : '⏸ MANUAL';
+        }
+
+        function renderSummary(s) {
+          if (!s) return '(sin datos)';
+          const lan = (s.lan_devices||[]).slice(0,6).join(', ') || '—';
+          const dns = (s.dns_queries||[]).slice(0,5).join(', ') || '—';
+          return `<span class="hi">${s.total_packets||0}</span> pkt &bull; ` +
+                 `<span class="hi">${s.total_bytes_fmt||'?'}</span> &bull; ` +
+                 `<span class="hi">${s.active_src_ips||0}</span> src IPs &bull; ` +
+                 `LAN: <span class="hi">${lan}</span> &bull; DNS: <span class="hi">${dns}</span>`;
+        }
+
+        function renderAnalysis(item) {
+          const riskClass = {BAJO:'ok',MEDIO:'warn',ALTO:'danger'}[item.risk] || 'hi';
+          addSep();
+          addLine('SENSOR', renderSummary(item.summary||{}));
+
+          if ((item.suspicious||[]).length > 0) {
+            item.suspicious.forEach(s => {
+              addLine('ALERTA', `<span class="danger">[${(s.type||'').toUpperCase()}]</span> ${s.src||s.port||''} — <span class="warn">${s.detail||''}</span>`);
+            });
+          }
+
+          const analysis = (item.analysis||'').trim();
+          const short    = analysis.slice(0, 200);
+          addLine('AI',
+            `Riesgo: <span class="${riskClass}">${item.risk||'?'}</span> &bull; ` +
+            `Inferencia: <span class="hi">${item.elapsed_s}s</span><pre>${analysis}</pre>`
+          );
+        }
+
+        // Comandos de terminal
+        const CMD_HELP = `<span class="ok">Comandos disponibles:</span>
+  <span class="hi">clear</span>       — limpiar pantalla
+  <span class="hi">status</span>      — estado del analizador
+  <span class="hi">history N</span>   — últimos N análisis
+  <span class="hi">filter [all|SENSOR|AI|ALERTA]</span> — filtrar líneas
+  <span class="hi">scroll</span>      — activar/desactivar auto-scroll`;
+
+        async function handleCmd(e) {
+          if (e.key !== 'Enter') return;
+          const input = document.getElementById('cmd-input');
+          const cmd   = input.value.trim();
+          input.value = '';
+          if (!cmd) return;
+
+          addLine('INFO', `<span class="ok">$ ${cmd}</span>`);
+
+          if (cmd === 'help') {
+            addLine('INFO', CMD_HELP);
+          } else if (cmd === 'clear') {
+            clearTerminal();
+          } else if (cmd === 'scroll') {
+            toggleScroll();
+            addLine('INFO', 'Auto-scroll: <span class="ok">' + (autoScroll?'ON':'OFF') + '</span>');
+          } else if (cmd.startsWith('filter')) {
+            const f = cmd.split(' ')[1] || 'all';
+            const btn = document.querySelector(`.filter-btn[data-filter="${f}"]`);
+            if (btn) { setFilter(f, btn); addLine('INFO', 'Filtro: <span class="ok">' + f + '</span>'); }
+            else addLine('INFO', '<span class="danger">Filtro desconocido. Usa: all|SENSOR|AI|ALERTA</span>');
+          } else if (cmd === 'status') {
+            try {
+              const r = await fetch(API + '/api/stats');
+              const d = await r.json();
+              addLine('INFO', `<pre>${JSON.stringify(d, null, 2)}</pre>`);
+            } catch(ex) {
+              addLine('INFO', '<span class="danger">Error: ' + ex.message + '</span>');
+            }
+          } else if (cmd.startsWith('history')) {
+            const n = parseInt(cmd.split(' ')[1]) || 5;
+            try {
+              const r = await fetch(API + `/api/history?limit=${n}`);
+              const d = await r.json();
+              (d.items||[]).forEach(renderAnalysis);
+            } catch(ex) {
+              addLine('INFO', '<span class="danger">Error: ' + ex.message + '</span>');
+            }
+          } else {
+            addLine('INFO', `<span class="danger">Comando desconocido: ${cmd}</span> (escribe 'help')`);
+          }
+        }
+
+        // SSE stream
+        function connectSSE() {
+          const status = document.getElementById('conn-status');
+          addLine('INFO', 'Conectando con el analizador IA...');
+          const es = new EventSource(API + '/api/stream');
+
+          es.onopen = () => {
+            status.textContent = '● conectado';
+            status.className   = 'ok';
+            addLine('INFO', '<span class="ok">SSE conectado — esperando análisis en tiempo real</span>');
+          };
+
+          es.onmessage = (e) => {
+            try {
+              const item = JSON.parse(e.data);
+              renderAnalysis(item);
+            } catch(ex) {
+              addLine('INFO', '<span class="danger">Error parseando evento: ' + ex.message + '</span>');
+            }
+          };
+
+          es.onerror = () => {
+            status.textContent = '● desconectado';
+            status.className   = 'err';
+            addLine('INFO', '<span class="danger">SSE desconectado — reconectando en 10s...</span>');
+            es.close();
+            setTimeout(connectSSE, 10000);
+          };
+        }
+
+        // Banner inicial
+        addLine('INFO', '═'.repeat(60));
+        addLine('INFO', '<span class="hi">RafexPi Network Terminal</span> — Monitor de tráfico con IA');
+        addLine('INFO', 'Sensor: Raspi 3B (192.168.1.181) → Analyzer: Raspi 4B (192.168.1.167)');
+        addLine('INFO', 'Modelo: TinyLlama vía llama.cpp · Captura: eth0 promiscuo');
+        addLine('INFO', '─'.repeat(60));
+        addLine('INFO', CMD_HELP);
+        addLine('INFO', '═'.repeat(60));
+
+        connectSSE();
+      </script>
+    </body>
+    </html>

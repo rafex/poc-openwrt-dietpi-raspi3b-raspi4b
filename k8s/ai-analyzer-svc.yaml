@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-analyzer
+  namespace: default
+spec:
+  selector:
+    app: ai-analyzer
+  ports:
+    - port: 5000
+      targetPort: 5000

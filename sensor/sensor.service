@@ -1,0 +1,80 @@
+#!/bin/sh
+# /etc/init.d/network-sensor — Servicio del sensor de red (Raspi 3B)
+# Instalado por: scripts/setup-sensor-raspi3b.sh
+#
+# Uso:
+#   /etc/init.d/network-sensor start|stop|restart|status
+
+### BEGIN INIT INFO
+# Provides:          network-sensor
+# Required-Start:    $network $remote_fs
+# Required-Stop:     $network
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Network traffic sensor for AI analysis
+### END INIT INFO
+
+DAEMON=/usr/bin/python3
+DAEMON_ARGS=/opt/sensor/sensor.py
+NAME=network-sensor
+PIDFILE=/var/run/network-sensor.pid
+LOGFILE=/var/log/network-sensor.log
+SENSOR_USER=root
+
+# Configuración (editar según entorno)
+export SENSOR_IFACE="eth0"
+export SENSOR_IP="192.168.1.181"
+export ANALYZER_URL="http://192.168.1.167/api/ingest"
+export BATCH_INTERVAL="30"
+export ROUTER_IP="192.168.1.1"
+export ROUTER_USER="root"
+export SSH_KEY="/opt/keys/sensor"
+export USE_ROUTER_SSH="true"
+export LOG_LEVEL="INFO"
+
+do_start() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+        echo "$NAME ya está corriendo (PID $(cat $PIDFILE))"
+        return 1
+    fi
+    echo "Iniciando $NAME..."
+    $DAEMON $DAEMON_ARGS >> "$LOGFILE" 2>&1 &
+    echo $! > "$PIDFILE"
+    echo "$NAME iniciado (PID $(cat $PIDFILE))"
+}
+
+do_stop() {
+    if [ ! -f "$PIDFILE" ] || ! kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+        echo "$NAME no está corriendo"
+        rm -f "$PIDFILE"
+        return 1
+    fi
+    echo "Deteniendo $NAME (PID $(cat $PIDFILE))..."
+    kill "$(cat $PIDFILE)"
+    rm -f "$PIDFILE"
+    echo "$NAME detenido"
+}
+
+do_status() {
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat $PIDFILE)" 2>/dev/null; then
+        echo "$NAME corriendo (PID $(cat $PIDFILE))"
+        echo ""
+        echo "=== Últimas 20 líneas de log ==="
+        tail -20 "$LOGFILE" 2>/dev/null || echo "(sin log aún)"
+    else
+        echo "$NAME NO está corriendo"
+        return 1
+    fi
+}
+
+case "$1" in
+    start)   do_start   ;;
+    stop)    do_stop    ;;
+    restart) do_stop; sleep 1; do_start ;;
+    status)  do_status  ;;
+    *)
+        echo "Uso: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+exit 0
