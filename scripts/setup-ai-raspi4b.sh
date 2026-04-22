@@ -153,6 +153,16 @@ else
         error "    https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
         die "Descarga el modelo antes de continuar"
     fi
+
+    # Resolver symlinks — HuggingFace cache usa symlinks; llama-server necesita el path real
+    LLAMA_MODEL_REAL=$(realpath "$LLAMA_MODEL" 2>/dev/null || readlink -f "$LLAMA_MODEL")
+    MODEL_SIZE=$(stat -c%s "$LLAMA_MODEL_REAL" 2>/dev/null || echo 0)
+    if [ "$MODEL_SIZE" -lt 100000000 ]; then
+        warn "El archivo del modelo parece muy pequeño ($(du -h "$LLAMA_MODEL_REAL" | cut -f1))"
+        warn "Puede ser un symlink roto o descarga incompleta"
+        warn "Path real: $LLAMA_MODEL_REAL"
+    fi
+    LLAMA_MODEL="$LLAMA_MODEL_REAL"
     ok "Modelo: $LLAMA_MODEL ($(du -h "$LLAMA_MODEL" | cut -f1))"
 fi
 
@@ -187,33 +197,32 @@ PIDFILE="$LLAMA_PIDFILE"
 LOGFILE="$LLAMA_LOGFILE"
 
 # Parámetros del modelo (ajustar según RAM disponible)
-# -c: context size  -t: threads  -np: n_parallel (requests simultáneas)
+# -c: context size  -t: threads
+# NOTA: --n-parallel, --n-predict y --log-disable no son flags válidos
+# en versiones recientes de llama.cpp — se gestionan automáticamente.
 CTX_SIZE=2048
 THREADS=4
-N_PARALLEL=1
 
 do_start() {
     if [ -f "\$PIDFILE" ] && kill -0 "\$(cat \$PIDFILE)" 2>/dev/null; then
         echo "llama-server ya está corriendo (PID \$(cat \$PIDFILE))"
         return 0
     fi
-    echo "Iniciando llama-server en :\$PORT..."
+    echo "Iniciando llama-server en :\$PORT (modelo: \$MODEL)..."
     \$DAEMON \\
         --model "\$MODEL" \\
         --port \$PORT \\
         --host 0.0.0.0 \\
         --ctx-size \$CTX_SIZE \\
         --threads \$THREADS \\
-        --n-predict 512 \\
-        --n-parallel \$N_PARALLEL \\
-        --log-disable \\
         >> "\$LOGFILE" 2>&1 &
     echo \$! > "\$PIDFILE"
-    sleep 3
+    sleep 5
     if kill -0 "\$(cat \$PIDFILE)" 2>/dev/null; then
         echo "llama-server iniciado (PID \$(cat \$PIDFILE)) en :\$PORT"
     else
         echo "ERROR: llama-server no arrancó — revisa \$LOGFILE"
+        cat "\$LOGFILE" | tail -5
         return 1
     fi
 }
@@ -292,7 +301,10 @@ if $NO_BUILD; then
     info "Saltando build (--no-build)"
 else
     info "Build de ai-analyzer con podman..."
+    # --cgroup-manager=cgroupfs necesario en DietPi (no usa systemd como PID 1)
+    # La imagen usa python:3.11-alpine (apk, sin dependencias de sd-bus)
     podman build \
+        --cgroup-manager=cgroupfs \
         --platform linux/arm64 \
         -t localhost/ai-analyzer:latest \
         "$REPO_DIR/backend/ai-analyzer/"
