@@ -160,20 +160,22 @@ tiene una versión vieja — hacer `git pull` en la Pi.
 
 ---
 
-## Admin y portal aparecen con `expires 28m` (no son permanentes)
+## Admin/Raspis aparecen con `expires 118m` (no son permanentes)
 
 **Causa:** `router_add_ip` fue llamado sin `timeout 0s` explícito y heredó
-el timeout por defecto del set (30m).
+el timeout por defecto del set (120m).
 
 **Fix:** La función `router_add_ip` en `common.sh` ya aplica `timeout 0s`
-automáticamente para `ADMIN_IP` y `PORTAL_IP`.
+automáticamente para `ADMIN_IP`, `RASPI4B_IP` y `RASPI3B_IP`.
 
-Si ocurre igualmente, forzar manualmente:
+Si ocurre igualmente, forzar manualmente los tres permanentes:
 ```bash
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
-  "nft add element ip captive allowed_clients { 192.168.1.113 timeout 0s }"
+  "nft add element ip captive allowed_clients { 192.168.1.113 timeout 0s }"  # admin
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
-  "nft add element ip captive allowed_clients { 192.168.1.167 timeout 0s }"
+  "nft add element ip captive allowed_clients { 192.168.1.167 timeout 0s }"  # RafexPi4B
+ssh -i /opt/keys/captive-portal root@192.168.1.1 \
+  "nft add element ip captive allowed_clients { 192.168.1.181 timeout 0s }"  # RafexPi3B
 ```
 
 ---
@@ -271,6 +273,79 @@ ssh -i /opt/keys/captive-portal root@192.168.1.1 \
 ```
 
 Si no hay entradas, ejecutar `bash scripts/setup-openwrt.sh`.
+
+---
+
+## El sensor no envía batches al analizador
+
+```bash
+# 1. Verificar que el servicio está corriendo en RafexPi3B
+/etc/init.d/network-sensor status
+tail -30 /var/log/network-sensor.log
+
+# 2. Verificar conectividad MQTT desde RafexPi3B
+mosquitto_pub -h 192.168.1.167 -p 1883 -t "test/ping" -m "pong"
+# Si falla → Mosquitto no escucha o la red bloquea el puerto 1883
+
+# 3. Verificar que Mosquitto corre en RafexPi4B
+/etc/init.d/mosquitto status
+mosquitto_sub -h 127.0.0.1 -t "rafexpi/sensor/batch" -v
+
+# 4. Probar el fallback HTTP directamente
+curl -s -X POST http://192.168.1.167/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"duration_s":30,"packets":100,"bytes":5000,"sensor_ip":"192.168.1.181"}' | python3 -m json.tool
+```
+
+---
+
+## El analizador IA recibe batches pero no produce análisis
+
+```bash
+# 1. Ver cola pendiente
+curl -s http://192.168.1.167/api/queue | python3 -m json.tool
+
+# 2. Verificar que llama-server responde
+curl -s http://192.168.1.167:8081/health
+/etc/init.d/llama-server status
+tail -20 /var/log/llama-server.log
+
+# 3. Ver logs del worker en el pod
+kubectl logs -f deploy/ai-analyzer | grep -E "worker|batch|error|ALTO|MEDIO|BAJO"
+```
+
+Si `llama-server` no responde:
+```bash
+/etc/init.d/llama-server restart
+# Esperar ~30s para que cargue el modelo
+curl -s http://127.0.0.1:8081/health
+```
+
+---
+
+## La reserva DHCP de una Raspi no funciona / obtiene IP aleatoria
+
+```bash
+# Verificar que la reserva está en el router
+ssh -i /opt/keys/captive-portal root@192.168.1.1 \
+  "uci show dhcp | grep -A4 'RafexPi'"
+
+# Verificar que dnsmasq la aplicó
+ssh -i /opt/keys/captive-portal root@192.168.1.1 \
+  "cat /tmp/dhcp.leases | grep -E 'd8:3a|b8:27'"
+```
+
+Si no existe la reserva, volver a aplicarla manualmente:
+```bash
+# Para RafexPi4B
+bash scripts/openwrt-reserve-raspi.sh --mac d8:3a:dd:4d:4b:ae --ip 192.168.1.167
+
+# Para RafexPi3B
+bash scripts/openwrt-reserve-raspi.sh --mac b8:27:eb:5a:ec:33 --ip 192.168.1.181
+
+# O re-ejecutar el setup completo del router (FASE C.1 hace las dos)
+bash scripts/setup-openwrt.sh
+```
 
 ---
 

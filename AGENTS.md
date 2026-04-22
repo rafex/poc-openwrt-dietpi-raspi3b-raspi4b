@@ -157,6 +157,7 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 - [x] Pod captive-portal 2/2 Running — nginx sidecar + backend Python
 - [x] Mosquitto MQTT broker corriendo en :1883
 - [x] llama-server (TinyLlama Q4_K_M) en :8081 — ctx-size=4096, --parallel 1
+- [x] Watchdog `/etc/cron.d/llama-watchdog` — relanza llama-server automáticamente si se cae
 - [x] Pod ai-analyzer corriendo — Flask + MQTT subscriber + worker + SQLite
 - [x] Dashboards: `/dashboard` (UI visual) y `/terminal` (SSE log en vivo)
 - [x] HTML servido desde la imagen Docker (no ConfigMap — evita errores de parseo YAML)

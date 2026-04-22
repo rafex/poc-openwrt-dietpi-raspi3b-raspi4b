@@ -392,6 +392,30 @@ EOF
         ok "llama-server habilitado en arranque"
     fi
 
+    # Watchdog via cron: si el proceso muere, lo relanza automáticamente
+    # /etc/cron.d/ es leído automáticamente por el demonio cron — no requiere crontab
+    if ! command -v cron &>/dev/null && ! command -v crond &>/dev/null; then
+        info "Instalando cron (necesario para el watchdog)..."
+        apt-get install -y --no-install-recommends cron
+        update-rc.d cron defaults 2>/dev/null || true
+        /etc/init.d/cron start 2>/dev/null || service cron start 2>/dev/null || true
+        ok "cron instalado e iniciado"
+    else
+        ok "cron ya disponible: $(command -v cron || command -v crond)"
+    fi
+
+    WATCHDOG_CRON="/etc/cron.d/llama-watchdog"
+    cat > "$WATCHDOG_CRON" << EOF
+# llama-server watchdog — relanza el servicio si se cae
+* * * * * root PIDFILE=$LLAMA_PIDFILE SERVICE=$LLAMA_SERVICE LOGFILE=$LLAMA_LOGFILE; \\
+  if ! [ -f "\$PIDFILE" ] || ! kill -0 "\$(cat \$PIDFILE 2>/dev/null)" 2>/dev/null; then \\
+    echo "\$(date '+%Y-%m-%d %T') [watchdog] llama-server no responde, relanzando..." >> "\$LOGFILE"; \\
+    "\$SERVICE" start >> "\$LOGFILE" 2>&1; \\
+  fi
+EOF
+    chmod 644 "$WATCHDOG_CRON"
+    ok "Watchdog instalado en $WATCHDOG_CRON (comprueba cada minuto)"
+
     # Iniciar llama-server
     info "Iniciando llama-server (puede tardar mientras carga el modelo)..."
     "$LLAMA_SERVICE" start && ok "llama-server iniciado" || warn "Error iniciando llama-server"

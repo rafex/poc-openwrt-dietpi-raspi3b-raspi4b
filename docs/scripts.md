@@ -52,7 +52,7 @@ sudo bash scripts/setup-ai-raspi4b.sh --no-llama   # omitir configuración llama
 | Pre-flight | Verifica k3s corriendo (lo arranca si es necesario), podman disponible |
 | A0 | Instala Mosquitto; escribe `/etc/mosquitto/conf.d/rafexpi.conf` (`listen 1883 0.0.0.0, allow_anonymous true`); habilita y reinicia |
 | A | Localiza `llama-server` (rutas habituales + `find`); localiza modelo `tinyllama*.gguf`; resuelve symlinks con `realpath` |
-| B | Genera `/etc/init.d/llama-server` con `ctx-size=4096 --parallel 1 --threads 4`; habilita; espera hasta 60s que responda en `:8081` |
+| B | Genera `/etc/init.d/llama-server` con `ctx-size=4096 --parallel 1 --threads 4`; habilita; instala `/etc/cron.d/llama-watchdog` (autorelanza cada minuto si se cae); espera hasta 60s que responda en `:8081` |
 | C | `podman build --cgroup-manager=cgroupfs --platform linux/arm64 -t localhost/ai-analyzer:latest` |
 | D | `podman save localhost/ai-analyzer:latest \| k3s ctr images import -` |
 | E | `kubectl apply` ai-analyzer-deployment/svc/ingress; limpia recursos legacy (dashboard separado); `rollout restart` |
