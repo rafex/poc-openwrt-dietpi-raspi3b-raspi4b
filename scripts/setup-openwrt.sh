@@ -154,36 +154,20 @@ address=/nmcheck.gnome.org/$PORTAL_IP
 # Dominio local de fallback (manual)
 address=/$CAPTIVE_DOMAIN/$PORTAL_IP
 
-# DHCP option 114 (RFC 7710/8910): anuncia URL del captive portal al cliente
-# Mejora la apertura automática del portal en Android/iOS/macOS/Windows modernos.
-dhcp-option=114,http://$PORTAL_IP/portal
-
 "
 
-# Verificar si /etc/dnsmasq.d/ existe en el router
-DNSMASQ_D_EXISTS=0
-router_ssh "[ -d /etc/dnsmasq.d ]" 2>/dev/null && DNSMASQ_D_EXISTS=1
-
-if [ "$DNSMASQ_D_EXISTS" -eq 1 ]; then
-    # Usar /etc/dnsmasq.d/captive-portal.conf
-    log_info "Escribiendo /etc/dnsmasq.d/captive-portal.conf en el router..."
-    router_ssh "cat > /etc/dnsmasq.d/captive-portal.conf" << EOF
-$DNSMASQ_CONTENT
-EOF
-    log_ok "Archivo dnsmasq creado: /etc/dnsmasq.d/captive-portal.conf"
-else
-    # Fallback: insertar en /etc/dnsmasq.conf entre marcadores
-    log_warn "/etc/dnsmasq.d/ no existe — usando /etc/dnsmasq.conf con marcadores"
-    # Eliminar bloque anterior si existe
-    router_ssh "
-        if grep -q '# --- captive-portal begin ---' /etc/dnsmasq.conf 2>/dev/null; then
-            sed -i '/# --- captive-portal begin ---/,/# --- captive-portal end ---/d' /etc/dnsmasq.conf
-        fi
-        printf '\n# --- captive-portal begin ---\n%s\n# --- captive-portal end ---\n' \
-            '$DNSMASQ_CONTENT' >> /etc/dnsmasq.conf
-    "
-    log_ok "Configuracion dnsmasq insertada en /etc/dnsmasq.conf"
-fi
+# Forzar bloque en /etc/dnsmasq.conf (siempre leído por dnsmasq en OpenWrt)
+# y limpiar archivo legado para evitar duplicados.
+log_info "Aplicando bloque captive en /etc/dnsmasq.conf..."
+router_ssh "
+    rm -f /etc/dnsmasq.d/captive-portal.conf 2>/dev/null || true
+    if grep -q '# --- captive-portal begin ---' /etc/dnsmasq.conf 2>/dev/null; then
+        sed -i '/# --- captive-portal begin ---/,/# --- captive-portal end ---/d' /etc/dnsmasq.conf
+    fi
+    printf '\n# --- captive-portal begin ---\n%s\n# --- captive-portal end ---\n' \
+        '$DNSMASQ_CONTENT' >> /etc/dnsmasq.conf
+"
+log_ok "Configuracion captive insertada en /etc/dnsmasq.conf"
 
 # Configurar DHCP lease time a 120 minutos via UCI
 # Razon: al reconectar, el dispositivo obtiene nueva IP → no esta en allowed_clients → portal
@@ -191,6 +175,12 @@ fi
 log_info "Configurando DHCP lease time a 120 minutos..."
 router_ssh "
     uci set dhcp.lan.leasetime='120m'
+    # Forzar DNS del router a clientes LAN (evita bypass DNS externo/DoH por DHCP)
+    # Option 6  = DNS servers
+    # Option 114 = Captive Portal URL (RFC 7710/8910)
+    uci del dhcp.lan.dhcp_option 2>/dev/null || true
+    uci add_list dhcp.lan.dhcp_option='6,$ROUTER_IP'
+    uci add_list dhcp.lan.dhcp_option='114,http://$PORTAL_IP/portal'
     uci commit dhcp
 " && log_ok "DHCP lease time = 120m configurado" || \
     log_warn "No se pudo configurar DHCP lease time via UCI (puede que la interfaz no se llame 'lan')"
