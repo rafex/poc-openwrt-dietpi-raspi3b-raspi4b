@@ -30,11 +30,15 @@ import time
 from collections import defaultdict
 from datetime import datetime, timezone
 
+import paho.mqtt.client as mqtt
 import requests
 
 # ─── Configuración ────────────────────────────────────────────────────────────
 INTERFACE      = os.environ.get("SENSOR_IFACE",    "eth0")
 SENSOR_IP      = os.environ.get("SENSOR_IP",       "192.168.1.181")
+MQTT_HOST      = os.environ.get("MQTT_HOST",       "192.168.1.167")
+MQTT_PORT      = int(os.environ.get("MQTT_PORT",   "1883"))
+MQTT_TOPIC     = os.environ.get("MQTT_TOPIC",      "rafexpi/sensor/batch")
 ANALYZER_URL   = os.environ.get("ANALYZER_URL",    "http://192.168.1.167/api/ingest")
 BATCH_INTERVAL = int(os.environ.get("BATCH_INTERVAL", "30"))
 ROUTER_IP      = os.environ.get("ROUTER_IP",       "192.168.1.1")
@@ -390,28 +394,78 @@ def enrich_with_router(summary: dict) -> dict:
     return summary
 
 
+# ─── MQTT client ─────────────────────────────────────────────────────────────
+_mqtt_client: mqtt.Client = None
+_mqtt_ready  = threading.Event()
+
+
+def _on_mqtt_connect(client, userdata, flags, rc):
+    if rc == 0:
+        log.info("MQTT conectado a %s:%d", MQTT_HOST, MQTT_PORT)
+        _mqtt_ready.set()
+    else:
+        log.warning("MQTT connect falló rc=%d", rc)
+
+
+def _on_mqtt_disconnect(client, userdata, rc):
+    _mqtt_ready.clear()
+    log.warning("MQTT desconectado (rc=%d) — reconectando...", rc)
+
+
+def init_mqtt():
+    global _mqtt_client
+    client = mqtt.Client(client_id=f"raspi3b-sensor-{SENSOR_IP}", clean_session=True)
+    client.on_connect    = _on_mqtt_connect
+    client.on_disconnect = _on_mqtt_disconnect
+    client.reconnect_delay_set(min_delay=2, max_delay=30)
+    try:
+        client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
+        log.info("MQTT conectando a %s:%d topic=%s", MQTT_HOST, MQTT_PORT, MQTT_TOPIC)
+    except Exception as e:
+        log.warning("MQTT no disponible al inicio: %s — se usará HTTP fallback", e)
+    client.loop_start()
+    _mqtt_client = client
+
+
 # ─── Envío al analizador ─────────────────────────────────────────────────────
 def send_batch(summary: dict):
-    """Envía el resumen del batch al endpoint de ingesta de la Raspi 4B."""
+    """Publica el batch vía MQTT (preferido) con fallback a HTTP POST."""
+    payload = json.dumps(summary, ensure_ascii=False)
+    pkts    = summary["total_packets"]
+    bfmt    = summary["total_bytes_fmt"]
+    susp    = len(summary.get("suspicious", []))
+
+    # ── Intento 1: MQTT ──────────────────────────────────────────────────────
+    if _mqtt_client is not None and _mqtt_ready.is_set():
+        try:
+            result = _mqtt_client.publish(MQTT_TOPIC, payload, qos=1)
+            if result.rc == mqtt.MQTT_ERR_SUCCESS:
+                log.info(
+                    "MQTT publicado: %d paquetes, %s, %d sospechosos → %s",
+                    pkts, bfmt, susp, MQTT_TOPIC,
+                )
+                return
+            log.warning("MQTT publish rc=%d — intentando HTTP fallback", result.rc)
+        except Exception as e:
+            log.warning("MQTT publish error: %s — intentando HTTP fallback", e)
+
+    # ── Fallback: HTTP POST ───────────────────────────────────────────────────
     try:
         resp = requests.post(
             ANALYZER_URL,
-            json=summary,
+            data=payload,
             timeout=15,
             headers={"Content-Type": "application/json"},
         )
         if resp.status_code == 200:
             log.info(
-                "Batch enviado: %d paquetes, %s, %d sospechosos — respuesta: %s",
-                summary["total_packets"],
-                summary["total_bytes_fmt"],
-                len(summary.get("suspicious", [])),
-                resp.json().get("status", "?"),
+                "HTTP enviado: %d paquetes, %s, %d sospechosos — respuesta: %s",
+                pkts, bfmt, susp, resp.json().get("status", "?"),
             )
         else:
-            log.warning("Respuesta inesperada del analizador: HTTP %d", resp.status_code)
+            log.warning("HTTP respuesta inesperada: %d", resp.status_code)
     except requests.exceptions.ConnectionError:
-        log.warning("No se pudo conectar con el analizador en %s", ANALYZER_URL)
+        log.warning("No se pudo conectar: MQTT ni HTTP disponibles")
     except Exception as e:
         log.error("Error enviando batch: %s", e)
 
@@ -454,7 +508,12 @@ def main():
     log.info("  Analyzer : %s", ANALYZER_URL)
     log.info("  Intervalo: %ds", BATCH_INTERVAL)
     log.info("  Router SSH: %s (%s@%s)", "activo" if USE_ROUTER_SSH else "desactivado", ROUTER_USER, ROUTER_IP)
+    log.info("  MQTT      : %s:%d  topic=%s", MQTT_HOST, MQTT_PORT, MQTT_TOPIC)
+    log.info("  HTTP fallback: %s", ANALYZER_URL)
     log.info("=" * 60)
+
+    init_mqtt()
+    _mqtt_ready.wait(timeout=5)  # esperar conexión inicial (no bloquea si falla)
 
     if USE_ROUTER_SSH:
         test = router_ssh("echo pong")

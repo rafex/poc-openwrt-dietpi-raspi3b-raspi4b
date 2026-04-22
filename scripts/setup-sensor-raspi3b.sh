@@ -57,6 +57,7 @@ run() {
 }
 
 # ─── Constantes ───────────────────────────────────────────────────────────────
+HOSTNAME_NEW="RafexPi3B"
 SENSOR_DIR="/opt/sensor"
 KEYS_DIR="/opt/keys"
 SSH_KEY="$KEYS_DIR/sensor"
@@ -64,7 +65,27 @@ SERVICE_NAME="network-sensor"
 SERVICE_FILE="/etc/init.d/$SERVICE_NAME"
 INTERFACE="eth0"
 ANALYZER_URL="${ANALYZER_URL:-http://192.168.1.167/api/ingest}"
+MQTT_HOST="${MQTT_HOST:-192.168.1.167}"
+MQTT_PORT="${MQTT_PORT:-1883}"
+MQTT_TOPIC="${MQTT_TOPIC:-rafexpi/sensor/batch}"
 ROUTER_IP="${ROUTER_IP:-192.168.1.1}"
+
+# ─── Hostname ─────────────────────────────────────────────────────────────────
+step "Configurando hostname: $HOSTNAME_NEW"
+
+if ! $DRY_RUN; then
+    HOSTNAME_CURRENT=$(hostname)
+    if [ "$HOSTNAME_CURRENT" = "$HOSTNAME_NEW" ]; then
+        ok "Hostname ya es $HOSTNAME_NEW"
+    else
+        echo "$HOSTNAME_NEW" > /etc/hostname
+        sed -i "s/\b${HOSTNAME_CURRENT}\b/${HOSTNAME_NEW}/g" /etc/hosts
+        hostname "$HOSTNAME_NEW"
+        ok "Hostname cambiado: $HOSTNAME_CURRENT → $HOSTNAME_NEW (efectivo en próximo reinicio)"
+    fi
+else
+    echo -e "${YELLOW}[DRY-RUN]${NC} echo $HOSTNAME_NEW > /etc/hostname"
+fi
 
 # ─── Verificaciones previas ────────────────────────────────────────────────────
 step "Pre-flight checks"
@@ -127,8 +148,14 @@ step "B) Instalando sensor.py en $SENSOR_DIR"
 run mkdir -p "$SENSOR_DIR"
 run cp "$REPO_DIR/sensor/sensor.py" "$SENSOR_DIR/sensor.py"
 run chmod +x "$SENSOR_DIR/sensor.py"
-
 ok "sensor.py instalado en $SENSOR_DIR"
+
+# Si el servicio ya corría, reiniciarlo para aplicar el nuevo sensor.py
+if ! $DRY_RUN && [ -f /var/run/network-sensor.pid ] && \
+   kill -0 "$(cat /var/run/network-sensor.pid)" 2>/dev/null; then
+    info "Servicio ya corriendo — reiniciando para aplicar sensor.py actualizado..."
+    "$SERVICE_FILE" restart 2>/dev/null || true
+fi
 
 # ─── C) Dependencias Python ───────────────────────────────────────────────────
 step "C) Instalando dependencias Python"
@@ -140,6 +167,12 @@ if ! python3 -c "import requests" &>/dev/null; then
     run pip3 install requests
 fi
 ok "python3-requests disponible"
+
+if ! python3 -c "import paho.mqtt.client" &>/dev/null; then
+    run pip3 install --break-system-packages paho-mqtt 2>/dev/null || \
+    run pip3 install paho-mqtt
+fi
+ok "paho-mqtt disponible"
 
 # ─── D) Llave SSH para el router ──────────────────────────────────────────────
 step "D) Configurando llave SSH para el router"
@@ -218,6 +251,9 @@ LOGFILE=/var/log/network-sensor.log
 
 export SENSOR_IFACE="$INTERFACE"
 export SENSOR_IP="$SENSOR_IP"
+export MQTT_HOST="$MQTT_HOST"
+export MQTT_PORT="$MQTT_PORT"
+export MQTT_TOPIC="$MQTT_TOPIC"
 export ANALYZER_URL="$ANALYZER_URL"
 export BATCH_INTERVAL="30"
 export ROUTER_IP="$ROUTER_IP"

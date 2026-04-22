@@ -50,10 +50,25 @@ for arg in "$@"; do
 done
 
 # ─── Constantes ───────────────────────────────────────────────────────────────
+HOSTNAME_NEW="RafexPi4B"
 LLAMA_PORT=8081
 LLAMA_SERVICE="/etc/init.d/llama-server"
 LLAMA_PIDFILE="/var/run/llama-server.pid"
 LLAMA_LOGFILE="/var/log/llama-server.log"
+
+# ─── Hostname ─────────────────────────────────────────────────────────────────
+step "Configurando hostname: $HOSTNAME_NEW"
+
+HOSTNAME_CURRENT=$(hostname)
+if [ "$HOSTNAME_CURRENT" = "$HOSTNAME_NEW" ]; then
+    ok "Hostname ya es $HOSTNAME_NEW"
+else
+    echo "$HOSTNAME_NEW" > /etc/hostname
+    # Actualizar /etc/hosts para que el nuevo hostname resuelva a localhost
+    sed -i "s/\b${HOSTNAME_CURRENT}\b/${HOSTNAME_NEW}/g" /etc/hosts
+    hostname "$HOSTNAME_NEW"
+    ok "Hostname cambiado: $HOSTNAME_CURRENT → $HOSTNAME_NEW (efectivo en próximo reinicio)"
+fi
 
 # ─── Verificaciones previas ───────────────────────────────────────────────────
 step "Pre-flight checks"
@@ -82,6 +97,43 @@ fi
 ok "podman: $(podman --version)"
 
 # ─── A) Localizar llama.cpp y modelo ─────────────────────────────────────────
+step "A0) Instalando Mosquitto (MQTT broker)"
+
+if command -v mosquitto &>/dev/null; then
+    ok "Mosquitto ya instalado: $(mosquitto -v 2>&1 | head -1)"
+else
+    apt-get install -y --no-install-recommends mosquitto mosquitto-clients
+    ok "Mosquitto instalado"
+fi
+
+# Configuración: escuchar en todas las interfaces, sin autenticación (demo)
+MOSQUITTO_CONF="/etc/mosquitto/conf.d/rafexpi.conf"
+cat > "$MOSQUITTO_CONF" << 'EOF'
+# RafexPi — Mosquitto MQTT broker
+listener 1883 0.0.0.0
+allow_anonymous true
+persistence true
+persistence_location /var/lib/mosquitto/
+log_dest file /var/log/mosquitto.log
+log_type error
+log_type warning
+log_type information
+EOF
+ok "Mosquitto configurado en $MOSQUITTO_CONF"
+
+# Habilitar y reiniciar
+if command -v update-rc.d &>/dev/null; then
+    update-rc.d mosquitto defaults 2>/dev/null || true
+fi
+/etc/init.d/mosquitto restart 2>/dev/null || service mosquitto restart 2>/dev/null || true
+sleep 2
+
+if mosquitto_pub -h 127.0.0.1 -t "test/ping" -m "pong" 2>/dev/null; then
+    ok "Mosquitto escuchando en :1883"
+else
+    warn "Mosquitto no responde — verifica: /etc/init.d/mosquitto status"
+fi
+
 step "A) Localizando llama.cpp y modelo TinyLlama"
 
 if $NO_LLAMA; then
@@ -196,12 +248,13 @@ PORT=$LLAMA_PORT
 PIDFILE="$LLAMA_PIDFILE"
 LOGFILE="$LLAMA_LOGFILE"
 
-# Parámetros del modelo (ajustar según RAM disponible)
-# -c: context size  -t: threads
-# NOTA: --n-parallel, --n-predict y --log-disable no son flags válidos
-# en versiones recientes de llama.cpp — se gestionan automáticamente.
-CTX_SIZE=2048
+# Parámetros del modelo
+# ctx-size=4096 necesario: el prompt ocupa ~350 tokens + n_predict=384
+# Con ctx-size=2048 y n_parallel=4 (auto) solo quedan 512 tokens/slot → crash
+# --parallel 1: un análisis a la vez, toda la memoria KV para ese slot
+CTX_SIZE=4096
 THREADS=4
+N_PARALLEL=1
 
 do_start() {
     if [ -f "\$PIDFILE" ] && kill -0 "\$(cat \$PIDFILE)" 2>/dev/null; then
@@ -215,6 +268,7 @@ do_start() {
         --host 0.0.0.0 \\
         --ctx-size \$CTX_SIZE \\
         --threads \$THREADS \\
+        --parallel \$N_PARALLEL \\
         >> "\$LOGFILE" 2>&1 &
     echo \$! > "\$PIDFILE"
     sleep 5
