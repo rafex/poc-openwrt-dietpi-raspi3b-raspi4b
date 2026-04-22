@@ -27,7 +27,7 @@ import os
 import subprocess
 import threading
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
@@ -214,6 +214,8 @@ class TrafficAggregator:
             top_src   = sorted(self.src_bytes.items(),  key=lambda x: -x[1])[:10]
             top_dst   = sorted(self.dst_bytes.items(),  key=lambda x: -x[1])[:10]
             top_ports = sorted(self.dst_ports.items(),  key=lambda x: -x[1])[:15]
+            dns_counts = Counter(q for q in self.dns_queries if q)
+            http_counts = Counter(h for h in self.http_hosts if h)
 
             suspicious = []
 
@@ -282,7 +284,9 @@ class TrafficAggregator:
                 "top_dst_ports":    [{"port": p, "count": c} for p, c in top_ports],
                 "protocols":        dict(self.protocols),
                 "dns_queries":      list(dict.fromkeys(self.dns_queries))[:60],
+                "dns_query_counts": dict(dns_counts.most_common(120)),
                 "http_hosts":       list(dict.fromkeys(self.http_hosts))[:25],
+                "http_host_counts": dict(http_counts.most_common(120)),
                 "http_requests":    list(dict.fromkeys(self.http_uris))[:15],
                 "suspicious":       suspicious,
                 "arp_events":       self.arps[:30],

@@ -3,12 +3,13 @@ FROM python:3.11-alpine
 WORKDIR /app
 
 # Alpine no depende de systemd — compatible con DietPi/crun sin sd-bus
-RUN apk add --no-cache curl
+RUN apk add --no-cache curl openssh-client
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY analyzer.py .
+COPY router_mcp.py .
 COPY dashboard.html .
 COPY terminal.html .
 

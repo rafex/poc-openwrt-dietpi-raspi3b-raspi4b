@@ -32,9 +32,12 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
+from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
 import requests
+
+from router_mcp import RouterMCP
 
 # ─── Configuración ────────────────────────────────────────────────────────────
 MQTT_HOST  = os.environ.get("MQTT_HOST",  "192.168.1.167")
@@ -46,6 +49,28 @@ N_PREDICT     = int(os.environ.get("N_PREDICT",     "256"))
 MODEL_FORMAT  = os.environ.get("MODEL_FORMAT",  "tinyllama")  # tinyllama | qwen
 PORT          = int(os.environ.get("PORT",          "5000"))
 LOG_LEVEL     = os.environ.get("LOG_LEVEL",     "INFO")
+ROUTER_IP     = os.environ.get("ROUTER_IP", "192.168.1.1")
+ROUTER_USER   = os.environ.get("ROUTER_USER", "root")
+SSH_KEY       = os.environ.get("SSH_KEY", "/opt/keys/captive-portal")
+
+SOCIAL_BLOCK_ENABLED = os.environ.get("SOCIAL_BLOCK_ENABLED", "true").lower() == "true"
+SOCIAL_POLICY_START_HOUR = int(os.environ.get("SOCIAL_POLICY_START_HOUR", "9"))
+SOCIAL_POLICY_END_HOUR = int(os.environ.get("SOCIAL_POLICY_END_HOUR", "17"))
+SOCIAL_POLICY_TZ = os.environ.get("SOCIAL_POLICY_TZ", "America/Mexico_City")
+SOCIAL_MIN_HITS = int(os.environ.get("SOCIAL_MIN_HITS", "3"))
+
+SOCIAL_NETWORK_DOMAINS = {
+    "facebook": ["facebook.com", "fbcdn.net", "messenger.com", "whatsapp.com", "whatsapp.net"],
+    "instagram": ["instagram.com", "cdninstagram.com"],
+    "x": ["twitter.com", "x.com", "twimg.com"],
+    "tiktok": ["tiktok.com", "tiktokcdn.com", "byteoversea.com"],
+    "youtube": ["youtube.com", "youtu.be", "googlevideo.com", "ytimg.com"],
+    "linkedin": ["linkedin.com", "licdn.com"],
+    "snapchat": ["snapchat.com", "sc-cdn.net"],
+}
+SOCIAL_DOMAIN_SET = {
+    d for doms in SOCIAL_NETWORK_DOMAINS.values() for d in doms
+}
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -73,6 +98,9 @@ stats = {
     "mqtt_connected":    False,
     "started_at":        datetime.now(timezone.utc).isoformat(),
 }
+
+router_mcp = None
+policy_state = {"social_block_active": False}
 
 
 # ─── SQLite ───────────────────────────────────────────────────────────────────
@@ -107,9 +135,18 @@ def init_db():
             bytes_fmt        TEXT    NOT NULL DEFAULT '0 B'
         );
 
+        CREATE TABLE IF NOT EXISTS policy_actions (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp   TEXT NOT NULL,
+            action      TEXT NOT NULL,
+            reason      TEXT,
+            details     TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_batches_status   ON batches(status);
         CREATE INDEX IF NOT EXISTS idx_analyses_batch   ON analyses(batch_id);
         CREATE INDEX IF NOT EXISTS idx_analyses_created ON analyses(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_policy_created   ON policy_actions(timestamp DESC);
     """)
     conn.commit()
     conn.close()
@@ -213,6 +250,46 @@ def db_queue_stats() -> dict:
     return result
 
 
+def db_store_policy_action(action: str, reason: str, details: dict):
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO policy_actions (timestamp, action, reason, details) VALUES (?,?,?,?)",
+        (
+            datetime.now(timezone.utc).isoformat(),
+            action,
+            reason,
+            json.dumps(details, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_policy_actions(limit: int = 50) -> list:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,timestamp,action,reason,details FROM policy_actions ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    items = []
+    for row in rows:
+        details = {}
+        try:
+            details = json.loads(row["details"] or "{}")
+        except Exception:
+            pass
+        items.append({
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "action": row["action"],
+            "reason": row["reason"],
+            "details": details,
+        })
+    items.reverse()
+    return items
+
+
 # ─── Prompt builder ───────────────────────────────────────────────────────────
 def _prompt_body(summary: dict) -> str:
     """Cuerpo del prompt — formato compacto ~120 tokens, válido para cualquier modelo."""
@@ -310,6 +387,119 @@ def call_llama(prompt: str) -> str:
         return f"[Error: {e}]"
 
 
+def _social_bucket_for_domain(domain: str) -> str | None:
+    d = domain.lower().strip(".")
+    for bucket, roots in SOCIAL_NETWORK_DOMAINS.items():
+        for root in roots:
+            if d == root or d.endswith("." + root):
+                return bucket
+    return None
+
+
+def detect_social_traffic(summary: dict) -> dict:
+    combined_counts = {}
+    for source in ("dns_query_counts", "http_host_counts"):
+        source_map = summary.get(source) or {}
+        if isinstance(source_map, dict):
+            for domain, count in source_map.items():
+                d = str(domain).lower().strip()
+                if not d:
+                    continue
+                try:
+                    n = int(count)
+                except Exception:
+                    n = 1
+                combined_counts[d] = combined_counts.get(d, 0) + max(1, n)
+
+    # Compatibilidad con batches viejos que solo traen listas únicas.
+    if not combined_counts:
+        for domain in (summary.get("dns_queries") or []) + (summary.get("http_hosts") or []):
+            d = str(domain).lower().strip()
+            if d:
+                combined_counts[d] = combined_counts.get(d, 0) + 1
+
+    per_network = {}
+    matched_domains = {}
+    total_hits = 0
+    for domain, count in combined_counts.items():
+        bucket = _social_bucket_for_domain(domain)
+        if not bucket:
+            continue
+        per_network[bucket] = per_network.get(bucket, 0) + count
+        matched_domains[domain] = matched_domains.get(domain, 0) + count
+        total_hits += count
+
+    return {
+        "total_hits": total_hits,
+        "per_network": per_network,
+        "matched_domains": matched_domains,
+    }
+
+
+def evaluate_and_apply_social_policy(summary: dict) -> dict:
+    result = {
+        "enabled": SOCIAL_BLOCK_ENABLED,
+        "in_window": False,
+        "should_block": False,
+        "social_hits": 0,
+        "action": "noop",
+        "reason": "",
+    }
+    if not SOCIAL_BLOCK_ENABLED:
+        result["reason"] = "disabled"
+        return result
+    if router_mcp is None:
+        result["reason"] = "router_mcp_unavailable"
+        return result
+
+    try:
+        local_hour = datetime.now(ZoneInfo(SOCIAL_POLICY_TZ)).hour
+    except Exception:
+        local_hour = datetime.now().hour
+    in_window = SOCIAL_POLICY_START_HOUR <= local_hour < SOCIAL_POLICY_END_HOUR
+    social = detect_social_traffic(summary)
+    hits = social["total_hits"]
+    should_block = in_window and hits >= SOCIAL_MIN_HITS
+
+    result.update({
+        "in_window": in_window,
+        "should_block": should_block,
+        "social_hits": hits,
+        "social": social,
+    })
+
+    active = policy_state.get("social_block_active", False)
+    if should_block and not active:
+        ok, msg = router_mcp.apply_social_block(SOCIAL_DOMAIN_SET)
+        result["action"] = "block_on"
+        result["reason"] = f"hits={hits} in_window={in_window}"
+        result["router_ok"] = ok
+        result["router_msg"] = msg
+        if ok:
+            policy_state["social_block_active"] = True
+            db_store_policy_action("social_block_on", result["reason"], result)
+        else:
+            db_store_policy_action("social_block_on_error", result["reason"], result)
+        return result
+
+    if (not should_block) and active:
+        ok, msg = router_mcp.remove_social_block()
+        result["action"] = "block_off"
+        result["reason"] = f"hits={hits} in_window={in_window}"
+        result["router_ok"] = ok
+        result["router_msg"] = msg
+        if ok:
+            policy_state["social_block_active"] = False
+            db_store_policy_action("social_block_off", result["reason"], result)
+        else:
+            db_store_policy_action("social_block_off_error", result["reason"], result)
+        return result
+
+    result["action"] = "noop"
+    result["reason"] = f"active={active} hits={hits} in_window={in_window}"
+    return result
+
+
 # ─── Pipeline de análisis ─────────────────────────────────────────────────────
 def analyze_and_store(batch_id: int, summary: dict):
     """Ejecuta prompt → llama → guarda en SQLite → broadcast SSE."""
@@ -326,6 +516,7 @@ def analyze_and_store(batch_id: int, summary: dict):
         risk = "MEDIO"
     if summary.get("suspicious"):
         risk = "MEDIO" if risk == "BAJO" else risk
+    policy_result = evaluate_and_apply_social_policy(summary)
 
     result = {
         "id":               stats["analyses_ok"] + 1,
@@ -341,6 +532,7 @@ def analyze_and_store(batch_id: int, summary: dict):
         "suspicious":       summary.get("suspicious", []),
         "lan_devices":      summary.get("lan_devices", []),
         "dns_queries":      summary.get("dns_queries", [])[:20],
+        "policy":           policy_result,
     }
 
     db_save_analysis(batch_id, result)
@@ -348,8 +540,8 @@ def analyze_and_store(batch_id: int, summary: dict):
 
     _broadcast_sse(result)
     log.info(
-        "Análisis batch #%d completado en %ss | riesgo=%s | queue restante=%d",
-        batch_id, elapsed, risk, work_queue.qsize(),
+        "Análisis batch #%d completado en %ss | riesgo=%s | policy=%s | queue=%d",
+        batch_id, elapsed, risk, policy_result.get("action"), work_queue.qsize(),
     )
 
 
@@ -517,6 +709,16 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 "db_path":       DB_PATH,
                 "queue":         db_queue_stats(),
                 "stats":         stats,
+                "policy": {
+                    "social_block_enabled": SOCIAL_BLOCK_ENABLED,
+                    "social_block_active": policy_state.get("social_block_active", False),
+                    "window": {
+                        "start_hour": SOCIAL_POLICY_START_HOUR,
+                        "end_hour": SOCIAL_POLICY_END_HOUR,
+                        "timezone": SOCIAL_POLICY_TZ,
+                    },
+                    "min_hits": SOCIAL_MIN_HITS,
+                },
             })
 
         elif path == "/api/history":
@@ -529,6 +731,20 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/stats":
             self.send_json({**stats, "queue": db_queue_stats()})
+
+        elif path == "/api/policy":
+            limit = int(params.get("limit", ["50"])[0])
+            self.send_json({
+                "state": policy_state,
+                "config": {
+                    "enabled": SOCIAL_BLOCK_ENABLED,
+                    "start_hour": SOCIAL_POLICY_START_HOUR,
+                    "end_hour": SOCIAL_POLICY_END_HOUR,
+                    "timezone": SOCIAL_POLICY_TZ,
+                    "min_hits": SOCIAL_MIN_HITS,
+                },
+                "actions": db_get_policy_actions(limit),
+            })
 
         elif path == "/api/stream":
             q = queue.Queue(maxsize=50)
@@ -596,15 +812,41 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 def main():
+    global router_mcp
     log.info("=" * 60)
     log.info("AI Analyzer — Raspi 4B")
     log.info("  Puerto HTTP  : %d", PORT)
     log.info("  MQTT broker  : %s:%d  topic=%s", MQTT_HOST, MQTT_PORT, MQTT_TOPIC)
     log.info("  SQLite DB    : %s", DB_PATH)
     log.info("  llama.cpp    : %s", LLAMA_URL)
+    log.info(
+        "  Social policy: enabled=%s window=%02d-%02d tz=%s min_hits=%d",
+        SOCIAL_BLOCK_ENABLED,
+        SOCIAL_POLICY_START_HOUR,
+        SOCIAL_POLICY_END_HOUR,
+        SOCIAL_POLICY_TZ,
+        SOCIAL_MIN_HITS,
+    )
     log.info("=" * 60)
 
     init_db()
+
+    if SOCIAL_BLOCK_ENABLED:
+        try:
+            router_mcp = RouterMCP(
+                router_ip=ROUTER_IP,
+                router_user=ROUTER_USER,
+                ssh_key=SSH_KEY,
+                logger=log,
+            )
+            policy_state["social_block_active"] = router_mcp.is_social_block_active()
+            log.info(
+                "Router MCP listo | social_block_active=%s",
+                policy_state["social_block_active"],
+            )
+        except Exception as e:
+            log.warning("No se pudo iniciar Router MCP: %s", e)
+            router_mcp = None
 
     # Reencolar batches pending de reinicios anteriores
     conn   = db_connect()
