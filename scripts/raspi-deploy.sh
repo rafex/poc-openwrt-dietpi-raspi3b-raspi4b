@@ -4,8 +4,14 @@
 # Uso:
 #   bash scripts/raspi-deploy.sh              # deploy completo (build + apply + verify)
 #   bash scripts/raspi-deploy.sh --no-build   # solo apply manifiestos (sin rebuild)
-#   bash scripts/raspi-deploy.sh --only-build # solo rebuild imagen, sin apply
+#   bash scripts/raspi-deploy.sh --only-build # solo rebuild imágenes, sin apply
 #   bash scripts/raspi-deploy.sh --cleanup    # elimina recursos legacy (captive-portal-html)
+#
+# Para intercambiar el portal activo (lentium ↔ clasico):
+#   bash scripts/portal-switch.sh             # alterna automáticamente
+#   bash scripts/portal-switch.sh lentium     # activar Lentium
+#   bash scripts/portal-switch.sh clasico     # activar clásico
+#   bash scripts/portal-switch.sh status      # ver cuál está activo
 #
 # Diferencia con setup-raspi.sh:
 #   setup-raspi.sh  → instalación desde CERO (genera llaves, crea directorios)
@@ -25,10 +31,13 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKEND_DIR="$REPO_DIR/backend/captive-portal"
+BACKEND_LENTIUM_DIR="$REPO_DIR/backend/captive-portal-lentium"
 K8S_DIR="$REPO_DIR/k8s"
 
 IMAGE_NAME="captive-backend:latest"
 K3S_IMAGE_NAME="localhost/captive-backend:latest"
+IMAGE_LENTIUM="captive-backend-lentium:latest"
+K3S_IMAGE_LENTIUM="localhost/captive-backend-lentium:latest"
 PORTAL_IP="192.168.1.167"
 PORTAL_URL="http://$PORTAL_IP"
 KUBECTL="k3s kubectl"
@@ -106,10 +115,27 @@ if [ "$DO_BUILD" -eq 1 ]; then
     podman save "$IMAGE_NAME" | k3s ctr images import - \
         || die "Falló la importación en containerd"
 
-    # Verificar
     k3s ctr images ls 2>/dev/null | grep -q "$K3S_IMAGE_NAME" \
         || die "La imagen $K3S_IMAGE_NAME no aparece en containerd"
     log_ok "Imagen $K3S_IMAGE_NAME disponible en containerd"
+
+    # --- Build portal Lentium ---
+    log_info "Construyendo imagen portal Lentium..."
+    [ -f "$BACKEND_LENTIUM_DIR/Dockerfile" ] || die "Dockerfile Lentium no encontrado: $BACKEND_LENTIUM_DIR/Dockerfile"
+    podman build \
+        --runtime=runc \
+        --network=host \
+        -t "$IMAGE_LENTIUM" \
+        "$BACKEND_LENTIUM_DIR" \
+        || die "Falló el build de $IMAGE_LENTIUM"
+    log_ok "Imagen $IMAGE_LENTIUM construida"
+
+    log_info "Importando $IMAGE_LENTIUM en containerd..."
+    podman save "$IMAGE_LENTIUM" | k3s ctr images import - \
+        || die "Falló la importación de $IMAGE_LENTIUM en containerd"
+    k3s ctr images ls 2>/dev/null | grep -q "$K3S_IMAGE_LENTIUM" \
+        || die "La imagen $K3S_IMAGE_LENTIUM no aparece en containerd"
+    log_ok "Imagen $K3S_IMAGE_LENTIUM disponible en containerd"
 else
     log_info "Skipping build (--no-build)"
 fi
@@ -149,15 +175,19 @@ if [ "$DO_APPLY" -eq 1 ]; then
     declare -A MANIFESTS_DESC
     MANIFESTS_ORDER=(
         "captive-portal-configmap.yaml"
+        "captive-portal-lentium-configmap.yaml"
         "captive-portal-svc.yaml"
         "captive-portal-deployment.yaml"
+        "captive-portal-lentium-deployment.yaml"
         "captive-portal-ingress.yaml"
         "traefik-helmchartconfig.yaml"
     )
     MANIFESTS_DESC=(
-        ["captive-portal-configmap.yaml"]="ConfigMap nginx (HTML + nginx.conf)"
-        ["captive-portal-svc.yaml"]="Service ClusterIP (80 + 8080)"
-        ["captive-portal-deployment.yaml"]="Deployment nginx+backend sidecar"
+        ["captive-portal-configmap.yaml"]="ConfigMap nginx portal clásico"
+        ["captive-portal-lentium-configmap.yaml"]="ConfigMap nginx portal Lentium"
+        ["captive-portal-svc.yaml"]="Service ClusterIP (selector portal-variant)"
+        ["captive-portal-deployment.yaml"]="Deployment portal clásico (respaldo, réplicas=0)"
+        ["captive-portal-lentium-deployment.yaml"]="Deployment portal Lentium (principal, réplicas=1)"
         ["captive-portal-ingress.yaml"]="Ingress Traefik → puerto 80"
         ["traefik-helmchartconfig.yaml"]="Traefik HelmChartConfig (forwardedHeaders)"
     )
@@ -195,8 +225,15 @@ if [ "$DO_APPLY" -eq 1 ]; then
 
     if [ "$NEED_RESTART" -eq 1 ]; then
         log_warn "Rollout restart necesario — motivo: $RESTART_REASON"
-        $KUBECTL rollout restart deployment/captive-portal -n default
-        log_ok "Rollout restart lanzado"
+        # Solo reiniciar el que tenga réplicas > 0 (el activo)
+        ACTIVE_VARIANT=$($KUBECTL get svc captive-portal -n default \
+            -o jsonpath='{.spec.selector.portal-variant}' 2>/dev/null || echo "lentium")
+        if [[ "$ACTIVE_VARIANT" == "lentium" ]]; then
+            $KUBECTL rollout restart deployment/captive-portal-lentium -n default
+        else
+            $KUBECTL rollout restart deployment/captive-portal -n default
+        fi
+        log_ok "Rollout restart lanzado (variante activa: $ACTIVE_VARIANT)"
     else
         log_info "Sin cambios relevantes — no se requiere rollout restart"
     fi
@@ -207,7 +244,10 @@ if [ "$DO_APPLY" -eq 1 ]; then
     log_step "Esperando que el pod esté listo"
 
     log_info "Rollout status (max 120s)..."
-    $KUBECTL rollout status deployment/captive-portal \
+    ACTIVE_VARIANT=$($KUBECTL get svc captive-portal -n default \
+        -o jsonpath='{.spec.selector.portal-variant}' 2>/dev/null || echo "lentium")
+    ACTIVE_DEPLOY=$( [[ "$ACTIVE_VARIANT" == "lentium" ]] && echo "captive-portal-lentium" || echo "captive-portal" )
+    $KUBECTL rollout status deployment/"$ACTIVE_DEPLOY" \
         -n default --timeout=120s \
         || {
             log_error "El deployment no completó el rollout. Estado actual:"
@@ -282,7 +322,9 @@ printf '  Portal:   %s/portal\n' "$PORTAL_URL"
 printf '  Health:   %s/health  (redirige al portal — normal)\n' "$PORTAL_URL"
 printf '\n'
 printf '  Comandos útiles:\n'
-printf '    Logs nginx:   kubectl logs %s -c portal --tail=50\n' "${POD:-(pod)}"
-printf '    Logs backend: kubectl logs %s -c backend --tail=50\n' "${POD:-(pod)}"
-printf '    Status:       bash scripts/raspi-k8s-status.sh\n'
-printf '    Cleanup:      bash scripts/raspi-deploy.sh --cleanup\n'
+printf '    Logs nginx:      kubectl logs %s -c portal --tail=50\n' "${POD:-(pod)}"
+printf '    Logs backend:    kubectl logs %s -c backend --tail=50\n' "${POD:-(pod)}"
+printf '    Portal activo:   bash scripts/portal-switch.sh status\n'
+printf '    Cambiar portal:  bash scripts/portal-switch.sh [lentium|clasico]\n'
+printf '    Status k8s:      bash scripts/raspi-k8s-status.sh\n'
+printf '    Cleanup legacy:  bash scripts/raspi-deploy.sh --cleanup\n'

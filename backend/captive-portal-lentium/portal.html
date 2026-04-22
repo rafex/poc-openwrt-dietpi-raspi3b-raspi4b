@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Lentium Móvil · Registro de Acceso</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Roboto, system-ui, sans-serif; }
+    body {
+      background: #0a1a2b;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .phone-mock {
+      max-width: 390px;
+      width: 100%;
+      background: #000;
+      border-radius: 48px;
+      padding: 16px 8px 24px;
+      box-shadow: 0 30px 60px rgba(0,0,0,0.7), 0 0 0 8px #1e2f3f;
+    }
+    .screen {
+      background: #f2f6fc;
+      border-radius: 36px;
+      overflow-y: auto;
+      max-height: 820px;
+      min-height: 700px;
+      box-shadow: inset 0 0 0 1px rgba(0,0,0,0.05);
+    }
+    .top-bar {
+      background: #001e3c;
+      padding: 16px 20px 12px;
+      color: white;
+    }
+    .logo-area {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .logo-area h1 { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.5px; color: white; }
+    .logo-area .movil-tag { font-size: 1rem; font-weight: 400; color: #7ab7ef; margin-left: 4px; }
+    .velocidad-badge {
+      background: #ff9800;
+      color: #001e3c;
+      display: inline-block;
+      padding: 5px 16px;
+      border-radius: 40px;
+      font-weight: 700;
+      font-size: 0.9rem;
+      margin-top: 4px;
+      box-shadow: 0 2px 0 #b76000;
+    }
+    .main-content { padding: 20px 18px 30px; }
+    .section-title {
+      font-size: 1.2rem;
+      font-weight: 700;
+      color: #001e3c;
+      margin: 18px 0 12px;
+      border-left: 5px solid #0066cc;
+      padding-left: 14px;
+    }
+    .section-title:first-of-type { margin-top: 0; }
+    .case-tabs { display: flex; gap: 10px; margin-bottom: 20px; }
+    .tab-btn {
+      flex: 1;
+      background: white;
+      border: 2px solid #cbd6e6;
+      border-radius: 30px;
+      padding: 14px 8px;
+      font-weight: 700;
+      font-size: 1rem;
+      color: #1e3a5f;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.15s;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.02);
+    }
+    .tab-btn.active {
+      background: #004c97;
+      border-color: #004c97;
+      color: white;
+      box-shadow: 0 8px 12px rgba(0,76,151,0.2);
+    }
+
+    /* ── Formulario compartido ── */
+    .form-card {
+      background: white;
+      border-radius: 24px;
+      padding: 20px 18px;
+      box-shadow: 0 8px 16px rgba(0,0,0,0.04);
+      border: 1px solid #d9e4f0;
+    }
+    .form-card label {
+      display: block;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: #3c5a7a;
+      margin-bottom: 4px;
+      margin-top: 14px;
+    }
+    .form-card label:first-of-type { margin-top: 0; }
+    .form-card input[type="text"],
+    .form-card input[type="tel"],
+    .form-card input[type="password"],
+    .form-card input[type="url"] {
+      width: 100%;
+      padding: 11px 14px;
+      border: 1.5px solid #c2d4ea;
+      border-radius: 12px;
+      font-size: 0.97rem;
+      color: #0b2b4a;
+      background: #f8fbff;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .form-card input:focus { border-color: #004c97; background: #fff; }
+    .form-card input.error { border-color: #e53935; }
+
+    /* Autocomplete OSM */
+    .autocomplete-wrap { position: relative; }
+    #addressSuggestions {
+      position: absolute;
+      top: 100%;
+      left: 0; right: 0;
+      background: white;
+      border: 1.5px solid #c2d4ea;
+      border-top: none;
+      border-radius: 0 0 12px 12px;
+      z-index: 100;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .suggestion-item {
+      padding: 10px 14px;
+      font-size: 0.88rem;
+      color: #0b2b4a;
+      cursor: pointer;
+      border-bottom: 1px solid #eaf0f8;
+    }
+    .suggestion-item:hover { background: #e6f0ff; }
+
+    /* Social media rows */
+    .social-row { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+    .social-row select {
+      width: 140px;
+      flex-shrink: 0;
+      padding: 10px 8px;
+      border: 1.5px solid #c2d4ea;
+      border-radius: 12px;
+      font-size: 0.88rem;
+      color: #0b2b4a;
+      background: #f8fbff;
+      outline: none;
+    }
+    .social-row input {
+      flex: 1;
+      padding: 10px 12px;
+      border: 1.5px solid #c2d4ea;
+      border-radius: 12px;
+      font-size: 0.88rem;
+      color: #0b2b4a;
+      background: #f8fbff;
+      outline: none;
+    }
+    .social-row input:focus, .social-row select:focus { border-color: #004c97; }
+    .add-social-btn {
+      margin-top: 8px;
+      display: inline-block;
+      font-size: 0.82rem;
+      color: #004c97;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+
+    /* Submit button */
+    .submit-btn {
+      width: 100%;
+      margin-top: 20px;
+      padding: 15px;
+      background: #004c97;
+      color: white;
+      font-weight: 800;
+      font-size: 1.05rem;
+      border: none;
+      border-radius: 50px;
+      cursor: pointer;
+      box-shadow: 0 6px 0 #002d5c;
+      transition: transform 0.1s, box-shadow 0.1s;
+    }
+    .submit-btn:active { transform: translateY(3px); box-shadow: 0 3px 0 #002d5c; }
+    .submit-btn:disabled { background: #7da8d4; box-shadow: none; cursor: not-allowed; }
+
+    /* Mensajes de estado */
+    .msg-box {
+      margin-top: 14px;
+      padding: 12px 16px;
+      border-radius: 14px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      display: none;
+    }
+    .msg-box.ok   { background: #e1f5e1; color: #1b5e20; border: 1px solid #a5d6a7; }
+    .msg-box.fail { background: #fdecea; color: #b71c1c; border: 1px solid #ef9a9a; }
+
+    /* Badges de marca */
+    .brand-badge {
+      background: #003c71;
+      color: white;
+      padding: 4px 12px;
+      border-radius: 30px;
+      font-weight: 600;
+      font-size: 0.8rem;
+      display: inline-block;
+      margin-right: 4px;
+    }
+
+    .velocidad-footer {
+      margin-top: 28px;
+      background: linear-gradient(145deg, #002b4a, #003d66);
+      border-radius: 28px;
+      padding: 20px 18px;
+      color: white;
+    }
+    .footer-title { font-size: 1.4rem; font-weight: 700; margin-bottom: 6px; }
+    .footer-sub { opacity: 0.9; margin-bottom: 16px; }
+    .paquete-btn {
+      background: #ffc107;
+      color: #001e3c;
+      font-weight: 800;
+      padding: 14px 18px;
+      border-radius: 60px;
+      text-align: center;
+      font-size: 1.05rem;
+      box-shadow: 0 4px 0 #b57c00;
+    }
+    .home-bar {
+      width: 130px; height: 5px;
+      background: #bbb; border-radius: 40px;
+      margin: 12px auto 0;
+    }
+
+    /* Nota de términos */
+    .terms-note { margin-top: 14px; font-size: 0.78rem; color: #6b8ba8; text-align: center; line-height: 1.5; }
+
+    /* Password strength */
+    .pwd-hint { font-size: 0.75rem; color: #8aabb0; margin-top: 4px; }
+  </style>
+</head>
+<body>
+<div class="phone-mock">
+  <div class="screen">
+
+    <div class="top-bar">
+      <div class="logo-area">
+        <h1>lentium</h1>
+        <span class="movil-tag">móvil</span>
+      </div>
+      <div class="velocidad-badge">🐢 Exceso de Latencia</div>
+    </div>
+
+    <div class="main-content" id="appContainer">
+
+      <div class="case-tabs">
+        <div class="tab-btn active" id="tabCliente">📱 Soy Cliente</div>
+        <div class="tab-btn" id="tabInvitado">👤 Soy Invitado</div>
+      </div>
+
+      <div id="dynamicContent"></div>
+
+      <div class="velocidad-footer">
+        <div class="footer-title">Súbete a una nueva… espera</div>
+        <div class="footer-sub">Para que tú y toda tu familia puedan buffear sin limitaciones.</div>
+        <div class="paquete-btn">Acelera tu Paquete Lentium 389 → (próximamente) 🐌</div>
+      </div>
+    </div>
+
+    <div class="home-bar"></div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const dynamic   = document.getElementById('dynamicContent');
+  const tabC      = document.getElementById('tabCliente');
+  const tabI      = document.getElementById('tabInvitado');
+
+  // ── Utilidades ────────────────────────────────────────────────────────────
+  function showMsg(box, type, text) {
+    box.className = 'msg-box ' + type;
+    box.textContent = text;
+    box.style.display = 'block';
+  }
+
+  function setBtn(btn, disabled, text) {
+    btn.disabled = disabled;
+    btn.textContent = text;
+  }
+
+  function validate(fields) {
+    let ok = true;
+    fields.forEach(({ el, test, msg }) => {
+      if (!test(el.value.trim())) {
+        el.classList.add('error');
+        ok = false;
+      } else {
+        el.classList.remove('error');
+      }
+    });
+    return ok;
+  }
+
+  // ── OpenStreetMap Nominatim autocomplete ──────────────────────────────────
+  let nominatimTimer = null;
+  function initNominatim(inputEl, suggestionsEl, hiddenEl) {
+    inputEl.addEventListener('input', () => {
+      clearTimeout(nominatimTimer);
+      const q = inputEl.value.trim();
+      suggestionsEl.innerHTML = '';
+      if (q.length < 4) return;
+      nominatimTimer = setTimeout(() => {
+        const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=5&addressdetails=1&q=' + encodeURIComponent(q);
+        fetch(url, { headers: { 'Accept-Language': 'es' } })
+          .then(r => r.json())
+          .then(data => {
+            suggestionsEl.innerHTML = '';
+            data.forEach(item => {
+              const div = document.createElement('div');
+              div.className = 'suggestion-item';
+              div.textContent = item.display_name;
+              div.addEventListener('click', () => {
+                inputEl.value = item.display_name;
+                if (hiddenEl) hiddenEl.value = JSON.stringify({ lat: item.lat, lon: item.lon, display: item.display_name });
+                suggestionsEl.innerHTML = '';
+              });
+              suggestionsEl.appendChild(div);
+            });
+          })
+          .catch(() => {});
+      }, 400);
+    });
+    // cerrar al hacer click fuera
+    document.addEventListener('click', e => {
+      if (!inputEl.contains(e.target) && !suggestionsEl.contains(e.target))
+        suggestionsEl.innerHTML = '';
+    });
+  }
+
+  // ── Social media manager ──────────────────────────────────────────────────
+  const REDES = ['Instagram','Facebook','X (Twitter)','TikTok','LinkedIn','YouTube','Snapchat','Threads','Otra'];
+
+  function makeSocialRow(container, removable) {
+    const row = document.createElement('div');
+    row.className = 'social-row';
+
+    const sel = document.createElement('select');
+    sel.className = 'social-sel';
+    REDES.forEach(r => { const o = document.createElement('option'); o.value = r; o.textContent = r; sel.appendChild(o); });
+
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.className = 'social-inp';
+    inp.placeholder = '@usuario';
+
+    row.appendChild(sel);
+    row.appendChild(inp);
+
+    if (removable) {
+      const rm = document.createElement('span');
+      rm.textContent = '✕';
+      rm.style.cssText = 'cursor:pointer;color:#e53935;font-weight:700;font-size:1.1rem;padding:0 4px';
+      rm.addEventListener('click', () => container.removeChild(row));
+      row.appendChild(rm);
+    }
+    container.appendChild(row);
+  }
+
+  function getSocials(container) {
+    const result = [];
+    container.querySelectorAll('.social-row').forEach(row => {
+      const red  = row.querySelector('.social-sel').value;
+      const user = row.querySelector('.social-inp').value.trim();
+      if (user) result.push({ red, usuario: user });
+    });
+    return result;
+  }
+
+  // ── POST helper ───────────────────────────────────────────────────────────
+  function postJSON(path, data) {
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    }).then(r => r.json());
+  }
+
+  // ── VISTA: Cliente ────────────────────────────────────────────────────────
+  function renderCliente() {
+    dynamic.innerHTML = `
+      <div class="section-title">Acceso para Clientes Lentium</div>
+      <div class="form-card">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+          <span class="brand-badge">Tortugatel</span>
+          <span class="brand-badge" style="background:#1e5b9e;">Buffercel</span>
+        </div>
+        <label for="clientPhone">Número de teléfono celular</label>
+        <input id="clientPhone" type="tel" placeholder="55 1234 5678" maxlength="20">
+
+        <label for="clientPwd">Contraseña de tu cuenta Lentium</label>
+        <input id="clientPwd" type="password" placeholder="••••••••">
+        <div class="pwd-hint">Mínimo 8 caracteres</div>
+
+        <button class="submit-btn" id="btnCliente">Conectar ahora 🐢</button>
+        <div class="msg-box" id="msgCliente"></div>
+      </div>
+      <div class="terms-note">
+        Al conectarte aceptas los Términos de uso de Lentium.<br>
+        Tu sesión expirará automáticamente tras 2 horas de inactividad.
+      </div>
+    `;
+
+    document.getElementById('btnCliente').addEventListener('click', submitCliente);
+  }
+
+  function submitCliente() {
+    const phone = document.getElementById('clientPhone');
+    const pwd   = document.getElementById('clientPwd');
+    const btn   = document.getElementById('btnCliente');
+    const msg   = document.getElementById('msgCliente');
+
+    const ok = validate([
+      { el: phone, test: v => /^[\d\s\-\+]{7,20}$/.test(v), msg: '' },
+      { el: pwd,   test: v => v.length >= 8,                 msg: '' },
+    ]);
+    if (!ok) { showMsg(msg, 'fail', 'Verifica los campos marcados en rojo.'); return; }
+
+    setBtn(btn, true, '⏳ Verificando...');
+    postJSON('/api/register/client', {
+      telefono: phone.value.trim(),
+      password: pwd.value,
+    })
+    .then(data => {
+      if (data.ok) {
+        showMsg(msg, 'ok', '✔ ¡Conectado! Ya puedes navegar... despacito 🐢');
+        setBtn(btn, true, '✔ Conectado');
+      } else {
+        showMsg(msg, 'fail', data.error || 'Error al autorizar. Intenta de nuevo.');
+        setBtn(btn, false, 'Conectar ahora 🐢');
+      }
+    })
+    .catch(() => {
+      showMsg(msg, 'fail', 'Sin respuesta del servidor. Intenta de nuevo.');
+      setBtn(btn, false, 'Conectar ahora 🐢');
+    });
+  }
+
+  // ── VISTA: Invitado ───────────────────────────────────────────────────────
+  function renderInvitado() {
+    dynamic.innerHTML = `
+      <div class="section-title">Registro de Invitado</div>
+      <div class="form-card">
+        <div style="font-size:0.85rem;color:#3f6180;margin-bottom:14px;">
+          👋 Completa el registro para obtener acceso como invitado.<br>
+          Tus datos se usan únicamente para identificarte en la red.
+        </div>
+
+        <label for="gNombre">Nombre(s)</label>
+        <input id="gNombre" type="text" placeholder="María">
+
+        <label for="gApPat">Apellido paterno</label>
+        <input id="gApPat" type="text" placeholder="García">
+
+        <label for="gApMat">Apellido materno</label>
+        <input id="gApMat" type="text" placeholder="López">
+
+        <label for="gPhone">Número de teléfono celular</label>
+        <input id="gPhone" type="tel" placeholder="55 1234 5678" maxlength="20">
+
+        <label for="gAddress">Dirección (busca en el mapa)</label>
+        <div class="autocomplete-wrap">
+          <input id="gAddress" type="text" placeholder="Calle, colonia, ciudad…" autocomplete="off">
+          <div id="addressSuggestions"></div>
+          <input type="hidden" id="gAddressData">
+        </div>
+
+        <label for="gPwd">Contraseña</label>
+        <input id="gPwd" type="password" placeholder="••••••••">
+        <div class="pwd-hint">Mínimo 8 caracteres</div>
+
+        <label>Usuario de redes sociales <span style="color:#e53935">*</span></label>
+        <div class="pwd-hint" style="margin-bottom:6px;">Al menos una cuenta requerida</div>
+        <div id="socialContainer"></div>
+        <span class="add-social-btn" id="addSocialBtn">+ Añadir otra red social</span>
+
+        <button class="submit-btn" id="btnInvitado">Registrarme y Conectar 🌐</button>
+        <div class="msg-box" id="msgInvitado"></div>
+      </div>
+      <div class="terms-note">
+        Al registrarte aceptas que Lentium guarde tus datos durante tu sesión.<br>
+        No compartimos tu información con… bueno, nadie que importe.
+      </div>
+    `;
+
+    const socialContainer = document.getElementById('socialContainer');
+    makeSocialRow(socialContainer, false);
+    document.getElementById('addSocialBtn').addEventListener('click', () => {
+      makeSocialRow(socialContainer, true);
+    });
+
+    initNominatim(
+      document.getElementById('gAddress'),
+      document.getElementById('addressSuggestions'),
+      document.getElementById('gAddressData')
+    );
+
+    document.getElementById('btnInvitado').addEventListener('click', submitInvitado);
+  }
+
+  function submitInvitado() {
+    const nombre  = document.getElementById('gNombre');
+    const apPat   = document.getElementById('gApPat');
+    const apMat   = document.getElementById('gApMat');
+    const phone   = document.getElementById('gPhone');
+    const address = document.getElementById('gAddress');
+    const pwd     = document.getElementById('gPwd');
+    const btn     = document.getElementById('btnInvitado');
+    const msg     = document.getElementById('msgInvitado');
+
+    const socials = getSocials(document.getElementById('socialContainer'));
+
+    const ok = validate([
+      { el: nombre,  test: v => v.length >= 2 },
+      { el: apPat,   test: v => v.length >= 2 },
+      { el: apMat,   test: v => v.length >= 2 },
+      { el: phone,   test: v => /^[\d\s\-\+]{7,20}$/.test(v) },
+      { el: address, test: v => v.length >= 5 },
+      { el: pwd,     test: v => v.length >= 8 },
+    ]);
+
+    if (!ok) { showMsg(msg, 'fail', 'Verifica los campos marcados en rojo.'); return; }
+    if (socials.length === 0) {
+      showMsg(msg, 'fail', 'Agrega al menos un usuario de red social.');
+      return;
+    }
+
+    let addrData = null;
+    try { addrData = JSON.parse(document.getElementById('gAddressData').value || 'null'); } catch(e) {}
+
+    setBtn(btn, true, '⏳ Registrando...');
+    postJSON('/api/register/guest', {
+      nombre:          nombre.value.trim(),
+      apellido_paterno: apPat.value.trim(),
+      apellido_materno: apMat.value.trim(),
+      telefono:         phone.value.trim(),
+      direccion_texto:  address.value.trim(),
+      direccion_geo:    addrData,
+      password:         pwd.value,
+      redes_sociales:   socials,
+    })
+    .then(data => {
+      if (data.ok) {
+        showMsg(msg, 'ok', '✔ Registro exitoso. ¡Bienvenido a la red más lenta del universo conocido! 🐌');
+        setBtn(btn, true, '✔ Conectado');
+      } else {
+        showMsg(msg, 'fail', data.error || 'Error al registrar. Intenta de nuevo.');
+        setBtn(btn, false, 'Registrarme y Conectar 🌐');
+      }
+    })
+    .catch(() => {
+      showMsg(msg, 'fail', 'Sin respuesta del servidor. Intenta de nuevo.');
+      setBtn(btn, false, 'Registrarme y Conectar 🌐');
+    });
+  }
+
+  // ── Tabs ──────────────────────────────────────────────────────────────────
+  tabC.addEventListener('click', () => {
+    tabC.classList.add('active'); tabI.classList.remove('active');
+    renderCliente();
+  });
+  tabI.addEventListener('click', () => {
+    tabI.classList.add('active'); tabC.classList.remove('active');
+    renderInvitado();
+  });
+
+  [tabC, tabI].forEach(btn => {
+    btn.addEventListener('mouseenter', e => {
+      if (!e.target.classList.contains('active')) e.target.style.background = '#e9f0fa';
+    });
+    btn.addEventListener('mouseleave', e => {
+      if (!e.target.classList.contains('active')) e.target.style.background = 'white';
+    });
+  });
+
+  renderCliente();
+})();
+</script>
+</body>
+</html>

@@ -3,9 +3,14 @@ kind: Service
 metadata:
   name: captive-portal
   namespace: default
+  annotations:
+    # El script portal-switch.sh modifica el selector portal-variant en runtime.
+    # Valor inicial: lentium (portal principal).
+    active-portal: lentium
 spec:
   selector:
     app: captive-portal
+    portal-variant: lentium
   ports:
     - name: http
       port: 80

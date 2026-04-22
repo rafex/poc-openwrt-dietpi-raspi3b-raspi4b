@@ -3,15 +3,20 @@ kind: Deployment
 metadata:
   name: captive-portal
   namespace: default
+  annotations:
+    portal-variant: clasico
+    portal-description: "Portal clásico RafexPi (demo educativa)"
 spec:
-  replicas: 1
+  replicas: 0
   selector:
     matchLabels:
       app: captive-portal
+      portal-variant: clasico
   template:
     metadata:
       labels:
         app: captive-portal
+        portal-variant: clasico
     spec:
       containers:
         # --- Contenedor 1: nginx (portal HTML + proxy) ---
