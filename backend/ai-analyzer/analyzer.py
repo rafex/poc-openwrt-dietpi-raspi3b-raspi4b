@@ -53,12 +53,14 @@ LOG_LEVEL     = os.environ.get("LOG_LEVEL",     "INFO")
 ROUTER_IP     = os.environ.get("ROUTER_IP", "192.168.1.1")
 ROUTER_USER   = os.environ.get("ROUTER_USER", "root")
 SSH_KEY       = os.environ.get("SSH_KEY", "/opt/keys/captive-portal")
+PORTAL_IP     = os.environ.get("PORTAL_IP", "192.168.1.167")
 
 SOCIAL_BLOCK_ENABLED = os.environ.get("SOCIAL_BLOCK_ENABLED", "true").lower() == "true"
 SOCIAL_POLICY_START_HOUR = int(os.environ.get("SOCIAL_POLICY_START_HOUR", "9"))
 SOCIAL_POLICY_END_HOUR = int(os.environ.get("SOCIAL_POLICY_END_HOUR", "17"))
 SOCIAL_POLICY_TZ = os.environ.get("SOCIAL_POLICY_TZ", "America/Mexico_City")
 SOCIAL_MIN_HITS = int(os.environ.get("SOCIAL_MIN_HITS", "3"))
+PORN_BLOCK_ENABLED = os.environ.get("PORN_BLOCK_ENABLED", "true").lower() == "true"
 
 SOCIAL_NETWORK_DOMAINS = {
     "facebook": ["facebook.com", "fbcdn.net", "messenger.com", "whatsapp.com", "whatsapp.net"],
@@ -71,6 +73,11 @@ SOCIAL_NETWORK_DOMAINS = {
 }
 SOCIAL_DOMAIN_SET = {
     d for doms in SOCIAL_NETWORK_DOMAINS.values() for d in doms
+}
+
+PORN_DOMAIN_ROOTS = {
+    "pornhub.com", "xvideos.com", "xnxx.com", "xhamster.com", "redtube.com",
+    "youporn.com", "tube8.com", "spankbang.com", "beeg.com", "brazzers.com",
 }
 
 RULE_ANALYSIS_KEY = "analysis_prompt_template"
@@ -124,7 +131,7 @@ stats = {
 }
 
 router_mcp = None
-policy_state = {"social_block_active": False}
+policy_state = {"social_block_active": False, "porn_block_enabled": PORN_BLOCK_ENABLED}
 
 
 # ─── SQLite ───────────────────────────────────────────────────────────────────
@@ -554,9 +561,17 @@ def _social_bucket_for_domain(domain: str) -> str | None:
     return None
 
 
-def detect_social_traffic(summary: dict) -> dict:
+def _domain_matches_roots(domain: str, roots: set[str]) -> bool:
+    d = domain.lower().strip(".")
+    for root in roots:
+        if d == root or d.endswith("." + root):
+            return True
+    return False
+
+
+def _combined_domain_counts(summary: dict) -> dict:
     combined_counts = {}
-    for source in ("dns_query_counts", "http_host_counts"):
+    for source in ("dns_query_counts", "http_host_counts", "tls_sni_counts"):
         source_map = summary.get(source) or {}
         if isinstance(source_map, dict):
             for domain, count in source_map.items():
@@ -568,13 +583,23 @@ def detect_social_traffic(summary: dict) -> dict:
                 except Exception:
                     n = 1
                 combined_counts[d] = combined_counts.get(d, 0) + max(1, n)
+    if combined_counts:
+        return combined_counts
 
     # Compatibilidad con batches viejos que solo traen listas únicas.
-    if not combined_counts:
-        for domain in (summary.get("dns_queries") or []) + (summary.get("http_hosts") or []):
-            d = str(domain).lower().strip()
-            if d:
-                combined_counts[d] = combined_counts.get(d, 0) + 1
+    for domain in (
+        (summary.get("dns_queries") or [])
+        + (summary.get("http_hosts") or [])
+        + (summary.get("tls_sni_hosts") or [])
+    ):
+        d = str(domain).lower().strip()
+        if d:
+            combined_counts[d] = combined_counts.get(d, 0) + 1
+    return combined_counts
+
+
+def detect_social_traffic(summary: dict) -> dict:
+    combined_counts = _combined_domain_counts(summary)
 
     per_network = {}
     matched_domains = {}
@@ -591,6 +616,56 @@ def detect_social_traffic(summary: dict) -> dict:
         "total_hits": total_hits,
         "per_network": per_network,
         "matched_domains": matched_domains,
+    }
+
+
+def detect_porn_traffic(summary: dict) -> dict:
+    combined_counts = _combined_domain_counts(summary)
+    matched_domains = {}
+    total_hits = 0
+    for domain, count in combined_counts.items():
+        if not _domain_matches_roots(domain, PORN_DOMAIN_ROOTS):
+            continue
+        matched_domains[domain] = matched_domains.get(domain, 0) + count
+        total_hits += count
+
+    offenders = {}
+    client_domain_counts = summary.get("client_domain_counts") or {}
+    client_domain_dsts = summary.get("client_domain_destinations") or {}
+    if isinstance(client_domain_counts, dict):
+        for client_ip, dom_map in client_domain_counts.items():
+            if not isinstance(dom_map, dict):
+                continue
+            for domain, count in dom_map.items():
+                d = str(domain).lower().strip()
+                if not _domain_matches_roots(d, PORN_DOMAIN_ROOTS):
+                    continue
+                try:
+                    n = int(count)
+                except Exception:
+                    n = 1
+                info = offenders.setdefault(client_ip, {"hits": 0, "domains": {}, "dest_ips": set()})
+                info["hits"] += max(1, n)
+                info["domains"][d] = info["domains"].get(d, 0) + max(1, n)
+                dsts = (((client_domain_dsts.get(client_ip) or {}).get(domain)) or
+                        ((client_domain_dsts.get(client_ip) or {}).get(d)) or [])
+                for ip in dsts:
+                    ip = str(ip).strip()
+                    if re.match(r"^\d{1,3}(?:\.\d{1,3}){3}$", ip):
+                        info["dest_ips"].add(ip)
+
+    offenders_out = {}
+    for ip, info in offenders.items():
+        offenders_out[ip] = {
+            "hits": info["hits"],
+            "domains": dict(sorted(info["domains"].items(), key=lambda x: -x[1])[:20]),
+            "dest_ips": sorted(info["dest_ips"]),
+        }
+
+    return {
+        "total_hits": total_hits,
+        "matched_domains": matched_domains,
+        "offenders": offenders_out,
     }
 
 
@@ -677,17 +752,17 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
     })
 
     active = policy_state.get("social_block_active", False)
-    if llm_action == "block" and not active:
+    if llm_action == "block":
         ok, msg = router_mcp.apply_social_block(SOCIAL_DOMAIN_SET)
-        result["action"] = "block_on"
+        result["action"] = "block_refresh" if active else "block_on"
         result["reason"] = f"hits={hits} in_window={in_window} llm={llm_reason}"
         result["router_ok"] = ok
         result["router_msg"] = msg
         if ok:
             policy_state["social_block_active"] = True
-            db_store_policy_action("social_block_on", result["reason"], result)
+            db_store_policy_action("social_block_on" if not active else "social_block_refresh", result["reason"], result)
         else:
-            db_store_policy_action("social_block_on_error", result["reason"], result)
+            db_store_policy_action("social_block_on_error" if not active else "social_block_refresh_error", result["reason"], result)
         return result
 
     if llm_action == "unblock" and active:
@@ -705,6 +780,75 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
 
     result["action"] = "noop"
     result["reason"] = f"active={active} hits={hits} in_window={in_window}"
+    return result
+
+
+def evaluate_and_apply_porn_policy(batch_id: int, summary: dict) -> dict:
+    result = {
+        "enabled": PORN_BLOCK_ENABLED,
+        "action": "noop",
+        "reason": "",
+        "porn_hits": 0,
+        "domains": {},
+        "offenders": {},
+        "applied": [],
+    }
+    if not PORN_BLOCK_ENABLED:
+        result["reason"] = "disabled"
+        return result
+    if router_mcp is None:
+        result["reason"] = "router_mcp_unavailable"
+        return result
+
+    porn = detect_porn_traffic(summary)
+    result["porn_hits"] = porn["total_hits"]
+    result["domains"] = porn["matched_domains"]
+    result["offenders"] = porn["offenders"]
+
+    if porn["total_hits"] <= 0:
+        result["reason"] = "no_porn_detected"
+        return result
+
+    global_ips = router_mcp.resolve_domains_to_ips(porn["matched_domains"].keys())
+    for client_ip, info in porn["offenders"].items():
+        ip_candidates = set(global_ips)
+        for ip in info.get("dest_ips", []):
+            ip_candidates.add(ip)
+        ip_candidates = sorted(ip_candidates)
+
+        block_ok, block_msg = router_mcp.block_porn_ips(ip_candidates) if ip_candidates else (False, "no_dest_ips")
+        kick_ok, kick_msg = router_mcp.kick_client_from_allowed(client_ip)
+        warn_ok, warn_msg = router_mcp.mark_client_warning(client_ip)
+        action = {
+            "client_ip": client_ip,
+            "dest_ips": ip_candidates,
+            "block_ok": block_ok,
+            "block_msg": block_msg,
+            "kick_ok": kick_ok,
+            "kick_msg": kick_msg,
+            "warn_ok": warn_ok,
+            "warn_msg": warn_msg,
+        }
+        result["applied"].append(action)
+        db_store_policy_action("porn_enforcement", f"client={client_ip}", action)
+
+    if not result["applied"] and global_ips:
+        block_ok, block_msg = router_mcp.block_porn_ips(global_ips)
+        action = {
+            "client_ip": None,
+            "dest_ips": global_ips,
+            "block_ok": block_ok,
+            "block_msg": block_msg,
+            "kick_ok": False,
+            "kick_msg": "no_offender_client_detected",
+            "warn_ok": False,
+            "warn_msg": "no_offender_client_detected",
+        }
+        result["applied"].append(action)
+        db_store_policy_action("porn_ip_block_only", "no_offender_client_detected", action)
+
+    result["action"] = "enforced" if result["applied"] else "detected_only"
+    result["reason"] = f"hits={porn['total_hits']} offenders={len(porn['offenders'])}"
     return result
 
 
@@ -731,7 +875,8 @@ def analyze_and_store(batch_id: int, summary: dict):
         risk = "MEDIO"
     if summary.get("suspicious"):
         risk = "MEDIO" if risk == "BAJO" else risk
-    policy_result = evaluate_and_apply_social_policy(batch_id, summary)
+    policy_social = evaluate_and_apply_social_policy(batch_id, summary)
+    policy_porn = evaluate_and_apply_porn_policy(batch_id, summary)
 
     result = {
         "id":               stats["analyses_ok"] + 1,
@@ -747,7 +892,10 @@ def analyze_and_store(batch_id: int, summary: dict):
         "suspicious":       summary.get("suspicious", []),
         "lan_devices":      summary.get("lan_devices", []),
         "dns_queries":      summary.get("dns_queries", [])[:20],
-        "policy":           policy_result,
+        "policy": {
+            "social": policy_social,
+            "porn": policy_porn,
+        },
     }
 
     db_save_analysis(batch_id, result)
@@ -756,7 +904,9 @@ def analyze_and_store(batch_id: int, summary: dict):
     _broadcast_sse(result)
     log.info(
         "Análisis batch #%d completado en %ss | riesgo=%s | policy=%s | queue=%d",
-        batch_id, elapsed, risk, policy_result.get("action"), work_queue.qsize(),
+        batch_id, elapsed, risk,
+        f"social:{policy_social.get('action')} porn:{policy_porn.get('action')}",
+        work_queue.qsize(),
     )
 
 
@@ -930,6 +1080,7 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 "policy": {
                     "social_block_enabled": SOCIAL_BLOCK_ENABLED,
                     "social_block_active": policy_state.get("social_block_active", False),
+                    "porn_block_enabled": PORN_BLOCK_ENABLED,
                     "window": {
                         "start_hour": SOCIAL_POLICY_START_HOUR,
                         "end_hour": SOCIAL_POLICY_END_HOUR,
@@ -956,6 +1107,7 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 "state": policy_state,
                 "config": {
                     "enabled": SOCIAL_BLOCK_ENABLED,
+                    "porn_enabled": PORN_BLOCK_ENABLED,
                     "start_hour": SOCIAL_POLICY_START_HOUR,
                     "end_hour": SOCIAL_POLICY_END_HOUR,
                     "timezone": SOCIAL_POLICY_TZ,
@@ -1076,26 +1228,30 @@ def main():
         SOCIAL_POLICY_TZ,
         SOCIAL_MIN_HITS,
     )
+    log.info("  Porn policy  : enabled=%s", PORN_BLOCK_ENABLED)
     log.info("=" * 60)
 
     init_db()
 
-    if SOCIAL_BLOCK_ENABLED:
-        try:
-            router_mcp = RouterMCP(
-                router_ip=ROUTER_IP,
-                router_user=ROUTER_USER,
-                ssh_key=SSH_KEY,
-                logger=log,
-            )
-            policy_state["social_block_active"] = router_mcp.is_social_block_active()
-            log.info(
-                "Router MCP listo | social_block_active=%s",
-                policy_state["social_block_active"],
-            )
-        except Exception as e:
-            log.warning("No se pudo iniciar Router MCP: %s", e)
-            router_mcp = None
+    try:
+        router_mcp = RouterMCP(
+            router_ip=ROUTER_IP,
+            router_user=ROUTER_USER,
+            ssh_key=SSH_KEY,
+            portal_ip=PORTAL_IP,
+            logger=log,
+        )
+        ok, msg = router_mcp.ensure_policy_objects()
+        if not ok:
+            log.warning("Router MCP: no se pudieron asegurar sets/rules de policy: %s", msg)
+        policy_state["social_block_active"] = router_mcp.is_social_block_active()
+        log.info(
+            "Router MCP listo | social_block_active=%s",
+            policy_state["social_block_active"],
+        )
+    except Exception as e:
+        log.warning("No se pudo iniciar Router MCP: %s", e)
+        router_mcp = None
 
     # Reencolar batches pending de reinicios anteriores
     conn   = db_connect()

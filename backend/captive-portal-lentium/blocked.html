@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sitio bloqueado por IA</title>
+  <style>
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #081420; color: #e8f3ff; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 22px; text-align: center; }
+    h1 { margin: 0 0 10px; font-size: 2rem; color: #ffd166; }
+    .sub { margin-bottom: 18px; opacity: .95; }
+    .box { background: #10243a; border: 1px solid #2b4f73; border-radius: 14px; padding: 16px; }
+    img { width: 100%; max-width: 980px; border-radius: 12px; border: 1px solid #365f88; background: #0a1e32; }
+    .hint { margin-top: 14px; color: #b7d6f5; font-size: .95rem; }
+    .cta { margin-top: 16px; display: inline-block; background: #1f6feb; color: #fff; text-decoration: none; padding: 10px 16px; border-radius: 10px; font-weight: 700; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Sitio bloqueado por IA</h1>
+    <div class="sub">La política inteligente de esta red bloqueó este destino.</div>
+    <div class="box">
+      <img id="art" alt="Bloqueado por IA">
+      <div class="hint">Si necesitas acceso legítimo, regresa al portal y autentícate de nuevo.</div>
+    </div>
+    <a class="cta" href="/portal">Volver al portal cautivo</a>
+  </div>
+  <script>
+    (function () {
+      const picks = [
+        "/blocked-art/art-01.svg","/blocked-art/art-02.svg","/blocked-art/art-03.svg",
+        "/blocked-art/art-04.svg","/blocked-art/art-05.svg","/blocked-art/art-06.svg",
+        "/blocked-art/art-07.svg","/blocked-art/art-08.svg","/blocked-art/art-09.svg",
+        "/blocked-art/art-10.svg"
+      ];
+      const i = Math.floor(Math.random() * picks.length);
+      document.getElementById("art").src = picks[i];
+    })();
+  </script>
+</body>
+</html>

@@ -13,6 +13,7 @@ import time
 import os
 import socket
 import urllib.request
+import mimetypes
 from pathlib import Path
 
 # =============================================================================
@@ -37,6 +38,7 @@ DB_PATH     = os.environ.get("DB_PATH",     "/data/lentium.db")
 PORT        = int(os.environ.get("PORT",    "8080"))
 NFT_SET     = "ip captive allowed_clients"
 NFT_BLOCKED_SET = "ip captive blocked_macs"
+NFT_WARN_SET = "ip captive warned_clients"
 REDIRECT_URL = os.environ.get("REDIRECT_URL", "https://theworldofrafex.blog/")
 ADMIN_IP    = os.environ.get("ADMIN_IP", "192.168.1.113")
 SENSOR_IP   = os.environ.get("SENSOR_IP", "192.168.1.181")
@@ -361,6 +363,7 @@ def authorize_client(client_ip: str) -> bool:
     if rc == 0:
         log.info(f"✔ IP autorizada en nftables: {client_ip}")
         _unblock_mac_for_ip(client_ip)
+        _clear_warning_for_ip(client_ip)
         return True
     log.error(f"✘ Falló autorizar {client_ip} — stderr={stderr!r}")
     return False
@@ -401,6 +404,25 @@ def _unblock_mac_for_ip(client_ip: str):
     )
     if rc == 0:
         log.info(f"MAC {mac} des-bloqueada de blocked_macs para IP {client_ip}")
+
+
+def _is_warned_ip(client_ip: str) -> bool:
+    if not client_ip:
+        return False
+    rc, _, _ = _router_ssh(
+        f"warned-get-{client_ip}",
+        f"nft get element {NFT_WARN_SET} {{ {client_ip} }} >/dev/null 2>&1",
+    )
+    return rc == 0
+
+
+def _clear_warning_for_ip(client_ip: str):
+    if not client_ip:
+        return
+    _router_ssh(
+        f"warned-del-{client_ip}",
+        f"nft delete element {NFT_WARN_SET} {{ {client_ip} }} >/dev/null 2>&1 || true",
+    )
 
 # =============================================================================
 # Validaciones mínimas
@@ -634,6 +656,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except FileNotFoundError:
             self._respond(404, {"error": f"{filename} no encontrado"})
 
+    def _serve_static_file(self, rel_path: str):
+        base = Path(__file__).parent
+        fpath = (base / rel_path).resolve()
+        if not str(fpath).startswith(str(base.resolve())):
+            self._respond(403, {"error": "forbidden"})
+            return
+        if not fpath.exists() or not fpath.is_file():
+            self._respond(404, {"error": "not found"})
+            return
+        ctype = mimetypes.guess_type(str(fpath))[0] or "application/octet-stream"
+        body = fpath.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin",  "*")
@@ -650,6 +689,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if self.path in ("/services", "/services/"):
             self._serve_static_html("services.html")
+            return
+
+        if self.path in ("/blocked", "/blocked/"):
+            self._serve_static_html("blocked.html")
+            return
+
+        if self.path.startswith("/blocked-art/"):
+            rel = self.path.lstrip("/")
+            self._serve_static_file(rel)
             return
 
         if self.path in ("/people", "/people/", "/demoDashboard", "/demoDashboard/"):
@@ -720,6 +768,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if self.path == "/api/services/status":
             self._respond(200, _service_status())
+            return
+
+        if self.path == "/api/portal/context":
+            client_ip = get_client_ip(self)
+            warned = _is_warned_ip(client_ip)
+            self._respond(200, {
+                "ip": client_ip,
+                "warning": warned,
+                "warning_message": "NO NO NO es sitio no" if warned else "",
+            })
             return
 
         log.warning(f"GET {self.path} — no encontrado")

@@ -75,6 +75,7 @@ TSHARK_FIELDS = [
     "icmp.type",               # 16
     "eth.src",                 # 17
     "eth.dst",                 # 18
+    "tls.handshake.extensions_server_name",  # 19
 ]
 
 PROTO_NAMES = {1: "ICMP", 6: "TCP", 17: "UDP", 2: "IGMP", 58: "ICMPv6"}
@@ -131,8 +132,11 @@ class TrafficAggregator:
             self.tcp_flags   = defaultdict(int)
             self.dns_queries = []
             self.http_hosts  = []
+            self.tls_sni_hosts = []
             self.http_uris   = []
             self.arps        = []
+            self.client_domain_counts = defaultdict(lambda: defaultdict(int))
+            self.client_domain_dsts = defaultdict(lambda: defaultdict(set))
 
     def add(self, line: str):
         """Parsea una línea de tshark y acumula sus datos."""
@@ -156,6 +160,7 @@ class TrafficAggregator:
             http_uri   = parts[13]
             arp_src    = parts[14]
             arp_dst    = parts[15]
+            tls_sni    = parts[19]
 
             plen = int(length_raw) if length_raw.isdigit() else 0
             dport = tcp_dp or udp_dp
@@ -190,12 +195,30 @@ class TrafficAggregator:
                         q = q.strip()
                         if q and q not in self.dns_queries[-200:]:
                             self.dns_queries.append(q)
+                        if q and src.startswith(LAN_PREFIX):
+                            self.client_domain_counts[src][q.lower()] += 1
 
                 if http_host:
                     for h in http_host.split(","):
                         h = h.strip()
                         if h:
                             self.http_hosts.append(h)
+                            if src.startswith(LAN_PREFIX):
+                                host = h.lower()
+                                self.client_domain_counts[src][host] += 1
+                                if dst and not dst.startswith(LAN_PREFIX):
+                                    self.client_domain_dsts[src][host].add(dst)
+
+                if tls_sni:
+                    for s in tls_sni.split(","):
+                        s = s.strip()
+                        if s:
+                            self.tls_sni_hosts.append(s)
+                            if src.startswith(LAN_PREFIX):
+                                host = s.lower()
+                                self.client_domain_counts[src][host] += 1
+                                if dst and not dst.startswith(LAN_PREFIX):
+                                    self.client_domain_dsts[src][host].add(dst)
 
                 if http_uri and http_host:
                     self.http_uris.append(f"{http_method} http://{http_host}{http_uri}")
@@ -216,6 +239,7 @@ class TrafficAggregator:
             top_ports = sorted(self.dst_ports.items(),  key=lambda x: -x[1])[:15]
             dns_counts = Counter(q for q in self.dns_queries if q)
             http_counts = Counter(h for h in self.http_hosts if h)
+            sni_counts = Counter(h for h in self.tls_sni_hosts if h)
 
             suspicious = []
 
@@ -287,7 +311,17 @@ class TrafficAggregator:
                 "dns_query_counts": dict(dns_counts.most_common(120)),
                 "http_hosts":       list(dict.fromkeys(self.http_hosts))[:25],
                 "http_host_counts": dict(http_counts.most_common(120)),
+                "tls_sni_hosts":    list(dict.fromkeys(self.tls_sni_hosts))[:40],
+                "tls_sni_counts":   dict(sni_counts.most_common(120)),
                 "http_requests":    list(dict.fromkeys(self.http_uris))[:15],
+                "client_domain_counts": {
+                    client: dict(sorted(domains.items(), key=lambda x: -x[1])[:60])
+                    for client, domains in self.client_domain_counts.items()
+                },
+                "client_domain_destinations": {
+                    client: {domain: sorted(list(ips))[:20] for domain, ips in domain_map.items()}
+                    for client, domain_map in self.client_domain_dsts.items()
+                },
                 "suspicious":       suspicious,
                 "arp_events":       self.arps[:30],
                 "lan_devices":      lan_devices[:30],
