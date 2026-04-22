@@ -1,111 +1,184 @@
-# Arquitectura del PoC — Captive Portal con IA Local
+# Arquitectura del PoC — Captive Portal + IA Local en Red WiFi
 
 ## Visión general
 
-PoC educativo que demuestra cómo funciona un captive portal en redes WiFi públicas,
-combinando hardware real (Raspberry Pi + router OpenWrt) con un LLM local.
+PoC educativo de seguridad en redes públicas que combina hardware real (Raspberry Pi 3B + 4B + router OpenWrt) con un LLM local. El sistema captura tráfico de red real, lo analiza con TinyLlama en batches y lo presenta en dashboards en vivo.
 
 ```
 Internet
     │
     ▼
-Router OpenWrt 25.12.2  (192.168.1.1)
-    │  ath79/mips_24kc — hardware TP-Link o similar
+Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
     │
-    ├── WAN:  phy1-sta0  → conectado al WiFi "netup" (5 GHz, upstream)
+    │  nftables tabla ip captive:
+    │    set allowed_clients {
+    │      flags dynamic, timeout
+    │      timeout 120m                    ← clientes WiFi: 2 horas
+    │      elements = {
+    │        192.168.1.113 timeout 0s,    ← admin: nunca expira
+    │        192.168.1.167 timeout 0s,    ← RafexPi4B: nunca expira
+    │        192.168.1.181 timeout 0s,    ← RafexPi3B: nunca expira
+    │      }
+    │    }
+    │  dnsmasq:
+    │    • dominios captive portal → 192.168.1.167
+    │    • DHCP lease time: 120m
+    │    • Reservas permanentes:
+    │        RafexPi4B  d8:3a:dd:4d:4b:ae → 192.168.1.167  infinite
+    │        RafexPi3B  b8:27:eb:5a:ec:33 → 192.168.1.181  infinite
     │
-    └── AP:   phy0-ap0   → WiFi "INFINITUM MOVIL" (2.4 GHz, clientes)
+    ├── WAN:  phy1-sta0  → WiFi upstream (5 GHz)
+    └── AP:   phy0-ap0   → WiFi "INFINITUM MOVIL" (2.4 GHz)
                 │
-                │  nftables (matching por subred, NO por interfaz):
-                │    • forward_captive: bloquea ip saddr 192.168.1.0/24
-                │      excepto admin, portal, DHCP, DNS y allowed_clients
-                │    • prerouting: DNAT HTTP de la subred → Pi :80
-                │  dnsmasq:
-                │    • resuelve dominios de detección → 192.168.1.167
-                │    • DHCP lease time: 30 minutos
+                │  clientes WiFi (192.168.1.x)
+                │  DNAT HTTP → 192.168.1.167:80 si no autorizados
                 │
                 ▼
-         Clientes WiFi (192.168.1.x)
+    ┌───────────────────────────────────────────────────────┐
+    │   RafexPi4B — 192.168.1.167  (Raspberry Pi 4B)       │
+    │   DietPi Debian trixie arm64 + k3s v1.34.6+k3s1      │
+    │                                                       │
+    │   Servicios init.d:                                   │
+    │     mosquitto :1883   MQTT broker                     │
+    │       topic: rafexpi/sensor/batch                     │
+    │       persistence: /var/lib/mosquitto/                │
+    │     llama-server :8081   TinyLlama 1.1B Q4_K_M        │
+    │       ctx-size=4096  threads=4  --parallel 1          │
+    │       endpoint: POST /completion  (ChatML)            │
+    │                                                       │
+    │   Traefik 3.6.10 (LoadBalancer :80)                   │
+    │     externalTrafficPolicy: Local                      │
+    │                                                       │
+    │   Pod captive-portal (2/2)                            │
+    │     [portal]   nginx:alpine :80                       │
+    │       set_real_ip_from 10.42.0.0/16                   │
+    │       sirve HTML portal + redirige detección          │
+    │     [backend]  captive-backend :8080                  │
+    │       POST /accept → SSH+nft al router                │
+    │                                                       │
+    │   Pod ai-analyzer (1/1)                               │
+    │     python:3.11-alpine :5000                          │
+    │     MQTT subscriber → SQLite queue → worker thread    │
+    │     Worker: llama-server :8081 (1 análisis a la vez)  │
+    │     SQLite: /opt/analyzer/data/sensor.db              │
+    │       batches: id, received_at, sensor_ip, status, payload  │
+    │       analyses: id, batch_id, timestamp, risk,        │
+    │                 analysis, elapsed_s, suspicious_count │
+    │     GET  /dashboard   UI visual (HTML desde imagen)   │
+    │     GET  /terminal    log SSE en vivo                 │
+    │     GET  /api/history /api/stats /api/queue           │
+    │     POST /api/ingest  (HTTP fallback del sensor)      │
+    │     GET  /health                                      │
+    │                                                       │
+    │   Pod dns-spoof (1/1)  nginx:alpine                   │
+    │     Demo separada de DNS poisoning                    │
+    │     Ingress: Host rafex.dev / www.rafex.dev           │
+    │                                                       │
+    │   hostPath volumes:                                   │
+    │     /opt/keys/captive-portal → pod captive-portal     │
+    │     /opt/analyzer/data/      → pod ai-analyzer        │
+    └───────────────────────────────────────────────────────┘
+                ▲  MQTT publish QoS=1 (rafexpi/sensor/batch)
+                │  HTTP POST /api/ingest (fallback)
                 │
-                ▼
-    Raspberry Pi 4 — RafexPi  (192.168.1.167)
-         │  DietPi Debian trixie arm64
-         │  k3s v1.34.6+k3s1
-         │
-         ├── Traefik 3.6.10  (LoadBalancer :80/:443)
-         │       externalTrafficPolicy: Local  ← sin SNAT, preserva IP real
-         │       └── Ingress → Service captive-portal:80
-         │
-         ├── Pod: captive-portal  (2/2 Running)
-         │       ├── [portal]   nginx:alpine      :80
-         │       │     • set_real_ip_from 10.42.0.0/16 (confía en Traefik)
-         │       │     • real_ip_header X-Forwarded-For → $remote_addr = IP real
-         │       │     • sirve HTML del portal y página de aceptado
-         │       │     • redirige dominios de detección a /portal
-         │       │     • proxy_pass /accept → 127.0.0.1:8080 con X-Real-IP=$remote_addr
-         │       │
-         │       └── [backend]  captive-backend   :8080
-         │             • POST /accept:
-         │               1. Lee X-Real-IP header (IP real del cliente WiFi)
-         │               2. Fallback: X-Forwarded-For primera IP 192.168.1.X
-         │               3. Fallback: SSH+conntrack al router
-         │               4. SSH+nft → agrega IP a allowed_clients
-         │             • GET /health: verifica SSH al router
-         │
-         ├── /opt/keys/captive-portal      (llave SSH ed25519)
-         │   /opt/keys/captive-portal.pub  (llave pública → router)
-         │
-         └── llama.cpp  (pendiente — LLM local)
+    ┌───────────────────────────────────────────────────────┐
+    │   RafexPi3B — 192.168.1.181  (Raspberry Pi 3B)       │
+    │   DietPi + tshark + Python 3 + paho-mqtt             │
+    │                                                       │
+    │   /etc/init.d/network-sensor                          │
+    │     tshark -i eth0 -p (promiscuo)                    │
+    │       18 campos tab-separated:                        │
+    │       frame.time_epoch, ip.src, ip.dst, ip.proto,    │
+    │       tcp/udp.srcport, tcp/udp.dstport, frame.len,   │
+    │       tcp.flags, dns.qry.name, http.host, ...        │
+    │     TrafficAggregator (30s):                          │
+    │       • stats por IP (packets, bytes, ports)          │
+    │       • detección escaneo de puertos (>50 dst ports)  │
+    │       • top talkers, top dst ports, protocolos        │
+    │       • DNS queries, HTTP hosts                       │
+    │     SSH opcional al router:                           │
+    │       conntrack (conexiones activas)                  │
+    │       /tmp/dhcp.leases (dispositivos en la red)       │
+    │       nft list set (clientes autorizados)             │
+    │     Publica batch JSON cada 30s → MQTT                │
+    │     Fallback HTTP si MQTT no disponible               │
+    │                                                       │
+    │   /opt/keys/sensor  (SSH al router, opcional)         │
+    └───────────────────────────────────────────────────────┘
 
     Laptop admin  (192.168.1.113)
-         • NUNCA bloqueada — timeout 0s en el set allowed_clients
-         • Acceso SSH directo al router y a la Pi
+      NUNCA bloqueada — timeout 0s permanente en allowed_clients
 ```
 
 ---
 
-## Flujo completo de un cliente nuevo
+## Flujo completo — cliente WiFi nuevo
 
 ```
 1. Cliente conecta al WiFi "INFINITUM MOVIL"
-        │
-        ▼
-2. DHCP le asigna IP 192.168.1.x (lease 30 minutos)
-        │
-        ▼
+        ↓
+2. DHCP le asigna IP 192.168.1.x  (lease 120 minutos)
+        ↓
 3. SO detecta captive portal:
-   Android/iOS/Windows/Linux → GET http://connectivitycheck.../
-        │
-        ▼  dnsmasq resuelve el dominio a 192.168.1.167
-        ▼  nftables prerouting: DNAT ip saddr 192.168.1.0/24 tcp dport 80 → 192.168.1.167:80
-        │
-        ▼
-4. Traefik (externalTrafficPolicy:Local) recibe la petición con IP real del cliente
-        │
-        ▼
-5. nginx (set_real_ip_from 10.42.0.0/16) extrae IP real de X-Forwarded-For
-   → $remote_addr = 192.168.1.X (IP del cliente, no de k3s)
-   → sirve index.html (portal)
-        │
-        ▼
-6. Cliente hace clic en "Entendido, quiero navegar"
-   → fetch('POST /accept')
-        │
-        ▼
-7. nginx proxy_pass → http://127.0.0.1:8080/accept
-   con header X-Real-IP: 192.168.1.X
-        │
-        ▼
-8. backend Python lee X-Real-IP → client_ip = 192.168.1.X
-   → SSH al router → nft add element ip captive allowed_clients { 192.168.1.X }
-        │
-        ▼
-9. Cliente puede navegar libremente
-   (su IP está en allowed_clients con timeout 30m)
-        │
-        ▼
-10. Tras 30 minutos: el elemento expira del set Y el lease DHCP expira
-    → al reconectar obtiene nueva IP → vuelve al portal automáticamente
+   GET http://connectivitycheck.gstatic.com/
+        ↓  dnsmasq → 192.168.1.167
+        ↓  nftables DNAT tcp dport 80 → 192.168.1.167:80
+        ↓
+4. Traefik (externalTrafficPolicy:Local) recibe con IP real del cliente
+        ↓
+5. nginx extrae IP real de X-Forwarded-For → $remote_addr = 192.168.1.X
+   sirve index.html (portal de bienvenida)
+        ↓
+6. Cliente acepta → fetch POST /accept
+        ↓
+7. nginx proxy_pass → http://127.0.0.1:8080/accept  (X-Real-IP: 192.168.1.X)
+        ↓
+8. backend Python → SSH al router → nft add element allowed_clients { 192.168.1.X }
+        ↓
+9. Cliente navega libremente (timeout 120m en el set)
+        ↓
+10. Tras 120 min: elemento expira + lease DHCP expira → vuelve al portal
+```
+
+---
+
+## Flujo de análisis IA
+
+```
+RafexPi3B (tshark captura tráfico eth0 cada 30s)
+        ↓  MQTT publish rafexpi/sensor/batch  QoS=1
+Router Mosquitto :1883
+        ↓
+ai-analyzer suscrito → on_mqtt_message()
+        ↓
+SQLite: INSERT batch (status=pending)
+enqueue_batch(batch_id) → work_queue.put()
+        ↓
+worker_thread() [único] toma batch_id
+        ↓
+db_set_status(batch_id, "processing")
+        ↓
+build_prompt(summary):
+  "Red WiFi — ultimos 30s:
+   Paquetes:N (Xpps) Trafico:Ybytes
+   Protocolos: tcp/N udp/N ...
+   Top emisores: 192.168.1.X/N ...
+   Top puertos dst: 80/N 443/N ...
+   Dispositivos LAN: hostname/ip ...
+   DNS: domain.com ...
+   Alertas: scan/192.168.1.X ...
+
+   Da un analisis de seguridad en 3 puntos
+   breves e indica el riesgo (BAJO/MEDIO/ALTO)."
+        ↓
+POST http://192.168.1.167:8081/completion
+  (TinyLlama 1.1B, ChatML, ~350 tokens prompt + 384 predict)
+        ↓
+Extrae riesgo (BAJO/MEDIO/ALTO) de la respuesta
+        ↓
+SQLite: INSERT analyses + UPDATE batch status=done
+        ↓
+SSE /api/stream → terminal.html en tiempo real
 ```
 
 ---
@@ -117,104 +190,128 @@ table ip captive {
     set allowed_clients {
         type ipv4_addr
         flags dynamic, timeout
-        timeout 30m                    # clientes WiFi: 30 min
-        # elementos permanentes (timeout 0s):
-        #   192.168.1.113  (admin — nunca bloqueado)
-        #   192.168.1.167  (portal Pi — siempre accesible)
+        timeout 120m                        # clientes WiFi: 2 horas
+        elements = {
+            192.168.1.113 timeout 0s,      # admin — nunca expira
+            192.168.1.167 timeout 0s,      # RafexPi4B (portal) — nunca expira
+            192.168.1.181 timeout 0s,      # RafexPi3B (sensor) — nunca expira
+        }
     }
 
     # Redireccion HTTP: matching por subred (NO por interfaz)
-    # Razón: clientes WiFi pasan por bridge br-lan, no por phy0-ap0
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
-        ip daddr 192.168.1.167 accept              # ya va al portal: no DNAT
-        ip saddr @allowed_clients accept            # autorizado: no DNAT
-        ip saddr 192.168.1.0/24 tcp dport 80       # resto de LAN HTTP → portal
-            dnat to 192.168.1.167:80
+        ip daddr 192.168.1.167 accept                   # ya va al portal
+        ip saddr @allowed_clients accept                 # autorizado
+        ip saddr 192.168.1.0/24 tcp dport 80 dnat to 192.168.1.167:80
     }
 
-    # Bloqueo de forward — priority -1 (antes que fw4)
+    # Bloqueo de forward — priority filter - 1 (antes que fw4)
     chain forward_captive {
         type filter hook forward priority filter - 1; policy accept;
-        ip saddr != 192.168.1.0/24 accept          # tráfico fuera de LAN: pasar
-        ip saddr 192.168.1.113 accept              # admin: siempre pasa
-        ip saddr 192.168.1.167 accept              # portal: siempre pasa
-        ip daddr 192.168.1.167 accept              # hacia portal: siempre pasa
-        udp dport { 67, 68 } accept                # DHCP
-        tcp dport 53 accept                        # DNS TCP
-        udp dport 53 accept                        # DNS UDP
-        ip saddr @allowed_clients accept           # cliente autorizado: pasa
-        ip saddr 192.168.1.0/24 drop               # resto de LAN: bloqueado
+        ip saddr != 192.168.1.0/24 accept              # tráfico externo: pasar
+        ip saddr 192.168.1.113 accept                  # admin
+        ip saddr 192.168.1.167 accept                  # RafexPi4B
+        ip daddr 192.168.1.167 accept                  # hacia portal
+        ip saddr 192.168.1.181 accept                  # RafexPi3B
+        udp dport { 67, 68 } accept                    # DHCP
+        tcp dport 53 accept                            # DNS
+        udp dport 53 accept
+        ip saddr @allowed_clients accept               # clientes autorizados
+        ip saddr 192.168.1.0/24 drop                   # resto: bloqueado
     }
 }
 ```
 
 ---
 
+## SQLite — esquema de persistencia
+
+```sql
+-- Batches recibidos del sensor
+CREATE TABLE batches (
+    id          TEXT PRIMARY KEY,
+    received_at TEXT NOT NULL,
+    sensor_ip   TEXT,
+    status      TEXT DEFAULT 'pending',   -- pending | processing | done | error
+    payload     TEXT NOT NULL             -- JSON del resumen de tráfico
+);
+
+-- Análisis producidos por TinyLlama
+CREATE TABLE analyses (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id          TEXT REFERENCES batches(id),
+    timestamp         TEXT NOT NULL,
+    risk              TEXT,               -- BAJO | MEDIO | ALTO
+    analysis          TEXT,              -- respuesta del LLM
+    elapsed_s         REAL,              -- segundos que tardó el LLM
+    suspicious_count  INTEGER,
+    packets           INTEGER,
+    bytes_fmt         TEXT
+);
+```
+
+---
+
+## Componentes k8s en RafexPi4B
+
+| Recurso | Tipo | Detalle |
+|---|---|---|
+| `captive-portal` | Deployment | 1 réplica, 2 contenedores (nginx + captive-backend) |
+| `captive-portal` | Service | ClusterIP ports 80 + 8080 |
+| `captive-portal` | Ingress | Traefik → puerto 80 path `/` |
+| `captive-portal-nginx-conf` | ConfigMap | nginx.conf + index.html + accepted.html |
+| `traefik` | HelmChartConfig | `externalTrafficPolicy:Local` + `forwardedHeaders.insecure` |
+| `ai-analyzer` | Deployment | 1 réplica, python:3.11-alpine |
+| `ai-analyzer` | Service | ClusterIP port 5000 |
+| `ai-analyzer` | Ingress | `/dashboard`, `/terminal`, `/api/*`, `/health` |
+| `dns-spoof` | Deployment | nginx:alpine — demo separada |
+| `dns-spoof` | Service | ClusterIP port 80 |
+| `dns-spoof` | Ingress | `Host: rafex.dev` y `Host: www.rafex.dev` |
+
+---
+
 ## Por qué matching por subred y no por interfaz
 
-En OpenWrt, los clientes WiFi se agregan al bridge `br-lan`. El kernel ve
-el tráfico con `iifname = "br-lan"` en el hook forward, **no** `"phy0-ap0"`.
-Si las reglas usan `iifname "phy0-ap0"`, nunca hacen match y todo pasa libre.
+En OpenWrt los clientes WiFi se agregan al bridge `br-lan`. El kernel ve el tráfico
+con `iifname = "br-lan"` en el hook forward, **no** `"phy0-ap0"`. Si las reglas usan
+`iifname "phy0-ap0"` nunca hacen match y todo pasa libre.
 
-Solución: filtrar por `ip saddr 192.168.1.0/24` (la subred LAN), que identifica
-correctamente a todos los clientes independientemente de cómo lleguen al bridge.
+Solución: `ip saddr 192.168.1.0/24` — identifica todos los clientes sin importar cómo lleguen.
 
 ---
 
 ## Por qué externalTrafficPolicy: Local en Traefik
 
-Con `externalTrafficPolicy: Cluster` (default), kube-proxy hace SNAT al reenviar
-el tráfico al pod de Traefik — la IP real del cliente (192.168.1.X) se reemplaza
-por la IP del gateway CNI (10.42.0.1). Traefik propaga ese valor en `X-Forwarded-For`.
-
-Con `externalTrafficPolicy: Local`, kube-proxy no hace SNAT y Traefik recibe
-la IP real del cliente directamente.
-
-En un cluster de 1 nodo (esta Pi) no hay desventajas de usar `Local`.
+Con `Cluster` (default), kube-proxy hace SNAT y la IP real del cliente (192.168.1.X)
+se reemplaza por la IP del gateway CNI (10.42.0.1). Con `Local`, kube-proxy no hace
+SNAT y Traefik recibe la IP real directamente. En un cluster de 1 nodo no hay desventajas.
 
 ---
 
-## Por qué set_real_ip_from en nginx
+## Por qué python:3.11-alpine en ai-analyzer
 
-Aunque Traefik ya envía `X-Forwarded-For` con la IP real, nginx necesita
-configurarse explícitamente para usarla como `$remote_addr`:
-
-```nginx
-set_real_ip_from 10.42.0.0/16;   # confiar en requests del cluster k3s
-real_ip_header X-Forwarded-For;
-real_ip_recursive on;
-# Resultado: $remote_addr = 192.168.1.X (IP real del cliente WiFi)
-```
-
-Sin esto, `$remote_addr` sería la IP de Traefik (10.42.0.X) y el backend
-recibiría una IP interna que no existe en nftables.
+`python:3.11-slim` (Debian) + crun (runtime de contenedores de podman) intenta conectar
+a sd-bus (D-Bus/systemd). DietPi no usa systemd como PID 1 — falla con
+`sd-bus: No such file or directory`. Alpine no tiene esa dependencia.
 
 ---
 
-## Componentes k8s en la Pi
+## Por qué HTML dentro de la imagen y no en ConfigMap
 
-| Recurso | Tipo | Detalle |
-|---|---|---|
-| `captive-portal` | Deployment | 1 réplica, 2 contenedores (nginx + backend) |
-| `captive-portal` | Service | ClusterIP, ports 80 + 8080 |
-| `captive-portal` | Ingress | Traefik → puerto 80, pathType Prefix `/` |
-| `captive-portal-nginx-conf` | ConfigMap | nginx.conf + index.html + accepted.html |
-| `traefik` | HelmChartConfig | `externalTrafficPolicy:Local` + `forwardedHeaders.insecure` |
+Los archivos `dashboard.html` y `terminal.html` contienen JavaScript con literales de objeto
+(`{}`), template strings y caracteres especiales. `kubectl apply` parsea el YAML con un parser
+estricto que falla al encontrar esos patrones embebidos en `data:` de un ConfigMap.
 
-### Volúmenes montados en el pod
-
-| Volumen | Tipo | Montado en |
-|---|---|---|
-| `nginx-conf` | ConfigMap | `/etc/nginx/conf.d/default.conf`, `/usr/share/nginx/html/*.html` |
-| `ssh-keys` | hostPath `/opt/keys` | `/opt/keys` (ambos contenedores, readOnly) |
+Solución: copiar los HTML dentro de la imagen Docker y servirlos con `open().read()` en Python.
 
 ---
 
 ## Dispositivos
 
-| Dispositivo | IP | OS | Acceso |
-|---|---|---|---|
-| Router OpenWrt | 192.168.1.1 | OpenWrt 25.12.2 (ath79/mips_24kc) | SSH root, Dropbear |
-| Raspberry Pi 4 (RafexPi) | 192.168.1.167 | DietPi Debian trixie arm64 | SSH, k3s v1.34.6 |
-| Laptop admin | 192.168.1.113 | — | **NUNCA bloquear** |
+| Dispositivo | Hostname | IP | MAC | OS |
+|---|---|---|---|---|
+| Router OpenWrt | — | 192.168.1.1 | — | OpenWrt 25.12.2 (ath79/mips_24kc) |
+| Raspberry Pi 4B | RafexPi4B | 192.168.1.167 | d8:3a:dd:4d:4b:ae | DietPi Debian trixie arm64 |
+| Raspberry Pi 3B | RafexPi3B | 192.168.1.181 | b8:27:eb:5a:ec:33 | DietPi Debian arm |
+| Laptop admin | — | 192.168.1.113 | — | — |
