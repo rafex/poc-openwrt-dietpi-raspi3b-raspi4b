@@ -58,6 +58,8 @@ run() {
 
 # ─── Constantes ───────────────────────────────────────────────────────────────
 HOSTNAME_NEW="RafexPi3B"
+RASPI3B_MAC="b8:27:eb:5a:ec:33"
+RASPI3B_IP="192.168.1.181"
 SENSOR_DIR="/opt/sensor"
 KEYS_DIR="/opt/keys"
 SSH_KEY="$KEYS_DIR/sensor"
@@ -226,6 +228,72 @@ if $SETUP_SSH && ! $DRY_RUN && [ -f "$SSH_KEY" ]; then
     else
         warn "SSH al router no disponible — el sensor usará solo captura local"
     fi
+fi
+
+# ─── D.1) Reserva DHCP permanente en el router ────────────────────────────────
+step "D.1) Reserva DHCP permanente en router OpenWrt para $HOSTNAME_NEW"
+
+reserve_dhcp_on_router() {
+    local ROUTER="$ROUTER_IP"
+    local KEY="$SSH_KEY"
+    local NAME="$HOSTNAME_NEW"
+    local MAC="$RASPI3B_MAC"
+    local IP="$RASPI3B_IP"
+
+    # SSH hacia el router — usamos la llave del sensor (generada en paso D)
+    if [ ! -f "$KEY" ]; then
+        warn "Llave SSH $KEY no existe aún — saltando reserva DHCP automática"
+        warn "Ejecuta después: sh scripts/openwrt-reserve-raspi.sh --mac $MAC --ip $IP"
+        return
+    fi
+
+    if ! ssh -i "$KEY" -o StrictHostKeyChecking=no -o BatchMode=yes \
+         -o ConnectTimeout=5 "root@$ROUTER" "echo pong" 2>/dev/null | grep -q pong; then
+        warn "No se puede alcanzar el router via SSH — saltando reserva DHCP automática"
+        warn "Ejecuta después: sh scripts/openwrt-reserve-raspi.sh --mac $MAC --ip $IP"
+        return
+    fi
+
+    ssh -i "$KEY" -o StrictHostKeyChecking=no -o BatchMode=yes "root@$ROUTER" "
+        # Buscar entrada existente por IP o MAC
+        EXISTING_IDX=''
+        IDX=0
+        while uci get dhcp.@host[\$IDX] > /dev/null 2>&1; do
+            CUR_IP=\$(uci get dhcp.@host[\$IDX].ip 2>/dev/null)
+            CUR_MAC=\$(uci get dhcp.@host[\$IDX].mac 2>/dev/null)
+            if [ \"\$CUR_IP\" = '$IP' ] || [ \"\$CUR_MAC\" = '$MAC' ]; then
+                EXISTING_IDX=\$IDX
+                break
+            fi
+            IDX=\$((IDX + 1))
+        done
+
+        if [ -n \"\$EXISTING_IDX\" ]; then
+            echo 'Actualizando reserva existente (índice '\$EXISTING_IDX')...'
+            uci set dhcp.@host[\$EXISTING_IDX].name='$NAME'
+            uci set dhcp.@host[\$EXISTING_IDX].mac='$MAC'
+            uci set dhcp.@host[\$EXISTING_IDX].ip='$IP'
+            uci set dhcp.@host[\$EXISTING_IDX].leasetime='infinite'
+        else
+            echo 'Creando nueva reserva DHCP...'
+            uci add dhcp host
+            uci set dhcp.@host[-1].name='$NAME'
+            uci set dhcp.@host[-1].mac='$MAC'
+            uci set dhcp.@host[-1].ip='$IP'
+            uci set dhcp.@host[-1].leasetime='infinite'
+        fi
+        uci commit dhcp
+        /etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart 2>/dev/null
+        echo 'Reserva aplicada'
+    " && ok "Reserva DHCP: $NAME ($MAC) → $IP (infinite)" \
+      || warn "No se pudo configurar la reserva — hazlo manualmente:"
+    warn "  sh scripts/openwrt-reserve-raspi.sh --mac $RASPI3B_MAC --ip $RASPI3B_IP"
+}
+
+if $DRY_RUN; then
+    echo -e "${YELLOW}[DRY-RUN]${NC} Configuraría reserva DHCP: $HOSTNAME_NEW ($RASPI3B_MAC) → $RASPI3B_IP"
+else
+    reserve_dhcp_on_router
 fi
 
 # ─── E) Servicio init.d ───────────────────────────────────────────────────────

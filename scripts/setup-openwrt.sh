@@ -133,13 +133,14 @@ else
     log_ok "Configuracion dnsmasq insertada en /etc/dnsmasq.conf"
 fi
 
-# Configurar DHCP lease time a 30 minutos via UCI
+# Configurar DHCP lease time a 120 minutos via UCI
 # Razon: al reconectar, el dispositivo obtiene nueva IP → no esta en allowed_clients → portal
-log_info "Configurando DHCP lease time a 30 minutos..."
+# 120m coincide con el timeout del set nftables (PORTAL_TIMEOUT)
+log_info "Configurando DHCP lease time a 120 minutos..."
 router_ssh "
-    uci set dhcp.lan.leasetime='30m'
+    uci set dhcp.lan.leasetime='120m'
     uci commit dhcp
-" && log_ok "DHCP lease time = 30m configurado" || \
+" && log_ok "DHCP lease time = 120m configurado" || \
     log_warn "No se pudo configurar DHCP lease time via UCI (puede que la interfaz no se llame 'lan')"
 
 # Recargar dnsmasq — aplica tanto la config de captive portal como el nuevo lease time
@@ -175,15 +176,17 @@ add table ip captive
 table ip captive {
     # Set de clientes autorizados — IPs que pueden navegar libremente
     #
-    # timeout 30m: las autorizaciones expiran solas
-    #   → combinado con DHCP lease=30m: al reconectar pasan de nuevo por el portal
+    # timeout 120m: las autorizaciones expiran solas (2 horas)
+    #   → combinado con DHCP lease=120m: al reconectar pasan de nuevo por el portal
     #
-    # Admin ($ADMIN_IP) y portal ($PORTAL_IP): timeout 0s = NUNCA expiran
+    # Admin ($ADMIN_IP), portal ($PORTAL_IP) y Raspis: timeout 0s = NUNCA expiran
+    #   RafexPi4B ($RASPI4B_IP) — IA + k3s, siempre necesita acceso
+    #   RafexPi3B ($RASPI3B_IP) — sensor de red, siempre capturando tráfico
     set $NFT_SET {
         type ipv4_addr
         flags dynamic, timeout
-        timeout 30m
-        elements = { $ADMIN_IP timeout 0s, $PORTAL_IP timeout 0s }
+        timeout 120m
+        elements = { $ADMIN_IP timeout 0s, $PORTAL_IP timeout 0s, $RASPI3B_IP timeout 0s }
     }
 
     # Redireccion HTTP: clientes de la LAN no autorizados → portal en $PORTAL_IP
@@ -258,14 +261,14 @@ log_info "Aplicando reglas nftables..."
 router_ssh "nft -f /tmp/captive-portal.nft" || \
     die "Fallo al cargar las reglas nftables"
 
-# CRITICO: Re-confirmar admin y portal como PERMANENTES (timeout 0s).
-# No usar router_add_ip aquí — esa función no especifica timeout y heredaría
-# el default de 30m del set, sobreescribiendo el timeout 0s del archivo nft.
-log_info "Re-confirmando admin y portal como permanentes (timeout 0s)..."
+# CRITICO: Re-confirmar IPs permanentes (timeout 0s).
+# Admin, portal y ambas Raspis nunca deben expirar — sin importar los reinicios.
+log_info "Re-confirmando IPs permanentes en el set (timeout 0s)..."
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0s }" || \
     die "No se pudo asegurar $ADMIN_IP como permanente"
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" 2>/dev/null || true
-log_ok "Admin $ADMIN_IP y portal $PORTAL_IP asegurados como permanentes"
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI3B_IP timeout 0s }" 2>/dev/null || true
+log_ok "Permanentes: admin=$ADMIN_IP  portal/4B=$PORTAL_IP  sensor/3B=$RASPI3B_IP (timeout 0s)"
 
 # Limpiar conntrack para que el bloqueo sea efectivo inmediatamente
 # (conexiones ESTABLISHED bypasean el hook forward)
@@ -295,6 +298,77 @@ fi
 
 # Limpiar temporal del router
 router_ssh "rm -f /tmp/captive-portal.nft"
+
+# =============================================================================
+# FASE C.1: Reservas DHCP permanentes para las Raspberry Pi
+# =============================================================================
+log_info "--- FASE C.1: Reservas DHCP permanentes para RafexPi4B y RafexPi3B ---"
+
+# Función interna: crea o actualiza una reserva DHCP via UCI en el router
+# Uso: reserve_raspi_dhcp <hostname> <mac> <ip>
+reserve_raspi_dhcp() {
+    local NAME="$1"
+    local MAC="$2"
+    local IP="$3"
+
+    router_ssh "
+        # Buscar entrada existente por IP o MAC (idempotente)
+        EXISTING_IDX=''
+        IDX=0
+        while uci get dhcp.@host[\$IDX] > /dev/null 2>&1; do
+            CUR_IP=\$(uci get dhcp.@host[\$IDX].ip 2>/dev/null)
+            CUR_MAC=\$(uci get dhcp.@host[\$IDX].mac 2>/dev/null)
+            if [ \"\$CUR_IP\" = '$IP' ] || [ \"\$CUR_MAC\" = '$MAC' ]; then
+                EXISTING_IDX=\$IDX
+                break
+            fi
+            IDX=\$((IDX + 1))
+        done
+
+        if [ -n \"\$EXISTING_IDX\" ]; then
+            printf 'Actualizando reserva existente para $NAME (indice %s)\\n' \"\$EXISTING_IDX\"
+            uci set dhcp.@host[\$EXISTING_IDX].name='$NAME'
+            uci set dhcp.@host[\$EXISTING_IDX].mac='$MAC'
+            uci set dhcp.@host[\$EXISTING_IDX].ip='$IP'
+            uci set dhcp.@host[\$EXISTING_IDX].leasetime='infinite'
+        else
+            printf 'Creando nueva reserva DHCP para $NAME\\n'
+            uci add dhcp host
+            uci set dhcp.@host[-1].name='$NAME'
+            uci set dhcp.@host[-1].mac='$MAC'
+            uci set dhcp.@host[-1].ip='$IP'
+            uci set dhcp.@host[-1].leasetime='infinite'
+        fi
+        uci commit dhcp
+        printf 'OK\\n'
+    " && log_ok "Reserva DHCP: $NAME  $MAC → $IP  (infinite)" || \
+       log_warn "No se pudo configurar reserva DHCP para $NAME — hazlo manualmente con openwrt-reserve-raspi.sh"
+}
+
+reserve_raspi_dhcp "$RASPI4B_HOSTNAME" "$RASPI4B_MAC" "$RASPI4B_IP"
+reserve_raspi_dhcp "$RASPI3B_HOSTNAME" "$RASPI3B_MAC" "$RASPI3B_IP"
+
+# Recargar dnsmasq para aplicar las nuevas reservas
+log_info "Recargando dnsmasq para aplicar reservas DHCP..."
+router_ssh "/etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart" && \
+    log_ok "dnsmasq recargado con reservas DHCP" || \
+    log_warn "No se pudo recargar dnsmasq — las reservas se aplicarán en el próximo lease"
+
+# Mostrar tabla de reservas activas
+log_info "Reservas DHCP activas en el router:"
+router_ssh "
+    IDX=0
+    printf '  %-20s  %-20s  %-16s  %s\n' NOMBRE MAC IP LEASETIME
+    printf '  %-20s  %-20s  %-16s  %s\n' '--------------------' '--------------------' '----------------' '---------'
+    while uci get dhcp.@host[\$IDX] > /dev/null 2>&1; do
+        NAME=\$(uci get dhcp.@host[\$IDX].name 2>/dev/null || printf '-')
+        MAC=\$(uci get dhcp.@host[\$IDX].mac 2>/dev/null || printf '-')
+        IP=\$(uci get dhcp.@host[\$IDX].ip 2>/dev/null || printf '-')
+        LEASE=\$(uci get dhcp.@host[\$IDX].leasetime 2>/dev/null || printf '-')
+        printf '  %-20s  %-20s  %-16s  %s\n' \"\$NAME\" \"\$MAC\" \"\$IP\" \"\$LEASE\"
+        IDX=\$((IDX + 1))
+    done
+" 2>/dev/null || log_warn "No se pudo listar las reservas DHCP"
 
 # =============================================================================
 # FASE D: Verificacion
@@ -329,9 +403,12 @@ log_ok "=== Setup de OpenWrt completado ==="
 printf '\n'
 log_info "Estado del sistema:"
 printf '  Router:        %s\n' "$ROUTER_IP"
-printf '  Portal:        %s\n' "$PORTAL_IP"
-printf '  Admin (libre): %s\n' "$ADMIN_IP"
+printf '  Portal/4B:     %s (%s) — permanente\n' "$PORTAL_IP" "$RASPI4B_HOSTNAME"
+printf '  Sensor/3B:     %s (%s) — permanente\n' "$RASPI3B_IP" "$RASPI3B_HOSTNAME"
+printf '  Admin (libre): %s — permanente\n' "$ADMIN_IP"
 printf '  AP interface:  %s\n' "$AP_IFACE"
+printf '  Portal timeout: %s (acceso WiFi invitados)\n' "$PORTAL_TIMEOUT"
+printf '  DHCP leasetime: 120m\n'
 printf '\n'
 log_info "Comandos utiles:"
 printf '  Listar clientes:    sh scripts/openwrt-list-clients.sh\n'

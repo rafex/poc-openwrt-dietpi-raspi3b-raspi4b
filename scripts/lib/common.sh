@@ -17,6 +17,17 @@ NFT_FILE="/etc/nftables.d/captive-portal.nft"
 DNSMASQ_CONF="/etc/dnsmasq.d/captive-portal.conf"
 AP_IFACE="phy0-ap0"            # solo usado en pre-flight check de interfaz WiFi
 
+# Raspberry Pi — IPs y MACs permanentes (bypass total del portal + reserva DHCP)
+RASPI4B_IP="192.168.1.167"     # = PORTAL_IP — Raspi 4B (IA + k3s)
+RASPI4B_MAC="d8:3a:dd:4d:4b:ae"
+RASPI4B_HOSTNAME="RafexPi4B"
+RASPI3B_IP="192.168.1.181"     # Raspi 3B (sensor de red)
+RASPI3B_MAC="b8:27:eb:5a:ec:33"
+RASPI3B_HOSTNAME="RafexPi3B"
+
+# Tiempo de acceso a internet para clientes WiFi del captive portal
+PORTAL_TIMEOUT="120m"          # 120 minutos (2 horas)
+
 # =============================================================================
 # Logging
 # =============================================================================
@@ -101,12 +112,13 @@ router_ip_in_set() {
 }
 
 # Agregar IP al set.
-# Admin y portal se agregan siempre con timeout 0s (permanentes).
-# El resto hereda el timeout del set (30m por defecto).
+# Admin, portal y Raspis (4B/3B) se agregan con timeout 0s (permanentes — bypass total).
+# El resto hereda el timeout del set (PORTAL_TIMEOUT por defecto).
 router_add_ip() {
     local ip="$1"
     local timeout_flag=""
-    if [ "$ip" = "$ADMIN_IP" ] || [ "$ip" = "$PORTAL_IP" ]; then
+    if [ "$ip" = "$ADMIN_IP" ] || [ "$ip" = "$PORTAL_IP" ] || \
+       [ "$ip" = "$RASPI4B_IP" ] || [ "$ip" = "$RASPI3B_IP" ]; then
         timeout_flag=" timeout 0s"
     fi
     router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip$timeout_flag }" 2>/dev/null || \
