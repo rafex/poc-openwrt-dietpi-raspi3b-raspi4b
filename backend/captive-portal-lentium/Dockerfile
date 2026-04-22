@@ -1,7 +1,7 @@
 FROM python:3.11-alpine
 
 WORKDIR /app
-COPY backend.py portal.html ./
+COPY backend.py portal.html services.html ./
 
 RUN mkdir -p /data /opt/keys
 

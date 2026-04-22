@@ -11,6 +11,8 @@ import json
 import logging
 import time
 import os
+import socket
+import urllib.request
 from pathlib import Path
 
 # =============================================================================
@@ -38,6 +40,13 @@ NFT_BLOCKED_SET = "ip captive blocked_macs"
 REDIRECT_URL = os.environ.get("REDIRECT_URL", "https://theworldofrafex.blog/")
 ADMIN_IP    = os.environ.get("ADMIN_IP", "192.168.1.113")
 SENSOR_IP   = os.environ.get("SENSOR_IP", "192.168.1.181")
+R4_HOST     = os.environ.get("SERVICE_RASPI4_HOST", "192.168.1.167")
+R4_USER     = os.environ.get("SERVICE_RASPI4_USER", "root")
+R4_KEY      = os.environ.get("SERVICE_RASPI4_SSH_KEY", "/opt/keys/captive-portal")
+R3_HOST     = os.environ.get("SERVICE_RASPI3_HOST", "192.168.1.181")
+R3_USER     = os.environ.get("SERVICE_RASPI3_USER", "root")
+R3_KEY      = os.environ.get("SERVICE_RASPI3_SSH_KEY", "/opt/keys/sensor")
+REPO_PATH   = os.environ.get("REPO_PATH", "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b")
 
 log.info("=== Lentium Portal Backend iniciando ===")
 log.info(f"ROUTER_IP={ROUTER_IP}  PORTAL_IP={PORTAL_IP}  DB_PATH={DB_PATH}  PORT={PORT}")
@@ -174,6 +183,139 @@ def _router_ssh(description: str, remote_cmd: str, timeout: int = 10) -> tuple[i
     except Exception as exc:
         log.error(f"SSH [{description}] excepción: {exc}")
         return -1, "", str(exc)
+
+
+def _node_ssh(host: str, user: str, key: str, description: str, remote_cmd: str, timeout: int = 15) -> tuple[int, str, str]:
+    cmd = [
+        "ssh",
+        "-i", key,
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "BatchMode=yes",
+        "-o", "ConnectTimeout=5",
+        "-o", "LogLevel=ERROR",
+        f"{user}@{host}",
+        remote_cmd,
+    ]
+    t0 = time.monotonic()
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        elapsed = (time.monotonic() - t0) * 1000
+        log.debug(f"SSH[{host}] [{description}] rc={result.returncode} elapsed={elapsed:.0f}ms")
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+    except subprocess.TimeoutExpired:
+        return -1, "", "timeout"
+    except Exception as exc:
+        return -1, "", str(exc)
+
+
+def _tcp_up(host: str, port: int, timeout_s: float = 1.8) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout_s):
+            return True
+    except Exception:
+        return False
+
+
+def _sensor_ssh(description: str, remote_cmd: str, timeout: int = 15) -> tuple[int, str, str]:
+    # Intenta primero con llave dedicada de sensor y luego con llave de Raspi4.
+    rc, out, err = _node_ssh(R3_HOST, R3_USER, R3_KEY, description, remote_cmd, timeout=timeout)
+    if rc == 0:
+        return rc, out, err
+    if R3_KEY != R4_KEY:
+        rc2, out2, err2 = _node_ssh(R3_HOST, R3_USER, R4_KEY, f"{description}-fallback", remote_cmd, timeout=timeout)
+        if rc2 == 0:
+            return rc2, out2, err2
+    return rc, out, err
+
+
+def _service_status() -> dict:
+    llm_up = False
+    try:
+        with urllib.request.urlopen(f"http://{R4_HOST}:8081/health", timeout=2) as resp:
+            llm_up = (resp.getcode() == 200)
+    except Exception:
+        llm_up = False
+
+    mosq_up = _tcp_up(R4_HOST, 1883)
+
+    rc_sensor, out_sensor, err_sensor = _sensor_ssh(
+        "sensor-status",
+        "/etc/init.d/network-sensor status 2>/dev/null || true",
+        timeout=10,
+    )
+    sensor_up = ("running" in out_sensor.lower()) or ("started" in out_sensor.lower())
+
+    rc_captive, out_captive, _ = _node_ssh(
+        R4_HOST, R4_USER, R4_KEY, "portal-switch-status",
+        f"bash {REPO_PATH}/scripts/portal-switch.sh status 2>/dev/null || true",
+        timeout=12,
+    )
+    active_portal = "unknown"
+    if rc_captive == 0:
+        low = out_captive.lower()
+        if "portal activo: lentium" in low:
+            active_portal = "lentium"
+        elif "portal activo: clasico" in low:
+            active_portal = "clasico"
+
+    return {
+        "llm": {"active": llm_up},
+        "queue": {"active": mosq_up},
+        "sensor": {"active": sensor_up, "raw": out_sensor or err_sensor},
+        "captive": {"active_portal": active_portal, "raw": out_captive},
+    }
+
+
+def _service_action(service: str, action: str) -> dict:
+    service = (service or "").strip().lower()
+    action = (action or "").strip().lower()
+
+    if service == "llm":
+        if action not in {"on", "off", "restart", "status"}:
+            return {"ok": False, "error": "accion invalida para llm"}
+        rc, out, err = _node_ssh(
+            R4_HOST, R4_USER, R4_KEY, f"llm-{action}",
+            f"bash {REPO_PATH}/scripts/llm-control.sh {action}",
+            timeout=25,
+        )
+        return {"ok": rc == 0, "rc": rc, "stdout": out, "stderr": err}
+
+    if service == "queue":
+        cmd_map = {
+            "on": "/etc/init.d/mosquitto start",
+            "off": "/etc/init.d/mosquitto stop",
+            "restart": "/etc/init.d/mosquitto restart",
+            "status": "/etc/init.d/mosquitto status",
+        }
+        if action not in cmd_map:
+            return {"ok": False, "error": "accion invalida para queue"}
+        rc, out, err = _node_ssh(R4_HOST, R4_USER, R4_KEY, f"queue-{action}", cmd_map[action], timeout=20)
+        return {"ok": rc == 0, "rc": rc, "stdout": out, "stderr": err}
+
+    if service == "sensor":
+        cmd_map = {
+            "on": "/etc/init.d/network-sensor start",
+            "off": "/etc/init.d/network-sensor stop",
+            "restart": "/etc/init.d/network-sensor restart",
+            "status": "/etc/init.d/network-sensor status",
+        }
+        if action not in cmd_map:
+            return {"ok": False, "error": "accion invalida para sensor"}
+        rc, out, err = _sensor_ssh(f"sensor-{action}", cmd_map[action], timeout=20)
+        return {"ok": rc == 0, "rc": rc, "stdout": out, "stderr": err}
+
+    if service == "captive":
+        if action not in {"lentium", "clasico", "status"}:
+            return {"ok": False, "error": "accion invalida para captive"}
+        rc, out, err = _node_ssh(
+            R4_HOST, R4_USER, R4_KEY, f"captive-{action}",
+            f"bash {REPO_PATH}/scripts/portal-switch.sh {action}",
+            timeout=20,
+        )
+        return {"ok": rc == 0, "rc": rc, "stdout": out, "stderr": err}
+
+    return {"ok": False, "error": "servicio invalido"}
 
 # =============================================================================
 # Obtener IP del cliente
@@ -480,6 +622,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except FileNotFoundError:
             self._respond(404, {"error": "portal.html no encontrado"})
 
+    def _serve_static_html(self, filename: str):
+        fpath = Path(__file__).parent / filename
+        try:
+            body = fpath.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self._respond(404, {"error": f"{filename} no encontrado"})
+
     def do_OPTIONS(self):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin",  "*")
@@ -492,6 +646,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if self.path in ("/", "/portal", "/index.html"):
             self._serve_portal()
+            return
+
+        if self.path in ("/services", "/services/"):
+            self._serve_static_html("services.html")
             return
 
         if self.path in ("/people", "/people/", "/demoDashboard", "/demoDashboard/"):
@@ -560,6 +718,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(200, _build_demo_dashboard_payload())
             return
 
+        if self.path == "/api/services/status":
+            self._respond(200, _service_status())
+            return
+
         log.warning(f"GET {self.path} — no encontrado")
         self._respond(404, {"error": "not found"})
 
@@ -595,6 +757,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
             save_guest(data, client_ip)
             ok = authorize_client(client_ip)
             self._respond(200 if ok else 500, {"ok": ok, "ip": client_ip})
+            return
+
+        if self.path == "/api/services/action":
+            service = str(data.get("service", "")).strip()
+            action = str(data.get("action", "")).strip()
+            if not service or not action:
+                self._respond(400, {"ok": False, "error": "service y action son requeridos"})
+                return
+            result = _service_action(service, action)
+            status_code = 200 if result.get("ok") else 500
+            self._respond(status_code, {
+                "ok": bool(result.get("ok")),
+                "service": service,
+                "action": action,
+                "result": result,
+                "status": _service_status(),
+            })
             return
 
         # ── Compatibilidad con portal anterior (/accept) ─────────────────────

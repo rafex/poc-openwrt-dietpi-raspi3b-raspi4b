@@ -26,6 +26,7 @@ import logging
 import os
 import pathlib
 import queue
+import re
 import sqlite3
 import threading
 import time
@@ -71,6 +72,29 @@ SOCIAL_NETWORK_DOMAINS = {
 SOCIAL_DOMAIN_SET = {
     d for doms in SOCIAL_NETWORK_DOMAINS.values() for d in doms
 }
+
+RULE_ANALYSIS_KEY = "analysis_prompt_template"
+RULE_ACTION_KEY = "action_prompt_template"
+
+DEFAULT_ANALYSIS_PROMPT_TEMPLATE = (
+    "Eres analista SOC para red WiFi pública.\n"
+    "Analiza este resumen de tráfico:\n"
+    "{traffic}\n\n"
+    "Responde en español con:\n"
+    "1) Riesgo (BAJO/MEDIO/ALTO)\n"
+    "2) 2-3 hallazgos accionables\n"
+    "3) Recomendación breve."
+)
+
+DEFAULT_ACTION_PROMPT_TEMPLATE = (
+    "Eres motor de decisiones de seguridad. Tu salida debe ser JSON estricto.\n"
+    "Contexto:\n"
+    "{policy_context}\n\n"
+    "Regla base: de {start_hour}:00 a {end_hour}:00 no debe haber tráfico de redes sociales.\n"
+    "Si hay evidencia suficiente, decide 'block'. Si no hay evidencia o fuera de horario, decide 'unblock' o 'none'.\n"
+    "Salida JSON exacta:\n"
+    "{\"action\":\"block|unblock|none\",\"reason\":\"texto corto\"}"
+)
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -143,11 +167,37 @@ def init_db():
             details     TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS ai_rules (
+            key         TEXT PRIMARY KEY,
+            value       TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS model_prompt_logs (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp    TEXT NOT NULL,
+            batch_id     INTEGER,
+            prompt_type  TEXT NOT NULL,
+            prompt       TEXT NOT NULL,
+            response     TEXT,
+            meta         TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_batches_status   ON batches(status);
         CREATE INDEX IF NOT EXISTS idx_analyses_batch   ON analyses(batch_id);
         CREATE INDEX IF NOT EXISTS idx_analyses_created ON analyses(timestamp DESC);
         CREATE INDEX IF NOT EXISTS idx_policy_created   ON policy_actions(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_prompt_type      ON model_prompt_logs(prompt_type, id DESC);
     """)
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT OR IGNORE INTO ai_rules (key,value,updated_at) VALUES (?,?,?)",
+        (RULE_ANALYSIS_KEY, DEFAULT_ANALYSIS_PROMPT_TEMPLATE, now),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO ai_rules (key,value,updated_at) VALUES (?,?,?)",
+        (RULE_ACTION_KEY, DEFAULT_ACTION_PROMPT_TEMPLATE, now),
+    )
     conn.commit()
     conn.close()
     log.info("SQLite inicializado en %s", DB_PATH)
@@ -290,7 +340,112 @@ def db_get_policy_actions(limit: int = 50) -> list:
     return items
 
 
+def db_get_rule(key: str, fallback: str = "") -> str:
+    conn = db_connect()
+    row = conn.execute("SELECT value FROM ai_rules WHERE key=?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else fallback
+
+
+def db_set_rule(key: str, value: str):
+    now = datetime.now(timezone.utc).isoformat()
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO ai_rules (key,value,updated_at) VALUES (?,?,?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        (key, value, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_rules() -> dict:
+    conn = db_connect()
+    rows = conn.execute("SELECT key,value,updated_at FROM ai_rules ORDER BY key").fetchall()
+    conn.close()
+    out = {}
+    for r in rows:
+        out[r["key"]] = {"value": r["value"], "updated_at": r["updated_at"]}
+    return out
+
+
+def db_log_prompt(prompt_type: str, prompt: str, response: str, batch_id: int | None = None, meta: dict | None = None):
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO model_prompt_logs (timestamp,batch_id,prompt_type,prompt,response,meta) VALUES (?,?,?,?,?,?)",
+        (
+            datetime.now(timezone.utc).isoformat(),
+            batch_id,
+            prompt_type,
+            prompt,
+            response,
+            json.dumps(meta or {}, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_prompt_logs(limit: int = 50, prompt_type: str | None = None) -> list:
+    conn = db_connect()
+    if prompt_type:
+        rows = conn.execute(
+            "SELECT id,timestamp,batch_id,prompt_type,prompt,response,meta FROM model_prompt_logs "
+            "WHERE prompt_type=? ORDER BY id DESC LIMIT ?",
+            (prompt_type, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT id,timestamp,batch_id,prompt_type,prompt,response,meta FROM model_prompt_logs "
+            "ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    conn.close()
+    items = []
+    for r in rows:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        items.append({
+            "id": r["id"],
+            "timestamp": r["timestamp"],
+            "batch_id": r["batch_id"],
+            "prompt_type": r["prompt_type"],
+            "prompt": r["prompt"],
+            "response": r["response"],
+            "meta": meta,
+        })
+    items.reverse()
+    return items
+
+
 # ─── Prompt builder ───────────────────────────────────────────────────────────
+def _safe_format(template: str, context: dict) -> str:
+    text = template
+    for k, v in context.items():
+        text = text.replace("{" + k + "}", str(v))
+    return text
+
+
+def _wrap_prompt(user_body: str, system_text: str) -> str:
+    if MODEL_FORMAT == "qwen":
+        return (
+            "<|im_start|>system\n"
+            f"{system_text}\n"
+            "<|im_end|>\n"
+            f"<|im_start|>user\n{user_body}<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
+    return (
+        "<|system|>\n"
+        f"{system_text}\n"
+        "</s>\n"
+        f"<|user|>\n{user_body}</s>\n"
+        "<|assistant|>\n"
+    )
+
+
 def _prompt_body(summary: dict) -> str:
     """Cuerpo del prompt — formato compacto ~120 tokens, válido para cualquier modelo."""
     duration = summary.get("duration_seconds", 30)
@@ -326,28 +481,31 @@ def _prompt_body(summary: dict) -> str:
         f"IPs:{talkers_str}\n"
         f"Ports:{ports_str}\n"
         f"DNS:{dns_str}\n"
-        f"Alertas:{susp_str}\n\n"
-        "Riesgo(BAJO/MEDIO/ALTO) y 2-3 puntos clave de seguridad."
+        f"Alertas:{susp_str}\n"
     )
 
 
-def build_prompt(summary: dict) -> str:
-    body = _prompt_body(summary)
-    if MODEL_FORMAT == "qwen":
-        return (
-            "<|im_start|>system\n"
-            "Analista de seguridad de redes WiFi. Responde en español, conciso.\n"
-            "<|im_end|>\n"
-            f"<|im_start|>user\n{body}<|im_end|>\n"
-            "<|im_start|>assistant\n"
-        )
-    # TinyLlama / default — ChatML con tokens </s>
-    return (
-        "<|system|>\n"
-        "Analista de seguridad de redes WiFi. Responde en español, conciso.\n"
-        "</s>\n"
-        f"<|user|>\n{body}</s>\n"
-        "<|assistant|>\n"
+def build_analysis_prompt(summary: dict) -> str:
+    traffic = _prompt_body(summary)
+    tpl = db_get_rule(RULE_ANALYSIS_KEY, DEFAULT_ANALYSIS_PROMPT_TEMPLATE)
+    user_body = _safe_format(tpl, {"traffic": traffic})
+    return _wrap_prompt(
+        user_body=user_body,
+        system_text="Analista SOC de seguridad WiFi. Responde en español claro.",
+    )
+
+
+def build_action_prompt(policy_context: dict) -> str:
+    tpl = db_get_rule(RULE_ACTION_KEY, DEFAULT_ACTION_PROMPT_TEMPLATE)
+    ctx = {
+        "policy_context": json.dumps(policy_context, ensure_ascii=False, indent=2),
+        "start_hour": SOCIAL_POLICY_START_HOUR,
+        "end_hour": SOCIAL_POLICY_END_HOUR,
+    }
+    user_body = _safe_format(tpl, ctx)
+    return _wrap_prompt(
+        user_body=user_body,
+        system_text="Motor de decisión de políticas de red. Entrega salida en JSON estricto.",
     )
 
 
@@ -436,7 +594,24 @@ def detect_social_traffic(summary: dict) -> dict:
     }
 
 
-def evaluate_and_apply_social_policy(summary: dict) -> dict:
+def _extract_action_json(text: str) -> dict | None:
+    if not text:
+        return None
+    m = re.search(r"\{.*\}", text, flags=re.S)
+    if not m:
+        return None
+    try:
+        obj = json.loads(m.group(0))
+    except Exception:
+        return None
+    action = str(obj.get("action", "")).strip().lower()
+    if action not in {"block", "unblock", "none"}:
+        return None
+    reason = str(obj.get("reason", "")).strip()
+    return {"action": action, "reason": reason}
+
+
+def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
     result = {
         "enabled": SOCIAL_BLOCK_ENABLED,
         "in_window": False,
@@ -460,19 +635,52 @@ def evaluate_and_apply_social_policy(summary: dict) -> dict:
     social = detect_social_traffic(summary)
     hits = social["total_hits"]
     should_block = in_window and hits >= SOCIAL_MIN_HITS
+    base_action = "block" if should_block else ("unblock" if policy_state.get("social_block_active", False) else "none")
+
+    policy_context = {
+        "local_hour": local_hour,
+        "timezone": SOCIAL_POLICY_TZ,
+        "in_window": in_window,
+        "social_hits": hits,
+        "social_min_hits": SOCIAL_MIN_HITS,
+        "social_per_network": social["per_network"],
+        "social_domains": social["matched_domains"],
+        "base_action": base_action,
+        "block_active": policy_state.get("social_block_active", False),
+    }
+
+    action_prompt = build_action_prompt(policy_context)
+    action_response = call_llama(action_prompt)
+    db_log_prompt(
+        prompt_type="action",
+        prompt=action_prompt,
+        response=action_response,
+        batch_id=batch_id,
+        meta={"policy_context": policy_context},
+    )
+    parsed = _extract_action_json(action_response)
+    if parsed:
+        llm_action = parsed["action"]
+        llm_reason = parsed.get("reason", "")
+    else:
+        llm_action = base_action
+        llm_reason = "fallback_base_action"
 
     result.update({
         "in_window": in_window,
         "should_block": should_block,
         "social_hits": hits,
         "social": social,
+        "base_action": base_action,
+        "llm_action": llm_action,
+        "llm_reason": llm_reason,
     })
 
     active = policy_state.get("social_block_active", False)
-    if should_block and not active:
+    if llm_action == "block" and not active:
         ok, msg = router_mcp.apply_social_block(SOCIAL_DOMAIN_SET)
         result["action"] = "block_on"
-        result["reason"] = f"hits={hits} in_window={in_window}"
+        result["reason"] = f"hits={hits} in_window={in_window} llm={llm_reason}"
         result["router_ok"] = ok
         result["router_msg"] = msg
         if ok:
@@ -482,10 +690,10 @@ def evaluate_and_apply_social_policy(summary: dict) -> dict:
             db_store_policy_action("social_block_on_error", result["reason"], result)
         return result
 
-    if (not should_block) and active:
+    if llm_action == "unblock" and active:
         ok, msg = router_mcp.remove_social_block()
         result["action"] = "block_off"
-        result["reason"] = f"hits={hits} in_window={in_window}"
+        result["reason"] = f"hits={hits} in_window={in_window} llm={llm_reason}"
         result["router_ok"] = ok
         result["router_msg"] = msg
         if ok:
@@ -504,8 +712,15 @@ def evaluate_and_apply_social_policy(summary: dict) -> dict:
 def analyze_and_store(batch_id: int, summary: dict):
     """Ejecuta prompt → llama → guarda en SQLite → broadcast SSE."""
     t0       = time.time()
-    prompt   = build_prompt(summary)
+    prompt   = build_analysis_prompt(summary)
     analysis = call_llama(prompt)
+    db_log_prompt(
+        prompt_type="analysis",
+        prompt=prompt,
+        response=analysis,
+        batch_id=batch_id,
+        meta={"sensor_ip": summary.get("sensor_ip")},
+    )
     elapsed  = round(time.time() - t0, 1)
 
     risk = "BAJO"
@@ -516,7 +731,7 @@ def analyze_and_store(batch_id: int, summary: dict):
         risk = "MEDIO"
     if summary.get("suspicious"):
         risk = "MEDIO" if risk == "BAJO" else risk
-    policy_result = evaluate_and_apply_social_policy(summary)
+    policy_result = evaluate_and_apply_social_policy(batch_id, summary)
 
     result = {
         "id":               stats["analyses_ok"] + 1,
@@ -691,6 +906,9 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
         if path in ("/terminal", "/terminal/"):
             self._serve_html("terminal.html"); return
 
+        if path in ("/rulez", "/rulez/"):
+            self._serve_html("rulez.html"); return
+
         if path == "/health":
             llama_ok = False
             try:
@@ -746,6 +964,18 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 "actions": db_get_policy_actions(limit),
             })
 
+        elif path == "/api/rulez":
+            self.send_json({"rules": db_get_rules()})
+
+        elif path == "/api/prompt-logs":
+            limit = int(params.get("limit", ["50"])[0])
+            ptype = params.get("type", [None])[0]
+            self.send_json({
+                "count": limit,
+                "type": ptype,
+                "items": db_get_prompt_logs(limit=limit, prompt_type=ptype),
+            })
+
         elif path == "/api/stream":
             q = queue.Queue(maxsize=50)
             with sse_lock:
@@ -790,6 +1020,25 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
         path   = parsed.path
+
+        if path == "/api/rulez":
+            length = int(self.headers.get("Content-Length", 0))
+            if length == 0:
+                self.send_error_json(400, "Body vacío"); return
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"JSON inválido: {e}"); return
+
+            key = str(payload.get("key", "")).strip()
+            value = str(payload.get("value", "")).strip()
+            if key not in {RULE_ANALYSIS_KEY, RULE_ACTION_KEY}:
+                self.send_error_json(400, "key inválida"); return
+            if not value:
+                self.send_error_json(400, "value vacío"); return
+            db_set_rule(key, value)
+            self.send_json({"ok": True, "rules": db_get_rules()})
+            return
 
         if path == "/api/ingest":
             length = int(self.headers.get("Content-Length", 0))

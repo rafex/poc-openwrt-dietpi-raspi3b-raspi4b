@@ -12,6 +12,7 @@ COPY analyzer.py .
 COPY router_mcp.py .
 COPY dashboard.html .
 COPY terminal.html .
+COPY rulez.html .
 
 EXPOSE 5000
 
