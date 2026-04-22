@@ -237,38 +237,74 @@ else
     fi
     ok "llama.cpp binario: $LLAMA_BIN"
 
-    # Buscar modelo GGUF de TinyLlama
+    # Buscar modelo GGUF — prioridad: Qwen2.5-0.5B > TinyLlama
+    # Qwen2.5-0.5B es más pequeño (~300MB vs ~700MB), carga más rápido y
+    # con el prompt compacto produce respuestas de calidad similar
     LLAMA_MODEL=""
+    MODEL_FORMAT="tinyllama"   # tinyllama | qwen  — controla el formato del prompt en analyzer.py
+
+    # Buscar Qwen2.5-0.5B primero
     for candidate in \
-        /opt/models/tinyllama*.gguf \
-        /opt/llama.cpp/models/tinyllama*.gguf \
-        /home/dietpi/models/tinyllama*.gguf \
-        /home/dietpi/llama.cpp/models/tinyllama*.gguf \
-        /root/models/tinyllama*.gguf \
-        /var/lib/llama/tinyllama*.gguf; do
-        # Usar glob expansion
+        /opt/models/qwen2.5-0.5b*.gguf \
+        /opt/models/Qwen2.5-0.5B*.gguf \
+        /opt/llama.cpp/models/qwen2.5-0.5b*.gguf \
+        /home/dietpi/models/qwen2.5-0.5b*.gguf \
+        /root/models/qwen2.5-0.5b*.gguf \
+        /var/lib/llama/qwen2.5-0.5b*.gguf; do
         for f in $candidate; do
             if [ -f "$f" ]; then
                 LLAMA_MODEL="$f"
+                MODEL_FORMAT="qwen"
                 break 2
             fi
         done
     done
 
+    # Si no hay Qwen, buscar TinyLlama
     if [ -z "$LLAMA_MODEL" ]; then
-        warn "No se encontró modelo TinyLlama .gguf en rutas habituales."
-        warn "Buscando en todo el sistema..."
-        LLAMA_MODEL=$(find / -name "tinyllama*.gguf" -o -name "TinyLlama*.gguf" \
+        for candidate in \
+            /opt/models/tinyllama*.gguf \
+            /opt/llama.cpp/models/tinyllama*.gguf \
+            /home/dietpi/models/tinyllama*.gguf \
+            /home/dietpi/llama.cpp/models/tinyllama*.gguf \
+            /root/models/tinyllama*.gguf \
+            /var/lib/llama/tinyllama*.gguf; do
+            for f in $candidate; do
+                if [ -f "$f" ]; then
+                    LLAMA_MODEL="$f"
+                    MODEL_FORMAT="tinyllama"
+                    break 2
+                fi
+            done
+        done
+    fi
+
+    # Búsqueda global si ninguno apareció en rutas habituales
+    if [ -z "$LLAMA_MODEL" ]; then
+        warn "No se encontró modelo en rutas habituales — buscando en todo el sistema..."
+        LLAMA_MODEL=$(find / \( -name "qwen2.5-0.5b*.gguf" -o -name "Qwen2.5-0.5B*.gguf" \) \
             2>/dev/null | grep -v proc | head -1)
+        [ -n "$LLAMA_MODEL" ] && MODEL_FORMAT="qwen"
+    fi
+    if [ -z "$LLAMA_MODEL" ]; then
+        LLAMA_MODEL=$(find / \( -name "tinyllama*.gguf" -o -name "TinyLlama*.gguf" \) \
+            2>/dev/null | grep -v proc | head -1)
+        [ -n "$LLAMA_MODEL" ] && MODEL_FORMAT="tinyllama"
     fi
 
     if [ -z "$LLAMA_MODEL" ] || [ ! -f "$LLAMA_MODEL" ]; then
-        error "No se encontró el modelo TinyLlama (.gguf)"
-        error "Descárgalo con:"
+        error "No se encontró ningún modelo compatible (.gguf)"
+        error ""
+        error "Opción A — Qwen2.5-0.5B-Instruct Q4 (recomendado, ~300MB más rápido):"
+        error "  mkdir -p /opt/models"
+        error "  wget -O /opt/models/qwen2.5-0.5b-instruct-q4.gguf \\"
+        error "    https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+        error ""
+        error "Opción B — TinyLlama 1.1B Chat Q4 (~700MB):"
         error "  mkdir -p /opt/models"
         error "  wget -O /opt/models/tinyllama-1.1b-chat-q4.gguf \\"
         error "    https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
-        die "Descarga el modelo antes de continuar"
+        die "Descarga uno de los modelos antes de continuar"
     fi
 
     # Resolver symlinks — HuggingFace cache usa symlinks; llama-server necesita el path real
@@ -276,11 +312,10 @@ else
     MODEL_SIZE=$(stat -c%s "$LLAMA_MODEL_REAL" 2>/dev/null || echo 0)
     if [ "$MODEL_SIZE" -lt 100000000 ]; then
         warn "El archivo del modelo parece muy pequeño ($(du -h "$LLAMA_MODEL_REAL" | cut -f1))"
-        warn "Puede ser un symlink roto o descarga incompleta"
-        warn "Path real: $LLAMA_MODEL_REAL"
+        warn "Puede ser un symlink roto o descarga incompleta — path real: $LLAMA_MODEL_REAL"
     fi
     LLAMA_MODEL="$LLAMA_MODEL_REAL"
-    ok "Modelo: $LLAMA_MODEL ($(du -h "$LLAMA_MODEL" | cut -f1))"
+    ok "Modelo: $LLAMA_MODEL ($(du -h "$LLAMA_MODEL" | cut -f1)) — formato=$MODEL_FORMAT"
 fi
 
 # ─── B) Servicio llama.cpp server ────────────────────────────────────────────
@@ -475,6 +510,13 @@ kubectl apply -f "$K8S_DIR/ai-analyzer-deployment.yaml"
 kubectl apply -f "$K8S_DIR/ai-analyzer-svc.yaml"
 kubectl apply -f "$K8S_DIR/ai-analyzer-ingress.yaml"
 ok "ai-analyzer aplicado (con rutas /dashboard y /terminal integradas)"
+
+# Propagar el formato del modelo detectado al pod — controla el prompt en analyzer.py
+if [ -n "$MODEL_FORMAT" ]; then
+    kubectl set env deployment/ai-analyzer MODEL_FORMAT="$MODEL_FORMAT" 2>/dev/null && \
+        ok "MODEL_FORMAT=$MODEL_FORMAT propagado al pod" || \
+        warn "No se pudo propagar MODEL_FORMAT — el pod usará el default (tinyllama)"
+fi
 
 # Limpiar recursos del dashboard separado si existían de una instalación anterior
 for res in deployment/dashboard service/dashboard ingress/dashboard configmap/dashboard-nginx-conf; do
