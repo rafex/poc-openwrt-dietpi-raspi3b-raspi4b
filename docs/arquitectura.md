@@ -101,7 +101,7 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
     │   DietPi + tshark + Python 3 + paho-mqtt             │
     │                                                       │
     │   /etc/init.d/network-sensor                          │
-    │     tshark -i eth0 -p (promiscuo)                    │
+    │     tshark -i eth0 (promiscuo)                       │
     │       18 campos tab-separated:                        │
     │       frame.time_epoch, ip.src, ip.dst, ip.proto,    │
     │       tcp/udp.srcport, tcp/udp.dstport, frame.len,   │

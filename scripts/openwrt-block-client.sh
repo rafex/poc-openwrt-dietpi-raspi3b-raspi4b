@@ -7,7 +7,7 @@
 #   sh scripts/openwrt-block-client.sh 192.168.1.55
 #
 # Efecto: La IP es devuelta al captive portal y bloqueada del acceso libre.
-# NUNCA bloquea 192.168.1.128 (admin).
+# NUNCA bloquea admin (192.168.1.113), portal/RafexPi4B (192.168.1.167) ni RafexPi3B (192.168.1.181).
 #
 # Nota: Si el cliente tiene una conexion HTTP activa (ESTABLISHED en conntrack),
 # puede seguir navegando hasta que la conexion se cierre. Para forzar el
@@ -41,6 +41,11 @@ fi
 # Proteccion adicional: tampoco bloquear la IP del portal mismo
 if [ "$IP" = "$PORTAL_IP" ]; then
     die "No se puede bloquear la IP del portal ($PORTAL_IP)."
+fi
+
+# Regla de oro: tampoco bloquear la Pi de sensor
+if [ "$IP" = "$RASPI3B_IP" ]; then
+    die "SEGURIDAD: No se puede bloquear la IP de RafexPi3B ($RASPI3B_IP)."
 fi
 
 # =============================================================================

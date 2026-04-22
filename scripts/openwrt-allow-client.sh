@@ -2,14 +2,14 @@
 # openwrt-allow-client.sh — Autoriza una IP en el captive portal de OpenWrt
 #
 # Uso:
-#   sh scripts/openwrt-allow-client.sh <IP>              # expira en 30 min (por defecto)
+#   sh scripts/openwrt-allow-client.sh <IP>              # expira segun timeout del set (default: 120m)
 #   sh scripts/openwrt-allow-client.sh <IP> --permanent  # no expira nunca
 #
 # Ejemplos:
 #   sh scripts/openwrt-allow-client.sh 192.168.1.55
 #   sh scripts/openwrt-allow-client.sh 192.168.1.55 --permanent
 #
-# Por defecto, la autorizacion expira en 30 minutos (timeout del set nftables).
+# Por defecto, la autorizacion expira segun timeout del set nftables (PORTAL_TIMEOUT, default 120m).
 # Con --permanent, la IP se agrega con timeout 0s y nunca expira.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -74,9 +74,9 @@ if [ "$PERMANENT" -eq 1 ]; then
         die "No se pudo agregar $IP con timeout 0 al set $NFT_SET"
     MSG="$IP autorizada permanentemente (no expira)"
 else
-    # Sin timeout explícito → hereda el timeout del set (30 minutos)
+    # Sin timeout explícito → hereda el timeout del set (PORTAL_TIMEOUT, default 120m)
     router_add_ip "$IP" || die "No se pudo agregar $IP al set $NFT_SET"
-    MSG="$IP autorizada por 30 minutos — luego volvera al portal"
+    MSG="$IP autorizada por $PORTAL_TIMEOUT — luego volvera al portal"
 fi
 
 router_ip_in_set "$IP" || die "Verificacion fallo: $IP no aparece en $NFT_SET despues de agregar"

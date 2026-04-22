@@ -300,7 +300,7 @@ def capture_thread(aggregator: TrafficAggregator, stop_event: threading.Event):
     cmd = [
         "tshark", "-i", INTERFACE,
         "-l",                           # flush inmediato por línea
-        "-p",                           # modo promiscuo
+        # sin -p: tshark queda en modo promiscuo (default)
         "-T", "fields",
         "-E", "separator=\t",
         "-E", "quote=n",

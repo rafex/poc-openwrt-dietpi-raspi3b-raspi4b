@@ -15,7 +15,7 @@
 # Despues de ejecutar este script, el portal queda INACTIVO.
 # Para reactivarlo: sh scripts/setup-openwrt.sh
 #
-# SEGURIDAD: El admin (192.168.1.128) siempre tiene acceso independientemente
+# SEGURIDAD: El admin (192.168.1.113) siempre tiene acceso independientemente
 # de este script (fw4 base lo permite).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

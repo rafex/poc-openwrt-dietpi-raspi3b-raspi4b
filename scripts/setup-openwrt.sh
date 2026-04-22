@@ -10,7 +10,7 @@
 #   - Conectividad de red entre la Pi y el router (192.168.1.1)
 #
 # SEGURIDAD:
-#   - La IP 192.168.1.128 (admin) NUNCA sera bloqueada
+#   - La IP 192.168.1.113 (admin) NUNCA sera bloqueada
 #   - En caso de emergencia: ssh root@192.168.1.1 y ejecutar:
 #       nft delete table ip captive
 

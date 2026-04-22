@@ -7,7 +7,8 @@
 #
 # Efecto:
 #   - Elimina TODOS los clientes autorizados del set allowed_clients
-#   - Conserva SOLO las IPs base: admin (192.168.1.128) y portal (192.168.1.167)
+#   - Conserva SOLO las IPs base permanentes:
+#       admin (192.168.1.113), portal/RafexPi4B (192.168.1.167), RafexPi3B (192.168.1.181)
 #   - Todos los clientes WiFi vuelven al captive portal inmediatamente
 #   - Limpia conntrack para forzar reconexion (evita bypass por ESTABLISHED)
 #
@@ -55,14 +56,14 @@ CURRENT=$(router_ssh "nft list set $NFT_TABLE $NFT_SET 2>/dev/null" | \
 CLIENT_COUNT=0
 for ip in $CURRENT; do
     case "$ip" in
-        "$ADMIN_IP"|"$PORTAL_IP") ;;
+        "$ADMIN_IP"|"$PORTAL_IP"|"$RASPI3B_IP") ;;
         *) CLIENT_COUNT=$((CLIENT_COUNT + 1)) ;;
     esac
     printf '  %s\n' "$ip"
 done
 
 if [ "$CLIENT_COUNT" -eq 0 ]; then
-    log_info "No hay clientes autorizados en este momento (solo admin y portal)"
+    log_info "No hay clientes autorizados en este momento (solo IPs permanentes base)"
     exit 0
 fi
 
@@ -91,16 +92,20 @@ router_ssh "nft flush set $NFT_TABLE $NFT_SET" || \
     die "No se pudo hacer flush del set $NFT_SET"
 
 # Restaurar IPs base como permanentes (timeout 0s = nunca expiran)
-log_info "Restaurando IPs base (admin y portal como permanentes)..."
+log_info "Restaurando IPs base permanentes (admin, portal y RafexPi3B)..."
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0s }" || \
     die "No se pudo restaurar $ADMIN_IP"
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" || \
     die "No se pudo restaurar $PORTAL_IP"
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI3B_IP timeout 0s }" || \
+    die "No se pudo restaurar $RASPI3B_IP"
 
 # Verificar que las IPs base estan presentes
 router_ip_in_set "$ADMIN_IP" || die "CRITICO: $ADMIN_IP no esta en el set tras el flush"
 log_ok "Admin $ADMIN_IP restaurado como permanente"
 log_ok "Portal $PORTAL_IP restaurado como permanente"
+router_ip_in_set "$RASPI3B_IP" || die "CRITICO: $RASPI3B_IP no esta en el set tras el flush"
+log_ok "RafexPi3B $RASPI3B_IP restaurada como permanente"
 
 # Limpiar conntrack para forzar que las conexiones ESTABLISHED no bypaseen el bloqueo
 log_info "Limpiando conntrack..."

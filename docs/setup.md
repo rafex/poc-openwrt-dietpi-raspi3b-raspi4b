@@ -278,14 +278,14 @@ El pod `dns-spoof` es completamente independiente del captive portal.
 
 ### OpenWrt
 - `nft` exclusivamente — **no `iptables`** (OpenWrt 25.x usa nftables)
-- Servicios con `/etc/init.d/` — **no `systemctl`**
+- Servicios con `/etc/init.d/` (OpenWrt no usa `systemctl`)
 - Overlay del router: ~840KB
 - `timeout 0` sin unidad NO es válido — usar `timeout 0s`
 - Matching por subred (`ip saddr 192.168.1.0/24`) porque `iifname "phy0-ap0"` no funciona con bridge `br-lan`
 
 ### DietPi (ambas Raspis)
-- No usa systemd como PID 1 — verificar con `ps aux`
-- Servicios: `/etc/init.d/` + `update-rc.d defaults`
+- Priorizar servicios con `/etc/init.d/` + `update-rc.d defaults`
+- Si `systemctl` existe y está activo, puede usarse como fallback en algunos scripts
 - Builds con `podman build --cgroup-manager=cgroupfs --runtime=runc`
 - `podman save | k3s ctr images import -`
 

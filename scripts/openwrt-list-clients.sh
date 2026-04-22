@@ -57,7 +57,7 @@ if router_set_exists; then
     fi
 
     # nft list set muestra las IPs con formato:
-    #   elements = { 192.168.1.128 timeout 0s expires 0s, 192.168.1.55 expires 28m30s, ... }
+    #   elements = { 192.168.1.113 timeout 0s expires 0s, 192.168.1.55 expires 118m30s, ... }
     # Extraemos IP + expires con awk
     printf '%s' "$SET_RAW" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+[^,}]*' | \
         while IFS= read -r entry; do
@@ -70,7 +70,7 @@ if router_set_exists; then
             elif [ -n "$expires" ]; then
                 time_str="$expires"
             else
-                time_str="30m (nuevo)"
+                time_str="$PORTAL_TIMEOUT (nuevo)"
             fi
 
             if [ "$ip" = "$ADMIN_IP" ]; then
