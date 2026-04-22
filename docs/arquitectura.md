@@ -49,12 +49,26 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
     │   Traefik 3.6.10 (LoadBalancer :80)                   │
     │     externalTrafficPolicy: Local                      │
     │                                                       │
-    │   Pod captive-portal (2/2)                            │
+    │   Pod captive-portal-lentium (2/2)  ← ACTIVO           │
     │     [portal]   nginx:alpine :80                       │
     │       set_real_ip_from 10.42.0.0/16                   │
-    │       sirve HTML portal + redirige detección          │
+    │       proxy_pass al backend para /portal /api/ /accept│
+    │     [backend]  captive-backend-lentium :8080          │
+    │       GET /portal  → portal.html (Lentium)            │
+    │       POST /api/register/client → SQLite + nft        │
+    │       POST /api/register/guest  → SQLite + nft        │
+    │       POST /accept → compatibilidad portal clásico    │
+    │       GET /api/registros/clientes|invitados            │
+    │       SQLite /data/lentium.db                         │
+    │         clientes: telefono, pwd_plano, pwd_hash, ip   │
+    │         invitados: nombre, apellidos, telefono,        │
+    │                   dirección OSM, pwd_plano, pwd_hash,  │
+    │                   redes_sociales, ip                   │
+    │                                                       │
+    │   Pod captive-portal (0/1) ← RESPALDO (réplicas=0)   │
+    │     [portal]   nginx:alpine :80                       │
     │     [backend]  captive-backend :8080                  │
-    │       POST /accept → SSH+nft al router                │
+    │       POST /accept → SSH+nft al router (clásico)      │
     │                                                       │
     │   Pod ai-analyzer (1/1)                               │
     │     python:3.11-alpine :5000                          │
@@ -75,8 +89,9 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
     │     Ingress: Host rafex.dev / www.rafex.dev           │
     │                                                       │
     │   hostPath volumes:                                   │
-    │     /opt/keys/captive-portal → pod captive-portal     │
-    │     /opt/analyzer/data/      → pod ai-analyzer        │
+    │     /opt/keys/captive-portal          → ambos portals │
+    │     /opt/captive-portal/lentium-data/ → lentium DB    │
+    │     /opt/analyzer/data/               → ai-analyzer   │
     └───────────────────────────────────────────────────────┘
                 ▲  MQTT publish QoS=1 (rafexpi/sensor/batch)
                 │  HTTP POST /api/ingest (fallback)
@@ -112,7 +127,7 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
 
 ---
 
-## Flujo completo — cliente WiFi nuevo
+## Flujo completo — cliente WiFi nuevo (portal Lentium)
 
 ```
 1. Cliente conecta al WiFi "INFINITUM MOVIL"
@@ -120,20 +135,29 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
 2. DHCP le asigna IP 192.168.1.x  (lease 120 minutos)
         ↓
 3. SO detecta captive portal:
-   GET http://connectivitycheck.gstatic.com/
+   GET http://connectivitycheck.gstatic.com/generate_204
         ↓  dnsmasq → 192.168.1.167
         ↓  nftables DNAT tcp dport 80 → 192.168.1.167:80
         ↓
 4. Traefik (externalTrafficPolicy:Local) recibe con IP real del cliente
         ↓
 5. nginx extrae IP real de X-Forwarded-For → $remote_addr = 192.168.1.X
-   sirve index.html (portal de bienvenida)
         ↓
-6. Cliente acepta → fetch POST /accept
+6. nginx redirige GET /generate_204 → 302 http://192.168.1.167/portal
         ↓
-7. nginx proxy_pass → http://127.0.0.1:8080/accept  (X-Real-IP: 192.168.1.X)
+7. Cliente ve el portal Lentium (portal.html — marca Lentium/Tortugatel/Buffercel)
+        │
+        ├── Tab "Soy Cliente": teléfono + contraseña
+        │         ↓  POST /api/register/client
+        │
+        └── Tab "Soy Invitado": nombre, apellidos, teléfono,
+                  dirección OSM (Nominatim autocomplete),
+                  contraseña, redes sociales (≥1)
+                        ↓  POST /api/register/guest
         ↓
-8. backend Python → SSH al router → nft add element allowed_clients { 192.168.1.X }
+8. backend Python:
+   - Guarda en SQLite: pwd_plano (texto claro) + pwd_hash (SHA-256)
+   - SSH al router → nft add element allowed_clients { 192.168.1.X }
         ↓
 9. Cliente navega libremente (timeout 120m en el set)
         ↓
