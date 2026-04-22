@@ -60,6 +60,11 @@ LLAMA_SERVICE="/etc/init.d/llama-server"
 LLAMA_PIDFILE="/var/run/llama-server.pid"
 LLAMA_LOGFILE="/var/log/llama-server.log"
 
+# ─── Verificación de root (antes de cualquier escritura) ─────────────────────
+if [ "$EUID" -ne 0 ]; then
+    die "Ejecutar como root: sudo bash $0"
+fi
+
 # ─── Hostname ─────────────────────────────────────────────────────────────────
 step "Configurando hostname: $HOSTNAME_NEW"
 
@@ -138,17 +143,13 @@ reserve_dhcp_on_router
 # ─── Verificaciones previas ───────────────────────────────────────────────────
 step "Pre-flight checks"
 
-if [ "$EUID" -ne 0 ]; then
-    die "Ejecutar como root: sudo bash $0"
-fi
-
 if ! command -v kubectl &>/dev/null; then
     die "kubectl no encontrado — ¿está k3s instalado?"
 fi
 
 if ! kubectl get nodes &>/dev/null; then
     info "k3s no está corriendo — intentando iniciar..."
-    /etc/init.d/k3s start 2>/dev/null || service k3s start 2>/dev/null || true
+    systemctl start k3s 2>/dev/null || /etc/init.d/k3s start 2>/dev/null || true
     sleep 15
     kubectl get nodes || die "No se pudo arrancar k3s"
 fi
@@ -172,31 +173,40 @@ else
 fi
 
 # Configuración: escuchar en todas las interfaces, sin autenticación (demo)
+# El mosquitto.conf base de Debian/DietPi ya define:
+#   persistence, persistence_location, log_dest file, log_type
+# conf.d/ solo puede añadir lo que NO está en el conf base — duplicar cualquiera
+# de esas directivas causa "Duplicate value" y falla el arranque
 MOSQUITTO_CONF="/etc/mosquitto/conf.d/rafexpi.conf"
 cat > "$MOSQUITTO_CONF" << 'EOF'
 # RafexPi — Mosquitto MQTT broker
 listener 1883 0.0.0.0
 allow_anonymous true
-persistence true
-persistence_location /var/lib/mosquitto/
-log_dest file /var/log/mosquitto.log
-log_type error
-log_type warning
-log_type information
 EOF
 ok "Mosquitto configurado en $MOSQUITTO_CONF"
 
-# Habilitar y reiniciar
-if command -v update-rc.d &>/dev/null; then
+# Habilitar y reiniciar — detecta si el sistema usa systemd o init.d
+if systemctl is-system-running --quiet 2>/dev/null || systemctl status &>/dev/null 2>&1; then
+    # systemd activo (DietPi con systemd, Debian estándar)
+    systemctl enable mosquitto 2>/dev/null || true
+    systemctl restart mosquitto
+else
+    # Sin systemd — init.d directo
     update-rc.d mosquitto defaults 2>/dev/null || true
+    if [ -x /etc/init.d/mosquitto ]; then
+        /etc/init.d/mosquitto restart 2>/dev/null || /etc/init.d/mosquitto start
+    else
+        mosquitto -c /etc/mosquitto/mosquitto.conf -d
+    fi
 fi
-/etc/init.d/mosquitto restart 2>/dev/null || service mosquitto restart 2>/dev/null || true
 sleep 2
 
 if mosquitto_pub -h 127.0.0.1 -t "test/ping" -m "pong" 2>/dev/null; then
     ok "Mosquitto escuchando en :1883"
 else
-    warn "Mosquitto no responde — verifica: /etc/init.d/mosquitto status"
+    warn "Mosquitto no responde — revisa el log:"
+    warn "  journalctl -u mosquitto --no-pager -n 20"
+    warn "  mosquitto -c /etc/mosquitto/mosquitto.conf  (test manual)"
 fi
 
 step "A) Localizando llama.cpp y modelo TinyLlama"
@@ -465,28 +475,39 @@ EOF
     fi
 
     # Watchdog via cron: si el proceso muere, lo relanza automáticamente
-    # /etc/cron.d/ es leído automáticamente por el demonio cron — no requiere crontab
+    # El comando en /etc/cron.d/ debe ser una sola línea — NO admite \ como continuación.
+    # Solución: escribir un script separado y llamarlo desde cron.
     if ! command -v cron &>/dev/null && ! command -v crond &>/dev/null; then
         info "Instalando cron (necesario para el watchdog)..."
         apt-get install -y --no-install-recommends cron
-        update-rc.d cron defaults 2>/dev/null || true
-        /etc/init.d/cron start 2>/dev/null || service cron start 2>/dev/null || true
+        if systemctl is-system-running --quiet 2>/dev/null; then
+            systemctl enable --now cron
+        else
+            update-rc.d cron defaults 2>/dev/null || true
+            /etc/init.d/cron start 2>/dev/null || true
+        fi
         ok "cron instalado e iniciado"
     else
         ok "cron ya disponible: $(command -v cron || command -v crond)"
     fi
 
-    WATCHDOG_CRON="/etc/cron.d/llama-watchdog"
-    cat > "$WATCHDOG_CRON" << EOF
-# llama-server watchdog — relanza el servicio si se cae
-* * * * * root PIDFILE=$LLAMA_PIDFILE SERVICE=$LLAMA_SERVICE LOGFILE=$LLAMA_LOGFILE; \\
-  if ! [ -f "\$PIDFILE" ] || ! kill -0 "\$(cat \$PIDFILE 2>/dev/null)" 2>/dev/null; then \\
-    echo "\$(date '+%Y-%m-%d %T') [watchdog] llama-server no responde, relanzando..." >> "\$LOGFILE"; \\
-    "\$SERVICE" start >> "\$LOGFILE" 2>&1; \\
-  fi
+    WATCHDOG_SCRIPT="/usr/local/bin/llama-watchdog"
+    cat > "$WATCHDOG_SCRIPT" << EOF
+#!/bin/sh
+PIDFILE="$LLAMA_PIDFILE"
+SERVICE="$LLAMA_SERVICE"
+LOGFILE="$LLAMA_LOGFILE"
+if ! [ -f "\$PIDFILE" ] || ! kill -0 "\$(cat \$PIDFILE 2>/dev/null)" 2>/dev/null; then
+    echo "\$(date '+%Y-%m-%d %T') [watchdog] llama-server no responde, relanzando..." >> "\$LOGFILE"
+    "\$SERVICE" start >> "\$LOGFILE" 2>&1
+fi
 EOF
+    chmod 755 "$WATCHDOG_SCRIPT"
+
+    WATCHDOG_CRON="/etc/cron.d/llama-watchdog"
+    echo "* * * * * root $WATCHDOG_SCRIPT" > "$WATCHDOG_CRON"
     chmod 644 "$WATCHDOG_CRON"
-    ok "Watchdog instalado en $WATCHDOG_CRON (comprueba cada minuto)"
+    ok "Watchdog instalado: $WATCHDOG_SCRIPT (cron cada minuto)"
 
     # Iniciar llama-server
     info "Iniciando llama-server (puede tardar mientras carga el modelo)..."
