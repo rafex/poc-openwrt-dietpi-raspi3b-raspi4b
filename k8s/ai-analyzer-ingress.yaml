@@ -9,7 +9,37 @@ spec:
   rules:
     - http:
         paths:
-          - path: /api
+          # Publicar solo endpoints propios del analyzer para no interceptar
+          # rutas del portal cautivo como /api/register/client|guest.
+          - path: /api/history
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/stats
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/queue
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/stream
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/ingest
             pathType: Prefix
             backend:
               service:
