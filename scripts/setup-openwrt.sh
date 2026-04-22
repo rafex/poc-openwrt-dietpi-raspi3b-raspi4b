@@ -16,6 +16,7 @@
 #
 # Variables opcionales:
 #   CAPTIVE_DOMAIN=captive.localhost.com   # dominio local de fallback para abrir portal manualmente
+#   PEOPLE_DOMAIN=people.localhost.com     # subdominio para dashboard de registros/conectados
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -61,6 +62,7 @@ printf '[INFO]  Log file: %s\n' "$LOG_FILE"
 
 . "$SCRIPT_DIR/lib/common.sh"
 CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.localhost.com}"
+PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.localhost.com}"
 
 # =============================================================================
 # Pre-flight checks
@@ -153,6 +155,7 @@ address=/nmcheck.gnome.org/$PORTAL_IP
 
 # Dominio local de fallback (manual)
 address=/$CAPTIVE_DOMAIN/$PORTAL_IP
+address=/$PEOPLE_DOMAIN/$PORTAL_IP
 
 "
 
@@ -447,6 +450,14 @@ else
     log_warn "No se pudo verificar $CAPTIVE_DOMAIN en dnsmasq"
 fi
 
+log_info "Verificando dominio people..."
+PEOPLE_RESOLVED=$(router_ssh "nslookup $PEOPLE_DOMAIN 127.0.0.1 2>/dev/null | grep 'Address' | tail -1" 2>/dev/null || echo "")
+if printf '%s' "$PEOPLE_RESOLVED" | grep -q "$PORTAL_IP"; then
+    log_ok "dnsmasq resuelve correctamente: $PEOPLE_DOMAIN -> $PORTAL_IP"
+else
+    log_warn "No se pudo verificar $PEOPLE_DOMAIN en dnsmasq"
+fi
+
 # Resumen final
 printf '\n'
 log_ok "=== Setup de OpenWrt completado ==="
@@ -460,6 +471,7 @@ printf '  AP interface:  %s\n' "$AP_IFACE"
 printf '  Portal timeout: %s (acceso WiFi invitados)\n' "$PORTAL_TIMEOUT"
 printf '  DHCP leasetime: 120m\n'
 printf '  Fallback portal: http://%s/portal\n' "$CAPTIVE_DOMAIN"
+printf '  Dashboard people: http://%s/people\n' "$PEOPLE_DOMAIN"
 printf '\n'
 log_info "Comandos utiles:"
 printf '  Listar clientes:    sh scripts/openwrt-list-clients.sh\n'

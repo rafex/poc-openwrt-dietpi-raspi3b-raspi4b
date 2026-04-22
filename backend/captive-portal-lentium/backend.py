@@ -367,7 +367,7 @@ def _demo_dashboard_html() -> bytes:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>demoDashboard · Lentium</title>
+  <title>people · Lentium</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0b1f33; color: #e8f0f8; }
     .wrap { max-width: 1200px; margin: 0 auto; padding: 18px; }
@@ -388,7 +388,7 @@ def _demo_dashboard_html() -> bytes:
 </head>
 <body>
   <div class="wrap">
-    <h1>demoDashboard · Lentium</h1>
+    <h1>people · Lentium</h1>
     <div class="sub">Registros y clientes conectados en tiempo real (auto-refresh 5s)</div>
     <div class="cards">
       <div class="card"><div class="n" id="nClientes">0</div><div class="label">Clientes registrados</div></div>
@@ -419,7 +419,7 @@ function table(el, cols, rows){
 function connectedBadge(v){ return v ? 'SI' : 'NO'; }
 function ts(v){ if(!v) return '-'; return new Date(v*1000).toLocaleTimeString(); }
 async function refresh(){
-  const resp = await fetch('/api/demo/dashboard', { cache: 'no-store' });
+  const resp = await fetch('/api/people/dashboard', { cache: 'no-store' });
   const data = await resp.json();
   document.getElementById('nClientes').textContent = data.stats.clientes_registrados;
   document.getElementById('nInvitados').textContent = data.stats.invitados_registrados;
@@ -494,7 +494,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._serve_portal()
             return
 
-        if self.path in ("/demoDashboard", "/demoDashboard/"):
+        if self.path in ("/people", "/people/", "/demoDashboard", "/demoDashboard/"):
             html = _demo_dashboard_html()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -556,7 +556,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(200, {"invitados": result})
             return
 
-        if self.path == "/api/demo/dashboard":
+        if self.path in ("/api/people/dashboard", "/api/demo/dashboard"):
             self._respond(200, _build_demo_dashboard_payload())
             return
 
