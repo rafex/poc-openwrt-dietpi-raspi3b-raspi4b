@@ -364,7 +364,7 @@
       suggestionsEl.innerHTML = '';
       if (q.length < 4) return;
       nominatimTimer = setTimeout(() => {
-        const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=5&addressdetails=1&q=' + encodeURIComponent(q);
+        const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=5&addressdetails=1&countrycodes=mx&bounded=1&viewbox=-118.455,32.718,-86.710,14.389&q=' + encodeURIComponent(q);
         fetch(url, { headers: { 'Accept-Language': 'es' } })
           .then(r => r.json())
           .then(data => {
@@ -547,9 +547,9 @@
         <label for="gPhone">Número de teléfono celular</label>
         <input id="gPhone" type="tel" placeholder="55 1234 5678" maxlength="20">
 
-        <label for="gAddress">Dirección (busca en el mapa)</label>
+        <label for="gAddress">Dirección en México (busca en el mapa)</label>
         <div class="autocomplete-wrap">
-          <input id="gAddress" type="text" placeholder="Calle, colonia, ciudad…" autocomplete="off">
+          <input id="gAddress" type="text" placeholder="Calle, colonia, ciudad (México)..." autocomplete="off">
           <div id="addressSuggestions"></div>
           <input type="hidden" id="gAddressData">
         </div>
