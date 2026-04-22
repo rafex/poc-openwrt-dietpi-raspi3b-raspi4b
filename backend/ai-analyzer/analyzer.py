@@ -25,6 +25,7 @@ Variables de entorno:
 import json
 import logging
 import os
+import pathlib
 import queue
 import threading
 import time
@@ -34,6 +35,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import requests
+
+# Directorio donde viven los archivos estáticos (mismo que el script)
+STATIC_DIR = pathlib.Path(__file__).parent
 
 # ─── Configuración ────────────────────────────────────────────────────────────
 LLAMA_URL    = os.environ.get("LLAMA_URL",    "http://192.168.1.167:8081")
@@ -299,10 +303,32 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
+    def _serve_html(self, filename: str):
+        """Sirve un archivo HTML estático desde STATIC_DIR."""
+        filepath = STATIC_DIR / filename
+        try:
+            body = filepath.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type",   "text/html; charset=utf-8")
+            self.send_header("Content-Length", len(body))
+            self.send_header("Cache-Control",  "no-cache")
+            self.end_headers()
+            self.wfile.write(body)
+        except FileNotFoundError:
+            self.send_error_json(404, f"Archivo no encontrado: {filename}")
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path   = parsed.path
         params = parse_qs(parsed.query)
+
+        if path in ("/dashboard", "/dashboard/"):
+            self._serve_html("dashboard.html")
+            return
+
+        if path in ("/terminal", "/terminal/"):
+            self._serve_html("terminal.html")
+            return
 
         if path == "/health":
             llama_ok = False

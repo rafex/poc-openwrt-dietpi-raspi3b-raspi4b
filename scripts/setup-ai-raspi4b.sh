@@ -326,20 +326,18 @@ fi
 # ─── E) kubectl apply ─────────────────────────────────────────────────────────
 step "E) Aplicando manifiestos k8s"
 
-# ai-analyzer
+# ai-analyzer (incluye /dashboard y /terminal — HTML servido desde el mismo pod)
 info "Aplicando ai-analyzer..."
 kubectl apply -f "$K8S_DIR/ai-analyzer-deployment.yaml"
 kubectl apply -f "$K8S_DIR/ai-analyzer-svc.yaml"
 kubectl apply -f "$K8S_DIR/ai-analyzer-ingress.yaml"
-ok "ai-analyzer aplicado"
+ok "ai-analyzer aplicado (con rutas /dashboard y /terminal integradas)"
 
-# dashboard
-info "Aplicando dashboard..."
-kubectl apply -f "$K8S_DIR/dashboard-configmap.yaml"
-kubectl apply -f "$K8S_DIR/dashboard-deployment.yaml"
-kubectl apply -f "$K8S_DIR/dashboard-svc.yaml"
-kubectl apply -f "$K8S_DIR/dashboard-ingress.yaml"
-ok "dashboard aplicado"
+# Limpiar recursos del dashboard separado si existían de una instalación anterior
+for res in deployment/dashboard service/dashboard ingress/dashboard configmap/dashboard-nginx-conf; do
+    kubectl delete $res --ignore-not-found=true 2>/dev/null && \
+        info "Recurso legacy eliminado: $res" || true
+done
 
 # Rollout restart si la imagen fue reconstruida
 if ! $NO_BUILD; then
@@ -351,10 +349,9 @@ step "F) Verificación"
 
 info "Esperando que los pods estén listos..."
 kubectl rollout status deployment/ai-analyzer --timeout=120s || warn "ai-analyzer timeout"
-kubectl rollout status deployment/dashboard   --timeout=60s  || warn "dashboard timeout"
 
 echo ""
-kubectl get pods -l "app in (ai-analyzer,dashboard)" -o wide
+kubectl get pods -l app=ai-analyzer -o wide
 echo ""
 
 PI_IP="192.168.1.167"

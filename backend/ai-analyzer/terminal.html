@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RafexPi &mdash; Network Terminal</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#020617;color:#22d3ee;font-family:'Courier New',Courier,monospace;font-size:13px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{background:#0f172a;border-bottom:1px solid #1e3a5f;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;gap:10px;flex-wrap:wrap}
+header h1{font-size:14px;font-weight:700;color:#38bdf8;letter-spacing:1px}
+.nav a{color:#475569;text-decoration:none;font-size:12px;padding:5px 12px;border:1px solid #1e3a5f;border-radius:4px;margin-left:6px;transition:.2s}
+.nav a:hover,.nav a.active{background:#38bdf8;color:#020617;border-color:#38bdf8}
+.toolbar{display:flex;gap:8px;align-items:center;font-size:12px;flex-wrap:wrap}
+.btn{background:#0f172a;border:1px solid #1e3a5f;color:#94a3b8;padding:4px 10px;border-radius:4px;cursor:pointer;font-size:11px;font-family:inherit}
+.btn:hover{background:#1e3a5f;color:#e2e8f0}
+.btn.active{background:#1e3a5f;color:#38bdf8;border-color:#38bdf8}
+#conn-status{font-size:11px;padding:3px 8px;border-radius:4px;background:#0f172a;border:1px solid #1e3a5f}
+#conn-status.ok{color:#22c55e;border-color:#14532d}
+#conn-status.err{color:#ef4444;border-color:#7f1d1d}
+#terminal{flex:1;overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:4px}
+.line{display:flex;gap:10px;align-items:flex-start;border-radius:4px;padding:3px 6px;transition:.15s}
+.line:hover{background:#0f172a}
+.ts{color:#334155;flex-shrink:0;font-size:11px;margin-top:1px}
+.tag{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;flex-shrink:0;letter-spacing:.5px;margin-top:1px}
+.tag-SENSOR{background:#1e3a5f;color:#38bdf8}
+.tag-AI{background:#1e1b4b;color:#818cf8}
+.tag-ALERTA{background:#7f1d1d;color:#fca5a5}
+.tag-INFO{background:#1e293b;color:#64748b}
+.msg{color:#cbd5e1;line-height:1.5;word-break:break-word;flex:1}
+.msg .hi{color:#38bdf8}
+.msg .warn{color:#f59e0b}
+.msg .danger{color:#ef4444}
+.msg .ok{color:#22c55e}
+.msg pre{background:#0a0f1e;border:1px solid #1e3a5f;padding:10px;border-radius:4px;margin-top:6px;overflow-x:auto;font-size:12px;white-space:pre-wrap;color:#a5f3fc}
+.sep{border-top:1px solid #1e3a5f;margin:6px 0;opacity:.5}
+#input-line{background:#0f172a;border-top:1px solid #1e3a5f;padding:8px 16px;display:flex;align-items:center;gap:8px;flex-shrink:0}
+#prompt-label{color:#22c55e;flex-shrink:0}
+#cmd-input{flex:1;background:transparent;border:none;outline:none;color:#e2e8f0;font-family:inherit;font-size:13px}
+#cmd-input::placeholder{color:#334155}
+</style>
+</head>
+<body>
+<header>
+  <h1>&#9889; NETWORK TERMINAL</h1>
+  <div class="toolbar">
+    <button class="btn active" data-filter="all"    onclick="setFilter('all',this)">TODO</button>
+    <button class="btn"        data-filter="SENSOR" onclick="setFilter('SENSOR',this)">SENSOR</button>
+    <button class="btn"        data-filter="AI"     onclick="setFilter('AI',this)">IA</button>
+    <button class="btn"        data-filter="ALERTA" onclick="setFilter('ALERTA',this)">ALERTAS</button>
+    <button class="btn" onclick="clearTerminal()">LIMPIAR</button>
+    <button class="btn" onclick="toggleScroll()" id="scroll-btn">AUTO</button>
+    <span id="conn-status">conectando...</span>
+  </div>
+  <div class="nav">
+    <a href="/dashboard">Dashboard</a>
+    <a href="/terminal" class="active">Terminal</a>
+  </div>
+</header>
+
+<div id="terminal"></div>
+
+<div id="input-line">
+  <span id="prompt-label">sensor@rafexpi:~$</span>
+  <input type="text" id="cmd-input" placeholder="escribe 'help' para comandos..." onkeydown="handleCmd(event)">
+</div>
+
+<script>
+var autoScroll = true;
+var activeFilter = 'all';
+var lineCount = 0;
+var MAX_LINES = 300;
+var term = document.getElementById('terminal');
+
+function ts() {
+  return new Date().toISOString().replace('T',' ').slice(0,19);
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function addLine(tag, html, skip) {
+  lineCount++;
+  var show = activeFilter === 'all' || activeFilter === tag;
+  var div = document.createElement('div');
+  div.className = 'line';
+  div.dataset.tag = tag;
+  div.style.display = show ? 'flex' : 'none';
+  div.innerHTML = '<span class="ts">' + ts() + '</span>' +
+    '<span class="tag tag-' + tag + '">' + tag + '</span>' +
+    '<span class="msg">' + html + '</span>';
+  term.appendChild(div);
+  var lines = term.querySelectorAll('.line');
+  if (lines.length > MAX_LINES) lines[0].remove();
+  if (autoScroll) term.scrollTop = term.scrollHeight;
+}
+
+function addSep() {
+  var div = document.createElement('div');
+  div.className = 'sep';
+  div.dataset.tag = 'sep';
+  term.appendChild(div);
+  if (autoScroll) term.scrollTop = term.scrollHeight;
+}
+
+function setFilter(filter, btn) {
+  activeFilter = filter;
+  document.querySelectorAll('.btn[data-filter]').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  document.querySelectorAll('.line').forEach(function(el){
+    el.style.display = (filter === 'all' || el.dataset.tag === filter) ? 'flex' : 'none';
+  });
+}
+
+function clearTerminal() {
+  term.innerHTML = '';
+  lineCount = 0;
+  addLine('INFO', '<span class="ok">Terminal limpiada.</span>');
+}
+
+function toggleScroll() {
+  autoScroll = !autoScroll;
+  document.getElementById('scroll-btn').textContent = autoScroll ? 'AUTO' : 'MANUAL';
+}
+
+function renderSummary(s) {
+  if (!s) return '(sin datos)';
+  var lan = (s.lan_devices||[]).slice(0,5).join(', ') || '--';
+  var dns = (s.dns_queries||[]).slice(0,4).join(', ') || '--';
+  return '<span class="hi">' + (s.total_packets||0) + '</span> pkt &bull; ' +
+    '<span class="hi">' + (s.total_bytes_fmt||'?') + '</span> &bull; ' +
+    '<span class="hi">' + (s.active_src_ips||0) + '</span> src IPs &bull; ' +
+    'LAN: <span class="hi">' + esc(lan) + '</span> &bull; ' +
+    'DNS: <span class="hi">' + esc(dns) + '</span>';
+}
+
+function renderAnalysis(item) {
+  addSep();
+  addLine('SENSOR', renderSummary(item.summary||{}));
+  var suspicious = item.suspicious || [];
+  for (var i = 0; i < suspicious.length; i++) {
+    var s = suspicious[i];
+    addLine('ALERTA',
+      '<span class="danger">[' + esc((s.type||'').toUpperCase()) + ']</span> ' +
+      esc(s.src||s.port||'') + ' &mdash; <span class="warn">' + esc(s.detail||'') + '</span>'
+    );
+  }
+  var riskClass = {BAJO:'ok',MEDIO:'warn',ALTO:'danger'}[item.risk] || 'hi';
+  var analysis = (item.analysis||'').trim();
+  addLine('AI',
+    'Riesgo: <span class="' + riskClass + '">' + esc(item.risk||'?') + '</span>' +
+    ' &bull; Inferencia: <span class="hi">' + item.elapsed_s + 's</span>' +
+    '<pre>' + esc(analysis) + '</pre>'
+  );
+}
+
+var HELP = 'Comandos:\n' +
+  '  clear       - limpiar pantalla\n' +
+  '  status      - estado del analizador\n' +
+  '  history N   - ultimos N analisis\n' +
+  '  filter [all|SENSOR|AI|ALERTA] - filtrar\n' +
+  '  scroll      - toggle auto-scroll';
+
+function handleCmd(e) {
+  if (e.key !== 'Enter') return;
+  var input = document.getElementById('cmd-input');
+  var cmd = input.value.trim();
+  input.value = '';
+  if (!cmd) return;
+
+  addLine('INFO', '<span class="ok">$ ' + esc(cmd) + '</span>');
+
+  if (cmd === 'help') {
+    addLine('INFO', '<pre>' + HELP + '</pre>');
+  } else if (cmd === 'clear') {
+    clearTerminal();
+  } else if (cmd === 'scroll') {
+    toggleScroll();
+    addLine('INFO', 'Auto-scroll: <span class="ok">' + (autoScroll ? 'ON' : 'OFF') + '</span>');
+  } else if (cmd.indexOf('filter') === 0) {
+    var f = cmd.split(' ')[1] || 'all';
+    var btn = document.querySelector('.btn[data-filter="' + f + '"]');
+    if (btn) { setFilter(f, btn); addLine('INFO', 'Filtro: <span class="ok">' + esc(f) + '</span>'); }
+    else addLine('INFO', '<span class="danger">Filtro desconocido. Usa: all|SENSOR|AI|ALERTA</span>');
+  } else if (cmd === 'status') {
+    fetch('/api/stats')
+      .then(function(r){ return r.json(); })
+      .then(function(d){ addLine('INFO', '<pre>' + JSON.stringify(d, null, 2) + '</pre>'); })
+      .catch(function(ex){ addLine('INFO', '<span class="danger">Error: ' + esc(ex.message) + '</span>'); });
+  } else if (cmd.indexOf('history') === 0) {
+    var n = parseInt(cmd.split(' ')[1]) || 5;
+    fetch('/api/history?limit=' + n)
+      .then(function(r){ return r.json(); })
+      .then(function(d){ (d.items||[]).forEach(renderAnalysis); })
+      .catch(function(ex){ addLine('INFO', '<span class="danger">Error: ' + esc(ex.message) + '</span>'); });
+  } else {
+    addLine('INFO', '<span class="danger">Desconocido: ' + esc(cmd) + '</span> (escribe "help")');
+  }
+}
+
+function connectSSE() {
+  var status = document.getElementById('conn-status');
+  var es = new EventSource('/api/stream');
+
+  es.onopen = function() {
+    status.textContent = 'conectado';
+    status.className = 'ok';
+    addLine('INFO', '<span class="ok">SSE conectado - esperando analisis en tiempo real</span>');
+  };
+
+  es.onmessage = function(e) {
+    try {
+      var item = JSON.parse(e.data);
+      renderAnalysis(item);
+    } catch(ex) {
+      addLine('INFO', '<span class="danger">Error: ' + esc(ex.message) + '</span>');
+    }
+  };
+
+  es.onerror = function() {
+    status.textContent = 'desconectado';
+    status.className = 'err';
+    addLine('INFO', '<span class="danger">SSE desconectado - reconectando en 10s...</span>');
+    es.close();
+    setTimeout(connectSSE, 10000);
+  };
+}
+
+addLine('INFO', '============================================================');
+addLine('INFO', '<span class="hi">RafexPi Network Terminal</span> - Monitor con IA');
+addLine('INFO', 'Sensor: Raspi 3B (192.168.1.181) - Analyzer: Raspi 4B (192.168.1.167)');
+addLine('INFO', 'Modelo: TinyLlama via llama.cpp - Captura: eth0 promiscuo');
+addLine('INFO', '------------------------------------------------------------');
+addLine('INFO', '<pre>' + HELP + '</pre>');
+addLine('INFO', '============================================================');
+
+connectSSE();
+</script>
+</body>
+</html>

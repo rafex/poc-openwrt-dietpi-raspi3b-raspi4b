@@ -16,6 +16,20 @@ spec:
                 name: ai-analyzer
                 port:
                   number: 5000
+          - path: /dashboard
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /terminal
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
           - path: /health
             pathType: Exact
             backend:

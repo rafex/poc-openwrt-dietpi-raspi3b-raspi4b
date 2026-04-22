@@ -9,6 +9,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY analyzer.py .
+COPY dashboard.html .
+COPY terminal.html .
 
 EXPOSE 5000
 
