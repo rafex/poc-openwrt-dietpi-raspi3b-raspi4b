@@ -24,6 +24,7 @@ ROUTER_USER = os.environ.get("ROUTER_USER", "root")
 SSH_KEY     = os.environ.get("SSH_KEY", "/opt/keys/captive-portal")
 PORTAL_IP   = os.environ.get("PORTAL_IP", "192.168.1.167")
 NFT_SET     = "ip captive allowed_clients"
+NFT_BLOCKED_SET = "ip captive blocked_macs"
 
 log.info("=== Backend captive portal iniciando ===")
 log.info(f"ROUTER_IP={ROUTER_IP}  PORTAL_IP={PORTAL_IP}  SSH_KEY={SSH_KEY}  LOG_LEVEL={LOG_LEVEL}")
@@ -124,10 +125,50 @@ def authorize_client(client_ip: str) -> bool:
     )
     if rc == 0:
         log.info(f"✔ Cliente AUTORIZADO: {client_ip} agregado a {NFT_SET}")
+        _unblock_mac_for_ip(client_ip)
         return True
     else:
         log.error(f"✘ FALLÓ autorizar {client_ip} — rc={rc}  stderr={stderr!r}")
         return False
+
+
+def _is_mac(value: str) -> bool:
+    parts = value.lower().split(":")
+    if len(parts) != 6:
+        return False
+    hexchars = set("0123456789abcdef")
+    return all(len(p) == 2 and all(c in hexchars for c in p) for p in parts)
+
+
+def _mac_for_ip(client_ip: str) -> str:
+    # Primero ARP/neighbor cache; fallback a leases de dnsmasq.
+    rc, stdout, _ = _router_ssh(
+        f"mac-for-{client_ip}",
+        (
+            f"(ip neigh show {client_ip} 2>/dev/null | awk '{{print $5}}' | head -1; "
+            f"awk '$3==\"{client_ip}\" {{print tolower($2)}}' /tmp/dhcp.leases 2>/dev/null | head -1) "
+            "| grep -m1 -E '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$'"
+        ),
+    )
+    if rc == 0 and stdout and _is_mac(stdout):
+        return stdout.lower()
+    return ""
+
+
+def _unblock_mac_for_ip(client_ip: str):
+    mac = _mac_for_ip(client_ip)
+    if not mac:
+        return
+    # Si existe blocked_macs y la MAC está ahí, quitarla.
+    rc, _, _ = _router_ssh(
+        f"unblock-mac-{mac}",
+        (
+            f"nft list set {NFT_BLOCKED_SET} >/dev/null 2>&1 || exit 0; "
+            f"nft delete element {NFT_BLOCKED_SET} {{ {mac} }} >/dev/null 2>&1 || true"
+        ),
+    )
+    if rc == 0:
+        log.info(f"MAC {mac} des-bloqueada de blocked_macs para IP {client_ip}")
 
 # =============================================================================
 # Handler HTTP

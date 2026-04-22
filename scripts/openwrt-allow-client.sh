@@ -46,6 +46,30 @@ test_router_ssh
 router_set_exists || die "El set '$NFT_SET' no existe en el router.
   Ejecuta primero: sh scripts/setup-openwrt.sh"
 
+resolve_mac_for_ip() {
+    local ip="$1"
+    router_ssh "
+        (ip neigh show $ip 2>/dev/null | awk '{print \$5}' | head -1;
+         awk '\$3==\"$ip\" {print tolower(\$2)}' /tmp/dhcp.leases 2>/dev/null | head -1) \
+        | grep -m1 -E '^[0-9a-f]{2}(:[0-9a-f]{2}){5}\$'
+    " 2>/dev/null || true
+}
+
+unblock_mac_if_blocked() {
+    local ip="$1"
+    local mac
+    mac=$(resolve_mac_for_ip "$ip")
+    [ -z "$mac" ] && return 0
+
+    # Si el set blocked_macs no existe, no hay nada que limpiar.
+    router_ssh "nft list set $NFT_TABLE blocked_macs > /dev/null 2>&1" || return 0
+
+    # Intentar borrar la MAC del bloqueo (no falla si no estaba).
+    if router_ssh "nft delete element $NFT_TABLE blocked_macs { $mac }" 2>/dev/null; then
+        log_ok "MAC $mac removida de blocked_macs (IP $ip ya puede navegar)"
+    fi
+}
+
 # =============================================================================
 # Autorizar IP
 # =============================================================================
@@ -55,6 +79,7 @@ if router_ip_in_set "$IP"; then
         log_info "$IP ya esta en el set — re-agregando como permanente..."
         router_ssh "nft add element $NFT_TABLE $NFT_SET { $IP timeout 0s }" || \
             die "No se pudo re-agregar $IP con timeout 0s"
+        unblock_mac_if_blocked "$IP"
         log_ok "$IP marcada como permanente (timeout 0s)"
     else
         log_info "$IP ya esta autorizada en $NFT_SET"
@@ -62,6 +87,7 @@ if router_ip_in_set "$IP"; then
         REMAINING=$(router_ssh \
             "nft list set $NFT_TABLE $NFT_SET 2>/dev/null | grep '$IP'" 2>/dev/null || echo "")
         [ -n "$REMAINING" ] && log_info "Estado actual: $REMAINING"
+        unblock_mac_if_blocked "$IP"
     fi
     exit 0
 fi
@@ -80,5 +106,6 @@ else
 fi
 
 router_ip_in_set "$IP" || die "Verificacion fallo: $IP no aparece en $NFT_SET despues de agregar"
+unblock_mac_if_blocked "$IP"
 
 log_ok "$MSG"

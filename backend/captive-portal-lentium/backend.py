@@ -34,6 +34,7 @@ PORTAL_IP   = os.environ.get("PORTAL_IP",   "192.168.1.167")
 DB_PATH     = os.environ.get("DB_PATH",     "/data/lentium.db")
 PORT        = int(os.environ.get("PORT",    "8080"))
 NFT_SET     = "ip captive allowed_clients"
+NFT_BLOCKED_SET = "ip captive blocked_macs"
 
 log.info("=== Lentium Portal Backend iniciando ===")
 log.info(f"ROUTER_IP={ROUTER_IP}  PORTAL_IP={PORTAL_IP}  DB_PATH={DB_PATH}  PORT={PORT}")
@@ -211,9 +212,47 @@ def authorize_client(client_ip: str) -> bool:
     )
     if rc == 0:
         log.info(f"✔ IP autorizada en nftables: {client_ip}")
+        _unblock_mac_for_ip(client_ip)
         return True
     log.error(f"✘ Falló autorizar {client_ip} — stderr={stderr!r}")
     return False
+
+
+def _is_mac(value: str) -> bool:
+    parts = value.lower().split(":")
+    if len(parts) != 6:
+        return False
+    hexchars = set("0123456789abcdef")
+    return all(len(p) == 2 and all(c in hexchars for c in p) for p in parts)
+
+
+def _mac_for_ip(client_ip: str) -> str:
+    rc, stdout, _ = _router_ssh(
+        f"mac-for-{client_ip}",
+        (
+            f"(ip neigh show {client_ip} 2>/dev/null | awk '{{print $5}}' | head -1; "
+            f"awk '$3==\"{client_ip}\" {{print tolower($2)}}' /tmp/dhcp.leases 2>/dev/null | head -1) "
+            "| grep -m1 -E '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$'"
+        ),
+    )
+    if rc == 0 and stdout and _is_mac(stdout):
+        return stdout.lower()
+    return ""
+
+
+def _unblock_mac_for_ip(client_ip: str):
+    mac = _mac_for_ip(client_ip)
+    if not mac:
+        return
+    rc, _, _ = _router_ssh(
+        f"unblock-mac-{mac}",
+        (
+            f"nft list set {NFT_BLOCKED_SET} >/dev/null 2>&1 || exit 0; "
+            f"nft delete element {NFT_BLOCKED_SET} {{ {mac} }} >/dev/null 2>&1 || true"
+        ),
+    )
+    if rc == 0:
+        log.info(f"MAC {mac} des-bloqueada de blocked_macs para IP {client_ip}")
 
 # =============================================================================
 # Validaciones mínimas
