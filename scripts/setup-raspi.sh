@@ -126,11 +126,14 @@ if [ ! -d "$K8S_DIR" ]; then
 fi
 
 # Orden de aplicacion: configmap -> service -> deployment
-# (el deployment referencia el configmap y el service)
+# (el service selecciona la variante activa; por defecto lentium)
 MANIFESTS="
 captive-portal-configmap.yaml
+captive-portal-lentium-configmap.yaml
 captive-portal-svc.yaml
 captive-portal-deployment.yaml
+captive-portal-lentium-deployment.yaml
+captive-portal-ingress.yaml
 "
 
 for manifest in $MANIFESTS; do
@@ -144,23 +147,37 @@ for manifest in $MANIFESTS; do
     log_ok "$manifest aplicado"
 done
 
-# Esperar que el deployment este listo
-log_info "Esperando que el deployment captive-portal este listo (max 120s)..."
-k3s kubectl rollout status deployment/captive-portal \
+# Determinar la variante activa desde el selector del Service
+ACTIVE_VARIANT=$(k3s kubectl get svc captive-portal -n default \
+    -o jsonpath='{.spec.selector.portal-variant}' 2>/dev/null || echo "lentium")
+
+case "$ACTIVE_VARIANT" in
+    lentium) ACTIVE_DEPLOY="captive-portal-lentium" ;;
+    clasico) ACTIVE_DEPLOY="captive-portal" ;;
+    *)
+        log_warn "Selector portal-variant desconocido en Service: '$ACTIVE_VARIANT' (usando lentium)"
+        ACTIVE_VARIANT="lentium"
+        ACTIVE_DEPLOY="captive-portal-lentium"
+        ;;
+esac
+
+# Esperar que el deployment ACTIVO este listo
+log_info "Esperando que el deployment activo ($ACTIVE_DEPLOY, variante=$ACTIVE_VARIANT) este listo (max 120s)..."
+k3s kubectl rollout status "deployment/$ACTIVE_DEPLOY" \
     --timeout=120s \
-    --namespace=default || die "El deployment captive-portal no se levanto a tiempo"
-log_ok "Deployment captive-portal listo"
+    --namespace=default || die "El deployment activo $ACTIVE_DEPLOY no se levanto a tiempo"
+log_ok "Deployment activo $ACTIVE_DEPLOY listo"
 
 # =============================================================================
 # FASE E: Verificacion
 # =============================================================================
 log_info "--- FASE E: Verificando portal ---"
 
-# Esperar hasta 30s que el pod este en estado Running
-log_info "Esperando pod Running (max 30s)..."
+# Esperar hasta 30s que el pod activo este en estado Running
+log_info "Esperando pod Running de la variante activa '$ACTIVE_VARIANT' (max 30s)..."
 READY=0
 for i in $(seq 1 30); do
-    if k3s kubectl get pods -l app=captive-portal 2>/dev/null | grep -q "Running"; then
+    if k3s kubectl get pods -l "app=captive-portal,portal-variant=$ACTIVE_VARIANT" 2>/dev/null | grep -q "Running"; then
         READY=1
         break
     fi
@@ -170,10 +187,12 @@ done
 if [ "$READY" -eq 0 ]; then
     log_warn "Pod no llego a estado Running en 30s"
     k3s kubectl get pods -l app=captive-portal
-    k3s kubectl describe pods -l app=captive-portal | tail -20
+    k3s kubectl get pods -l "app=captive-portal,portal-variant=$ACTIVE_VARIANT"
+    k3s kubectl describe deployment "$ACTIVE_DEPLOY" -n default | tail -20
+    k3s kubectl describe pods -l "app=captive-portal,portal-variant=$ACTIVE_VARIANT" | tail -20
     die "Portal no disponible"
 fi
-log_ok "Pod captive-portal en estado Running"
+log_ok "Pod del portal activo ($ACTIVE_VARIANT) en estado Running"
 
 # Verificar respuesta HTTP del portal
 log_info "Verificando respuesta HTTP en $PORTAL_URL..."
@@ -200,6 +219,7 @@ printf '\n'
 log_ok "=== Setup de Raspberry Pi completado ==="
 log_info "Estado del cluster:"
 k3s kubectl get pods,svc -l app=captive-portal
+log_info "Portal activo por Service selector: $ACTIVE_VARIANT ($ACTIVE_DEPLOY)"
 printf '\n'
 log_info "Proximos pasos:"
 printf '  1. Ejecutar en la Pi: bash scripts/setup-openwrt.sh\n'

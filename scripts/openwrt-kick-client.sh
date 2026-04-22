@@ -18,7 +18,7 @@
 #   2. Resuelve el par IP↔MAC usando ARP y leases de dnsmasq.
 #   3. Elimina la IP del set nftables allowed_clients (vuelve al portal cautivo).
 #   4. Desautentica el cliente del WiFi con hostapd_cli (corta conexión inmediata).
-#   5. Con --permanente: añade la MAC a un set nftables blocked_macs persistente.
+#   5. Con --permanente: añade la MAC a un set nftables blocked_macs.
 #
 # Protecciones:
 #   - Nunca expulsa al admin ($ADMIN_IP), las Raspis ni la IP del portal.
@@ -30,7 +30,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # =============================================================================
 # Constantes de este script
 # =============================================================================
-NFT_BLOCKED_SET="blocked_macs"              # set de MACs permanentemente bloqueadas
+NFT_BLOCKED_SET="blocked_macs"              # set de MACs bloqueadas hasta desbloquear manualmente
 LEASES_FILE="/tmp/dhcp.leases"              # dnsmasq leases en el router
 WIFI_IFACE="phy0-ap0"                       # interfaz WiFi (hostapd)
 WIFI_IFACE_ALT="wlan0"                      # nombre alternativo si phy0-ap0 no funciona
@@ -131,24 +131,31 @@ is_protected_mac() {
 }
 
 # =============================================================================
-# Asegurar que el set blocked_macs existe en nftables del router
+# Asegurar que el set blocked_macs y su regla de DROP existen en nftables del router
 # =============================================================================
 ensure_blocked_set() {
-    router_ssh "nft list set $NFT_TABLE $NFT_BLOCKED_SET > /dev/null 2>&1" && return 0
+    # 1) Set
+    if ! router_ssh "nft list set $NFT_TABLE $NFT_BLOCKED_SET > /dev/null 2>&1"; then
+        log_info "Creando set $NFT_TABLE $NFT_BLOCKED_SET..."
+        router_ssh "nft add set $NFT_TABLE $NFT_BLOCKED_SET { type ether_addr; }" || \
+            die "No se pudo crear el set $NFT_BLOCKED_SET en el router"
+        log_ok "Set $NFT_BLOCKED_SET creado"
+    fi
 
-    log_info "Creando set $NFT_TABLE $NFT_BLOCKED_SET..."
-    router_ssh "nft add set $NFT_TABLE $NFT_BLOCKED_SET { type ether_addr\; flags persistent\; }" || \
-    router_ssh "nft add set $NFT_TABLE $NFT_BLOCKED_SET { type ether_addr\; }" || \
-        die "No se pudo crear el set $NFT_BLOCKED_SET en el router"
+    # 2) Regla de bloqueo en la cadena real del portal
+    # Usamos forward_captive (definida por setup-openwrt.sh), no "forward" ni "input".
+    if ! router_ssh "nft list chain $NFT_TABLE forward_captive 2>/dev/null | grep -q 'ether saddr @$NFT_BLOCKED_SET drop'"; then
+        log_info "Añadiendo regla DROP para @$NFT_BLOCKED_SET en forward_captive..."
+        router_ssh "nft insert rule $NFT_TABLE forward_captive ether saddr @$NFT_BLOCKED_SET drop" || \
+            die "No se pudo añadir regla DROP para @$NFT_BLOCKED_SET en forward_captive"
+        log_ok "Regla DROP activa para @$NFT_BLOCKED_SET en forward_captive"
+    fi
 
-    # Regla de bloqueo: DROP en forward si MAC origen está en blocked_macs
-    router_ssh "nft add rule $NFT_TABLE forward \
-        ether saddr @$NFT_BLOCKED_SET drop" 2>/dev/null || true
-    # Y también en input (evita que accedan al propio router)
-    router_ssh "nft add rule $NFT_TABLE input \
-        ether saddr @$NFT_BLOCKED_SET drop" 2>/dev/null || true
-
-    log_ok "Set $NFT_BLOCKED_SET creado con reglas de DROP"
+    # 3) Verificación final real
+    router_ssh "nft list set $NFT_TABLE $NFT_BLOCKED_SET > /dev/null 2>&1" || \
+        die "Verificación falló: set $NFT_BLOCKED_SET no disponible"
+    router_ssh "nft list chain $NFT_TABLE forward_captive 2>/dev/null | grep -q 'ether saddr @$NFT_BLOCKED_SET drop'" || \
+        die "Verificación falló: regla DROP para @$NFT_BLOCKED_SET no quedó aplicada"
 }
 
 # =============================================================================
@@ -208,7 +215,7 @@ deauth_client() {
 
     log_warn "No se pudo desautenticar $mac via hostapd_cli"
     log_warn "El cliente perderá acceso cuando su sesión expire (timeout del portal)"
-    return 0  # no fatal — el bloqueo nftables ya funciona
+    return 1  # no fatal — el bloqueo nftables ya funciona
 }
 
 # =============================================================================
@@ -387,9 +394,14 @@ if [ -n "$KICK_IP" ]; then
 fi
 
 # Paso 2: desautenticar del WiFi (si tenemos MAC)
+DEAUTH_DONE=0
+DEAUTH_OK=0
 if [ -n "$KICK_MAC" ]; then
+    DEAUTH_DONE=1
     log_info "Desautenticando $KICK_MAC del WiFi..."
-    deauth_client "$KICK_MAC"
+    if deauth_client "$KICK_MAC"; then
+        DEAUTH_OK=1
+    fi
 fi
 
 # Paso 3: bloqueo permanente (si --permanente)
@@ -409,7 +421,11 @@ printf '\n'
 log_ok "========================================"
 log_ok "  CLIENTE EXPULSADO"
 [ -n "$KICK_IP"  ] && log_ok "  IP : $KICK_IP → devuelta al portal"
-[ -n "$KICK_MAC" ] && log_ok "  MAC: $KICK_MAC → desautenticada del WiFi"
+if [ -n "$KICK_MAC" ] && [ "$DEAUTH_DONE" -eq 1 ] && [ "$DEAUTH_OK" -eq 1 ]; then
+    log_ok "  MAC: $KICK_MAC → desautenticada del WiFi"
+elif [ -n "$KICK_MAC" ]; then
+    log_warn "  MAC: $KICK_MAC → no se pudo desautenticar (bloqueo por reglas sí aplicado)"
+fi
 [ "$PERMANENTE" -eq 1 ] && log_ok "  Bloqueo permanente activo"
 log_ok "========================================"
 printf '\n'
