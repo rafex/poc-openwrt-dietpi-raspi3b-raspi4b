@@ -15,7 +15,8 @@ Variables de entorno:
     MQTT_TOPIC      Topic de batches          (default: rafexpi/sensor/batch)
     DB_PATH         Ruta SQLite               (default: /data/sensor.db)
     LLAMA_URL       URL llama.cpp server      (default: http://192.168.1.167:8081)
-    N_PREDICT       Tokens máximos respuesta  (default: 384)
+    N_PREDICT       Tokens máximos respuesta  (default: 256)
+    MODEL_FORMAT    Formato del prompt        (default: tinyllama) — tinyllama | qwen
     PORT            Puerto HTTP               (default: 5000)
     LOG_LEVEL       Nivel de log              (default: INFO)
 """
@@ -40,10 +41,11 @@ MQTT_HOST  = os.environ.get("MQTT_HOST",  "192.168.1.167")
 MQTT_PORT  = int(os.environ.get("MQTT_PORT",  "1883"))
 MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "rafexpi/sensor/batch")
 DB_PATH    = os.environ.get("DB_PATH",    "/data/sensor.db")
-LLAMA_URL  = os.environ.get("LLAMA_URL",  "http://192.168.1.167:8081")
-N_PREDICT  = int(os.environ.get("N_PREDICT",  "384"))
-PORT       = int(os.environ.get("PORT",       "5000"))
-LOG_LEVEL  = os.environ.get("LOG_LEVEL",  "INFO")
+LLAMA_URL     = os.environ.get("LLAMA_URL",     "http://192.168.1.167:8081")
+N_PREDICT     = int(os.environ.get("N_PREDICT",     "256"))
+MODEL_FORMAT  = os.environ.get("MODEL_FORMAT",  "tinyllama")  # tinyllama | qwen
+PORT          = int(os.environ.get("PORT",          "5000"))
+LOG_LEVEL     = os.environ.get("LOG_LEVEL",     "INFO")
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -212,54 +214,62 @@ def db_queue_stats() -> dict:
 
 
 # ─── Prompt builder ───────────────────────────────────────────────────────────
-def build_prompt(summary: dict) -> str:
-    """Prompt compacto (~350 tokens) para TinyLlama (ctx-size=4096, parallel=1)."""
+def _prompt_body(summary: dict) -> str:
+    """Cuerpo del prompt — formato compacto ~120 tokens, válido para cualquier modelo."""
     duration = summary.get("duration_seconds", 30)
     packets  = summary.get("total_packets", 0)
-    bfmt     = summary.get("total_bytes_fmt", "0 B")
+    bfmt     = summary.get("total_bytes_fmt", "0B")
     pps      = summary.get("pps", 0)
 
-    protos    = summary.get("protocols", {})
-    proto_str = ", ".join(
-        f"{k}:{v}" for k, v in sorted(protos.items(), key=lambda x: -x[1])[:3]
-    ) or "N/A"
+    proto_str = ",".join(
+        f"{k}:{v}" for k, v in sorted(
+            summary.get("protocols", {}).items(), key=lambda x: -x[1]
+        )[:3]
+    ) or "-"
 
-    talkers_str = ", ".join(
-        f"{t['ip']}({t['label']})"
-        for t in summary.get("top_talkers", [])[:4]
-    ) or "N/A"
+    talkers_str = ",".join(
+        t["ip"] for t in summary.get("top_talkers", [])[:3]
+    ) or "-"
 
-    ports_str = ", ".join(
-        f"{p['port']}:{p['count']}"
-        for p in summary.get("top_dst_ports", [])[:5]
-    ) or "N/A"
+    ports_str = ",".join(
+        str(p["port"]) for p in summary.get("top_dst_ports", [])[:4]
+    ) or "-"
 
-    dns_str = ", ".join(summary.get("dns_queries", [])[:8]) or "ninguna"
+    dns_str = ",".join(summary.get("dns_queries", [])[:4]) or "-"
 
     suspicious = summary.get("suspicious", [])[:3]
     susp_str = "; ".join(
-        f"[{s['type'].upper()}] {s.get('src', s.get('port','?'))}: {s['detail']}"
+        f"[{s['type'].upper()}]{s.get('src', s.get('port','?'))}"
         for s in suspicious
-    ) if suspicious else "ninguna"
+    ) if suspicious else "-"
 
-    lan_str = ", ".join(summary.get("lan_devices", [])[:6]) or "N/A"
-
-    user_msg = (
-        f"Red WiFi — ultimos {duration}s:\n"
-        f"Paquetes:{packets} ({pps}pps) Trafico:{bfmt}\n"
-        f"Protocolos: {proto_str}\n"
-        f"Top emisores: {talkers_str}\n"
-        f"Top puertos dst: {ports_str}\n"
-        f"Dispositivos LAN: {lan_str}\n"
-        f"DNS: {dns_str}\n"
-        f"Alertas: {susp_str}\n\n"
-        "Da un analisis de seguridad en 3 puntos breves e indica el riesgo (BAJO/MEDIO/ALTO)."
+    return (
+        f"WiFi {duration}s: pkt={packets} pps={pps} bytes={bfmt}\n"
+        f"Proto:{proto_str}\n"
+        f"IPs:{talkers_str}\n"
+        f"Ports:{ports_str}\n"
+        f"DNS:{dns_str}\n"
+        f"Alertas:{susp_str}\n\n"
+        "Riesgo(BAJO/MEDIO/ALTO) y 2-3 puntos clave de seguridad."
     )
+
+
+def build_prompt(summary: dict) -> str:
+    body = _prompt_body(summary)
+    if MODEL_FORMAT == "qwen":
+        return (
+            "<|im_start|>system\n"
+            "Analista de seguridad de redes WiFi. Responde en español, conciso.\n"
+            "<|im_end|>\n"
+            f"<|im_start|>user\n{body}<|im_end|>\n"
+            "<|im_start|>assistant\n"
+        )
+    # TinyLlama / default — ChatML con tokens </s>
     return (
         "<|system|>\n"
-        "Eres un analista de seguridad de redes. Responde en espanol, de forma concisa.\n"
+        "Analista de seguridad de redes WiFi. Responde en español, conciso.\n"
         "</s>\n"
-        f"<|user|>\n{user_msg}\n</s>\n"
+        f"<|user|>\n{body}</s>\n"
         "<|assistant|>\n"
     )
 
@@ -269,6 +279,11 @@ def call_llama(prompt: str) -> str:
     stats["llama_calls"] += 1
     try:
         t0   = time.time()
+        stop_tokens = (
+            ["<|im_end|>", "<|endoftext|>"]
+            if MODEL_FORMAT == "qwen"
+            else ["</s>", "<|user|>", "<|system|>"]
+        )
         resp = requests.post(
             f"{LLAMA_URL}/completion",
             json={
@@ -276,7 +291,7 @@ def call_llama(prompt: str) -> str:
                 "n_predict":   N_PREDICT,
                 "temperature": 0.7,
                 "top_p":       0.9,
-                "stop":        ["</s>", "<|user|>", "<|system|>"],
+                "stop":        stop_tokens,
                 "stream":      False,
             },
             timeout=120,
@@ -492,14 +507,16 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             self.send_json({
-                "status":      "ok",
-                "llama_url":   LLAMA_URL,
-                "llama_ok":    llama_ok,
-                "mqtt_host":   MQTT_HOST,
+                "status":        "ok",
+                "llama_url":     LLAMA_URL,
+                "llama_ok":      llama_ok,
+                "model_format":  MODEL_FORMAT,
+                "n_predict":     N_PREDICT,
+                "mqtt_host":     MQTT_HOST,
                 "mqtt_connected": stats["mqtt_connected"],
-                "db_path":     DB_PATH,
-                "queue":       db_queue_stats(),
-                "stats":       stats,
+                "db_path":       DB_PATH,
+                "queue":         db_queue_stats(),
+                "stats":         stats,
             })
 
         elif path == "/api/history":

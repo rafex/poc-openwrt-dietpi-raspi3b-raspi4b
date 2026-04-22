@@ -279,7 +279,33 @@ else
         done
     fi
 
-    # Búsqueda global si ninguno apareció en rutas habituales
+    # Búsqueda en caché de llama.cpp (descarga con --hf-repo guarda aquí)
+    if [ -z "$LLAMA_MODEL" ]; then
+        for cache_dir in ~/.cache/llama.cpp /root/.cache/llama.cpp /home/dietpi/.cache/llama.cpp; do
+            for f in "$cache_dir"/Qwen_Qwen2.5-0.5B*/*.gguf \
+                      "$cache_dir"/qwen2.5-0.5b*/*.gguf; do
+                if [ -f "$f" ]; then
+                    LLAMA_MODEL="$f"
+                    MODEL_FORMAT="qwen"
+                    break 2
+                fi
+            done
+        done
+    fi
+    if [ -z "$LLAMA_MODEL" ]; then
+        for cache_dir in ~/.cache/llama.cpp /root/.cache/llama.cpp /home/dietpi/.cache/llama.cpp; do
+            for f in "$cache_dir"/TheBloke_TinyLlama*/*.gguf \
+                      "$cache_dir"/tinyllama*/*.gguf; do
+                if [ -f "$f" ]; then
+                    LLAMA_MODEL="$f"
+                    MODEL_FORMAT="tinyllama"
+                    break 2
+                fi
+            done
+        done
+    fi
+
+    # Búsqueda global si ninguno apareció en rutas habituales ni caché
     if [ -z "$LLAMA_MODEL" ]; then
         warn "No se encontró modelo en rutas habituales — buscando en todo el sistema..."
         LLAMA_MODEL=$(find / \( -name "qwen2.5-0.5b*.gguf" -o -name "Qwen2.5-0.5B*.gguf" \) \
@@ -296,14 +322,25 @@ else
         error "No se encontró ningún modelo compatible (.gguf)"
         error ""
         error "Opción A — Qwen2.5-0.5B-Instruct Q4 (recomendado, ~300MB más rápido):"
-        error "  mkdir -p /opt/models"
-        error "  wget -O /opt/models/qwen2.5-0.5b-instruct-q4.gguf \\"
-        error "    https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+        error "  Con llama.cpp (descarga directa desde HuggingFace):"
+        error "    $LLAMA_BIN \\"
+        error "      --hf-repo Qwen/Qwen2.5-0.5B-Instruct-GGUF \\"
+        error "      --hf-file qwen2.5-0.5b-instruct-q4_k_m.gguf \\"
+        error "      --port 8081 --host 0.0.0.0 --ctx-size 4096 --parallel 1"
+        error "  (el modelo queda en ~/.cache/llama.cpp/ — el setup lo detecta allí)"
+        error "  O con wget directo a /opt/models/:"
+        error "    wget -O /opt/models/qwen2.5-0.5b-instruct-q4.gguf \\"
+        error "      https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
         error ""
         error "Opción B — TinyLlama 1.1B Chat Q4 (~700MB):"
-        error "  mkdir -p /opt/models"
-        error "  wget -O /opt/models/tinyllama-1.1b-chat-q4.gguf \\"
-        error "    https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
+        error "  Con llama.cpp:"
+        error "    $LLAMA_BIN \\"
+        error "      --hf-repo TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF \\"
+        error "      --hf-file tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf \\"
+        error "      --port 8081 --host 0.0.0.0 --ctx-size 4096 --parallel 1"
+        error "  O con wget:"
+        error "    wget -O /opt/models/tinyllama-1.1b-chat-q4.gguf \\"
+        error "      https://huggingface.co/TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF/resolve/main/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf"
         die "Descarga uno de los modelos antes de continuar"
     fi
 

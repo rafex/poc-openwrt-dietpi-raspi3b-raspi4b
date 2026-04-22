@@ -30,8 +30,10 @@ spec:
               value: "/data/sensor.db"
             - name: LLAMA_URL
               value: "http://192.168.1.167:8081"
+            - name: MODEL_FORMAT
+              value: "tinyllama"
             - name: N_PREDICT
-              value: "384"
+              value: "256"
             - name: PORT
               value: "5000"
             - name: LOG_LEVEL
