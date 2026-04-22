@@ -16,6 +16,45 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 BACKEND_DIR="$REPO_DIR/backend/captive-portal"
 K8S_DIR="$REPO_DIR/k8s"
 
+# Logging global a archivo + consola
+SCRIPT_NAME="$(basename "$0" .sh)"
+DEFAULT_LOG_DIR="/var/log/demo-openwrt/setup"
+if mkdir -p "$DEFAULT_LOG_DIR" 2>/dev/null && [ -w "$DEFAULT_LOG_DIR" ]; then
+    LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
+else
+    DEFAULT_LOG_DIR="/tmp/demo-openwrt/setup"
+    mkdir -p "$DEFAULT_LOG_DIR" 2>/dev/null || true
+    LOG_DIR="${LOG_DIR:-$DEFAULT_LOG_DIR}"
+fi
+mkdir -p "$LOG_DIR" 2>/dev/null || LOG_DIR="/tmp/demo-openwrt/setup"
+mkdir -p "$LOG_DIR"
+TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
+LOG_FILE="$LOG_DIR/${SCRIPT_NAME}-${TIMESTAMP}.log"
+
+if [ -z "${SETUP_LOG_INITIALIZED:-}" ]; then
+    SETUP_LOG_INITIALIZED=1
+    export SETUP_LOG_INITIALIZED
+    if command -v tee >/dev/null 2>&1 && command -v mkfifo >/dev/null 2>&1; then
+        LOG_PIPE="/tmp/${SCRIPT_NAME}-$$.logpipe"
+        mkfifo "$LOG_PIPE"
+        tee -a "$LOG_FILE" < "$LOG_PIPE" &
+        LOG_TEE_PID=$!
+        exec > "$LOG_PIPE" 2>&1
+        cleanup_setup_logging() {
+            rc=$?
+            trap - EXIT INT TERM
+            exec 1>&- 2>&-
+            wait "$LOG_TEE_PID" 2>/dev/null || true
+            rm -f "$LOG_PIPE"
+            exit "$rc"
+        }
+        trap cleanup_setup_logging EXIT INT TERM
+    else
+        exec >> "$LOG_FILE" 2>&1
+    fi
+fi
+printf '[INFO]  Log file: %s\n' "$LOG_FILE"
+
 # Constantes
 SSH_KEY="/opt/keys/captive-portal"
 SSH_KEY_PUB="/opt/keys/captive-portal.pub"
