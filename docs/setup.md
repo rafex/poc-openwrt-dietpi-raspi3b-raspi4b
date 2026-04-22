@@ -163,6 +163,7 @@ bash scripts/sensor-status.sh --follow
 1. Conectar el celular al WiFi "INFINITUM MOVIL"
 2. Abrir URL HTTP: `http://neverssl.com` o `http://example.com`
 3. El router redirige al portal: `http://192.168.1.167/portal`
+   - Fallback amigable: `http://captive.localhost.com/portal`
 4. Sin aceptar: sin internet
 5. Aceptar: navegar libremente durante **120 minutos**
 6. Verificar clientes autorizados:
@@ -173,6 +174,10 @@ bash scripts/openwrt-list-clients.sh
 
 > ⚠️ Los navegadores modernos abren HTTPS por defecto. La detección automática
 > de captive portal (Android/iOS) usa HTTP — eso sí dispara el portal.
+>
+> Si no aparece el popup automático:
+> - Desactiva "DNS privado" (Android) o perfiles VPN/DoH del equipo.
+> - Re-conecta el WiFi para que reciba DHCP option `114` con la URL del portal.
 
 ---
 

@@ -13,6 +13,9 @@
 #   - La IP 192.168.1.113 (admin) NUNCA sera bloqueada
 #   - En caso de emergencia: ssh root@192.168.1.1 y ejecutar:
 #       nft delete table ip captive
+#
+# Variables opcionales:
+#   CAPTIVE_DOMAIN=captive.localhost.com   # dominio local de fallback para abrir portal manualmente
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -57,6 +60,7 @@ fi
 printf '[INFO]  Log file: %s\n' "$LOG_FILE"
 
 . "$SCRIPT_DIR/lib/common.sh"
+CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.localhost.com}"
 
 # =============================================================================
 # Pre-flight checks
@@ -146,6 +150,13 @@ address=/connectivity-check.ubuntu.com/$PORTAL_IP
 # Linux / GNOME / Debian
 address=/network-test.debian.org/$PORTAL_IP
 address=/nmcheck.gnome.org/$PORTAL_IP
+
+# Dominio local de fallback (manual)
+address=/$CAPTIVE_DOMAIN/$PORTAL_IP
+
+# DHCP option 114 (RFC 7710/8910): anuncia URL del captive portal al cliente
+# Mejora la apertura automática del portal en Android/iOS/macOS/Windows modernos.
+dhcp-option=114,http://$PORTAL_IP/portal
 
 "
 
@@ -438,6 +449,14 @@ else
     log_warn "No se pudo verificar dnsmasq (puede estar OK si el dominio tarda en propagarse)"
 fi
 
+log_info "Verificando dominio fallback del portal..."
+FALLBACK_RESOLVED=$(router_ssh "nslookup $CAPTIVE_DOMAIN 127.0.0.1 2>/dev/null | grep 'Address' | tail -1" 2>/dev/null || echo "")
+if printf '%s' "$FALLBACK_RESOLVED" | grep -q "$PORTAL_IP"; then
+    log_ok "dnsmasq resuelve correctamente: $CAPTIVE_DOMAIN -> $PORTAL_IP"
+else
+    log_warn "No se pudo verificar $CAPTIVE_DOMAIN en dnsmasq"
+fi
+
 # Resumen final
 printf '\n'
 log_ok "=== Setup de OpenWrt completado ==="
@@ -450,6 +469,7 @@ printf '  Admin (libre): %s — permanente\n' "$ADMIN_IP"
 printf '  AP interface:  %s\n' "$AP_IFACE"
 printf '  Portal timeout: %s (acceso WiFi invitados)\n' "$PORTAL_TIMEOUT"
 printf '  DHCP leasetime: 120m\n'
+printf '  Fallback portal: http://%s/portal\n' "$CAPTIVE_DOMAIN"
 printf '\n'
 log_info "Comandos utiles:"
 printf '  Listar clientes:    sh scripts/openwrt-list-clients.sh\n'
