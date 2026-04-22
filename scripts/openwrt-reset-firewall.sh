@@ -125,8 +125,24 @@ router_ssh "
 
 # Recargar dnsmasq para aplicar cambios
 log_info "Recargando dnsmasq..."
-router_ssh "/etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart 2>/dev/null || true"
-log_ok "dnsmasq recargado"
+if router_ssh "/etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart 2>/dev/null"; then
+    # Verificar que el proceso esté vivo
+    if router_ssh "pidof dnsmasq >/dev/null 2>&1"; then
+        # Verificar resolución local en el router
+        if router_ssh "nslookup openwrt.org 127.0.0.1 >/dev/null 2>&1"; then
+            log_ok "dnsmasq recargado y resolución DNS local OK"
+        else
+            log_warn "dnsmasq está corriendo, pero nslookup local falló"
+            log_warn "Revisa en router: logread | tail -80"
+        fi
+    else
+        log_warn "dnsmasq no quedó corriendo tras recarga/restart"
+        log_warn "Intenta manualmente: /etc/init.d/dnsmasq restart"
+    fi
+else
+    log_warn "No se pudo recargar/reiniciar dnsmasq automáticamente"
+    log_warn "Intenta manualmente en router: /etc/init.d/dnsmasq restart"
+fi
 
 # =============================================================================
 # PASO 4: Limpiar conntrack
