@@ -1,5 +1,16 @@
 # Guía de Setup — Captive Portal + IA Local
 
+## Hito 1 (completado)
+
+Estado al **22 de abril de 2026**:
+- Registro en portal Lentium operativo (`/api/register/client` y `/api/register/guest`)
+- Redirección captive por nftables + dnsmasq operativa
+- Detección mejorada con DHCP option `114` y dominio fallback `captive.localhost.com`
+- Stack IA (Mosquitto + llama-server + ai-analyzer) operativo
+- Scripts `setup-*` con logging persistente en `/var/log/demo-openwrt/setup` (fallback `/tmp/demo-openwrt/setup`)
+
+---
+
 ## Dispositivos y prerequisitos
 
 | Dispositivo | Hostname | IP | Requisitos |
@@ -36,7 +47,8 @@ Qué hace:
 |---|---|
 | Pre-flight | Verifica espacio en overlay, interfaz `phy0-ap0`, SSH al router |
 | A | Agrega llave pública al router (`/etc/dropbear/authorized_keys`) |
-| B | Configura dnsmasq — dominios de detección → `192.168.1.167`; **lease time 120m** |
+| B | Configura dnsmasq en `/etc/dnsmasq.conf` (bloque captive) — dominios de detección + `captive.localhost.com` → `192.168.1.167` |
+| B | Configura DHCP: **lease time 120m**, option `6` (DNS router) y option `114` (URL del portal) |
 | C | Crea tabla nftables `ip captive`: timeout **120m** para clientes; **RafexPi4B y RafexPi3B permanentes** (timeout 0s) |
 | C.1 | **Reservas DHCP UCI permanentes** para RafexPi4B (`d8:3a:dd:4d:4b:ae → 192.168.1.167`) y RafexPi3B (`b8:27:eb:5a:ec:33 → 192.168.1.181`) con `leasetime=infinite` |
 | D | Verifica la configuración completa |
@@ -46,6 +58,36 @@ Qué hace:
 > ssh root@192.168.1.1   # SSH al router no pasa por el hook forward
 > nft delete table ip captive
 > ```
+
+Log del setup:
+```bash
+ls -1t /var/log/demo-openwrt/setup/setup-openwrt-*.log 2>/dev/null | head -1
+```
+
+---
+
+## Paso 2.1 — Configurar uplink WiFi (WAN por 5 GHz + AP 2.4 GHz abierto)
+
+Si tu router no usa WAN Ethernet y se conecta por WiFi a una red upstream:
+
+```bash
+bash scripts/setup-openwrt-wifi-uplink.sh \
+  --uplink-ssid netup \
+  --uplink-pass 123 \
+  --ap-ssid "INFINITUM MOVIL"
+```
+
+Qué aplica:
+- `sta_uplink` (5GHz, modo `sta`, red `wwan`, DHCP)
+- `ap_captive` (2.4GHz, modo `ap`, red `lan`, `encryption=none`)
+- agrega `wwan` a zona `wan` en firewall
+
+Validar en router:
+```bash
+ifstatus wwan
+iwinfo
+nslookup google.com 192.168.1.1
+```
 
 ---
 
@@ -73,6 +115,7 @@ Qué hace:
 | DHCP | SSH al router → UCI reserva `RafexPi4B  d8:3a:dd:4d:4b:ae → 192.168.1.167  infinite` |
 | Pre-flight | Verifica k3s corriendo, podman disponible |
 | A0 | Instala Mosquitto, configura `:1883 allow_anonymous true`, habilita en arranque |
+| A0 | Instalación apt robusta: no interactiva, timeout, reintentos y recuperación de `dpkg` |
 | A | Localiza binario `llama-server` y modelo `tinyllama*.gguf` (busca rutas habituales + find) |
 | B | Genera servicio init.d `llama-server`: `ctx-size=4096 --parallel 1 --threads 4` |
 | C | `podman build --cgroup-manager=cgroupfs --platform linux/arm64` imagen `ai-analyzer` |
@@ -236,6 +279,13 @@ mosquitto_sub -h 192.168.1.167 -t "rafexpi/sensor/batch" -v
 # Estado de llama-server
 /etc/init.d/llama-server status
 curl -s http://192.168.1.167:8081/health
+```
+
+Control rápido del LLM (ahorro de CPU):
+```bash
+bash scripts/llm-control.sh off
+bash scripts/llm-control.sh on
+bash scripts/llm-control.sh status
 ```
 
 ---

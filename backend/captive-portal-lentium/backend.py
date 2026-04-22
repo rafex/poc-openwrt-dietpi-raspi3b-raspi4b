@@ -35,6 +35,9 @@ DB_PATH     = os.environ.get("DB_PATH",     "/data/lentium.db")
 PORT        = int(os.environ.get("PORT",    "8080"))
 NFT_SET     = "ip captive allowed_clients"
 NFT_BLOCKED_SET = "ip captive blocked_macs"
+REDIRECT_URL = os.environ.get("REDIRECT_URL", "https://theworldofrafex.blog/")
+ADMIN_IP    = os.environ.get("ADMIN_IP", "192.168.1.113")
+SENSOR_IP   = os.environ.get("SENSOR_IP", "192.168.1.181")
 
 log.info("=== Lentium Portal Backend iniciando ===")
 log.info(f"ROUTER_IP={ROUTER_IP}  PORTAL_IP={PORTAL_IP}  DB_PATH={DB_PATH}  PORT={PORT}")
@@ -44,8 +47,11 @@ log.info(f"ROUTER_IP={ROUTER_IP}  PORTAL_IP={PORTAL_IP}  DB_PATH={DB_PATH}  PORT
 # =============================================================================
 def _db_connect() -> sqlite3.Connection:
     Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
 
@@ -263,6 +269,182 @@ def _require_fields(data: dict, fields: list[str]) -> str | None:
             return f"Campo requerido: {f}"
     return None
 
+
+def _safe_json_loads(raw: str, fallback):
+    try:
+        return json.loads(raw)
+    except Exception:
+        return fallback
+
+
+def _get_connected_clients() -> list[dict]:
+    # IPs autorizadas actualmente en nftables.
+    rc_set, set_stdout, _ = _router_ssh(
+        "nft-allowed-list",
+        "nft list set ip captive allowed_clients 2>/dev/null"
+        " | grep -oE '([0-9]{1,3}\\.){3}[0-9]{1,3}' | sort -u"
+    )
+    if rc_set != 0:
+        return []
+
+    ips = [line.strip() for line in set_stdout.splitlines() if line.strip()]
+    reserved = {ADMIN_IP, PORTAL_IP, SENSOR_IP}
+    ips = [ip for ip in ips if ip not in reserved]
+    if not ips:
+        return []
+
+    # Metadata por IP desde leases DHCP.
+    rc_leases, leases_stdout, _ = _router_ssh("dhcp-leases", "cat /tmp/dhcp.leases 2>/dev/null")
+    lease_by_ip = {}
+    if rc_leases == 0 and leases_stdout:
+        for line in leases_stdout.splitlines():
+            parts = line.strip().split()
+            if len(parts) < 4:
+                continue
+            lease_by_ip[parts[2]] = {
+                "lease_expiry": parts[0],
+                "mac": parts[1].lower(),
+                "hostname": parts[3] if parts[3] != "*" else "",
+            }
+
+    connected = []
+    for ip in ips:
+        meta = lease_by_ip.get(ip, {})
+        connected.append({
+            "ip": ip,
+            "mac": meta.get("mac", ""),
+            "hostname": meta.get("hostname", ""),
+            "lease_expiry": meta.get("lease_expiry", ""),
+        })
+    return connected
+
+
+def _build_demo_dashboard_payload() -> dict:
+    with _db_connect() as conn:
+        clientes_rows = conn.execute(
+            "SELECT id,telefono,pwd_plano,pwd_hash,ip,registrado_en,ultima_sesion FROM clientes ORDER BY id DESC"
+        ).fetchall()
+        invitados_rows = conn.execute(
+            """SELECT id,nombre,apellido_paterno,apellido_materno,telefono,direccion_texto,
+                      direccion_geo,pwd_plano,pwd_hash,redes_sociales,ip,registrado_en,ultima_sesion
+               FROM invitados ORDER BY id DESC"""
+        ).fetchall()
+
+    clientes = [dict(r) for r in clientes_rows]
+    invitados = []
+    for row in invitados_rows:
+        d = dict(row)
+        d["redes_sociales"] = _safe_json_loads(d.get("redes_sociales") or "[]", [])
+        d["direccion_geo"] = _safe_json_loads(d.get("direccion_geo") or "null", None)
+        invitados.append(d)
+
+    connected = _get_connected_clients()
+    connected_ips = {c["ip"] for c in connected}
+    for c in clientes:
+        c["conectado"] = bool(c.get("ip") and c["ip"] in connected_ips)
+    for g in invitados:
+        g["conectado"] = bool(g.get("ip") and g["ip"] in connected_ips)
+
+    return {
+        "meta": {
+            "generated_at": int(time.time()),
+            "redirect_url": REDIRECT_URL,
+        },
+        "stats": {
+            "clientes_registrados": len(clientes),
+            "invitados_registrados": len(invitados),
+            "conectados": len(connected),
+        },
+        "conectados": connected,
+        "clientes": clientes,
+        "invitados": invitados,
+    }
+
+
+def _demo_dashboard_html() -> bytes:
+    html = """<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>demoDashboard · Lentium</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0b1f33; color: #e8f0f8; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 18px; }
+    h1 { margin: 0 0 6px; font-size: 1.4rem; }
+    .sub { opacity: .85; margin-bottom: 14px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit,minmax(170px,1fr)); gap: 10px; margin-bottom: 14px; }
+    .card { background: #15324f; border: 1px solid #284a6b; border-radius: 12px; padding: 12px; }
+    .n { font-size: 1.4rem; font-weight: 700; }
+    .label { opacity: .9; font-size: .86rem; }
+    .panel { background: #102941; border: 1px solid #27496b; border-radius: 12px; padding: 12px; margin-bottom: 12px; overflow: auto; }
+    table { border-collapse: collapse; width: 100%; font-size: .86rem; }
+    th, td { border-bottom: 1px solid #2a4d70; padding: 8px; text-align: left; vertical-align: top; }
+    th { color: #b8d2ea; font-weight: 600; position: sticky; top: 0; background: #13314d; }
+    .ok { color: #6fe39a; font-weight: 700; }
+    .off { color: #ffb4b4; font-weight: 700; }
+    .muted { opacity: .8; font-size: .8rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>demoDashboard · Lentium</h1>
+    <div class="sub">Registros y clientes conectados en tiempo real (auto-refresh 5s)</div>
+    <div class="cards">
+      <div class="card"><div class="n" id="nClientes">0</div><div class="label">Clientes registrados</div></div>
+      <div class="card"><div class="n" id="nInvitados">0</div><div class="label">Invitados registrados</div></div>
+      <div class="card"><div class="n" id="nConectados">0</div><div class="label">Conectados ahora</div></div>
+      <div class="card"><div class="n" id="ts">-</div><div class="label">Última actualización</div></div>
+    </div>
+    <div class="panel">
+      <h3>Conectados</h3>
+      <table id="tblConectados"></table>
+    </div>
+    <div class="panel">
+      <h3>Clientes</h3>
+      <table id="tblClientes"></table>
+    </div>
+    <div class="panel">
+      <h3>Invitados</h3>
+      <table id="tblInvitados"></table>
+    </div>
+  </div>
+<script>
+function esc(v){ return (v===null||v===undefined)?'':String(v).replace(/[&<>\"']/g,m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[m])); }
+function table(el, cols, rows){
+  const head = '<tr>' + cols.map(c => '<th>'+esc(c.label)+'</th>').join('') + '</tr>';
+  const body = rows.map(r => '<tr>' + cols.map(c => '<td>'+esc(c.get(r))+'</td>').join('') + '</tr>').join('');
+  el.innerHTML = head + body;
+}
+function connectedBadge(v){ return v ? 'SI' : 'NO'; }
+function ts(v){ if(!v) return '-'; return new Date(v*1000).toLocaleTimeString(); }
+async function refresh(){
+  const resp = await fetch('/api/demo/dashboard', { cache: 'no-store' });
+  const data = await resp.json();
+  document.getElementById('nClientes').textContent = data.stats.clientes_registrados;
+  document.getElementById('nInvitados').textContent = data.stats.invitados_registrados;
+  document.getElementById('nConectados').textContent = data.stats.conectados;
+  document.getElementById('ts').textContent = ts(data.meta.generated_at);
+  table(document.getElementById('tblConectados'), [
+    {label:'IP', get:r=>r.ip},{label:'MAC', get:r=>r.mac},{label:'Hostname', get:r=>r.hostname},{label:'Lease', get:r=>r.lease_expiry}
+  ], data.conectados || []);
+  table(document.getElementById('tblClientes'), [
+    {label:'ID', get:r=>r.id},{label:'Teléfono', get:r=>r.telefono},{label:'IP', get:r=>r.ip},
+    {label:'Conectado', get:r=>connectedBadge(r.conectado)},{label:'Registrado', get:r=>r.registrado_en},{label:'Última sesión', get:r=>r.ultima_sesion}
+  ], data.clientes || []);
+  table(document.getElementById('tblInvitados'), [
+    {label:'ID', get:r=>r.id},{label:'Nombre', get:r=>[r.nombre,r.apellido_paterno,r.apellido_materno].filter(Boolean).join(' ')},
+    {label:'Teléfono', get:r=>r.telefono},{label:'IP', get:r=>r.ip},{label:'Conectado', get:r=>connectedBadge(r.conectado)},
+    {label:'Registrado', get:r=>r.registrado_en}
+  ], data.invitados || []);
+}
+refresh().catch(()=>{});
+setInterval(() => refresh().catch(()=>{}), 5000);
+</script>
+</body>
+</html>"""
+    return html.encode("utf-8")
+
 # =============================================================================
 # HTTP Handler
 # =============================================================================
@@ -310,6 +492,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if self.path in ("/", "/portal", "/index.html"):
             self._serve_portal()
+            return
+
+        if self.path in ("/demoDashboard", "/demoDashboard/"):
+            html = _demo_dashboard_html()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
             return
 
         if self.path == "/health":
@@ -365,6 +556,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(200, {"invitados": result})
             return
 
+        if self.path == "/api/demo/dashboard":
+            self._respond(200, _build_demo_dashboard_payload())
+            return
+
         log.warning(f"GET {self.path} — no encontrado")
         self._respond(404, {"error": "not found"})
 
@@ -387,7 +582,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         # ── Registro de invitado ─────────────────────────────────────────────
-        if self.path == "/api/register/guest":
+        if self.path in ("/api/register/guest", "/api/register/quest"):
             err = _require_fields(data, ["nombre","apellido_paterno","apellido_materno","telefono","password"])
             if err:
                 self._respond(400, {"ok": False, "error": err}); return

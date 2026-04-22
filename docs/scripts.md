@@ -4,6 +4,23 @@ Todos los scripts viven en `scripts/`. Los que interactúan con el router se eje
 
 ---
 
+## Logging de setup
+
+Todos los scripts `setup-*` escriben logs completos (`stdout` + `stderr`) en:
+
+- Primario: `/var/log/demo-openwrt/setup`
+- Fallback automático: `/tmp/demo-openwrt/setup`
+
+Formato:
+- `<script>-YYYYMMDD-HHMMSS.log`
+
+Ejemplo:
+```bash
+ls -1t /var/log/demo-openwrt/setup/setup-*.log 2>/dev/null | head -5
+```
+
+---
+
 ## setup-openwrt.sh
 
 **Propósito:** Configuración completa del router OpenWrt para el captive portal y las Raspis.  
@@ -18,7 +35,8 @@ bash scripts/setup-openwrt.sh
 |---|---|
 | Pre-flight | Verifica espacio en overlay, interfaz `phy0-ap0`, acceso SSH |
 | A | Agrega llave pública a `/etc/dropbear/authorized_keys` |
-| B | Escribe dnsmasq captive portal; configura **DHCP lease time = 120m** |
+| B | Escribe bloque captive en `/etc/dnsmasq.conf` (sin depender de `/etc/dnsmasq.d/`) |
+| B | Configura DHCP: lease `120m`, option `6` (DNS router), option `114` (URL captive) |
 | C | Aplica nftables: timeout **120m** para clientes, permanentes (timeout 0s) para admin + RafexPi4B + RafexPi3B |
 | **C.1** | **Reservas DHCP UCI permanentes**: RafexPi4B y RafexPi3B con `leasetime=infinite` y su hostname |
 | D | Verificación: tabla nftables, admin en el set, dnsmasq resuelve correctamente |
@@ -27,6 +45,8 @@ Cambios respecto a la versión anterior:
 - **DHCP lease time subido de 30m a 120m** (sincronizado con el timeout del set nftables)
 - **RafexPi3B añadida como permanente** en `allowed_clients` (timeout 0s) — nunca necesita pasar por el portal
 - **FASE C.1 nueva** — crea reservas DHCP en el router para ambas Raspis con sus hostnames correctos
+- **Detección captive mejorada**: `dhcp-option=114,http://192.168.1.167/portal`
+- **Dominio fallback manual**: `captive.localhost.com`
 
 > **Regla de oro:** admin `192.168.1.113`, RafexPi4B `192.168.1.167` y RafexPi3B `192.168.1.181`
 > siempre tienen `timeout 0s` — nunca se bloquean.
@@ -51,6 +71,7 @@ sudo bash scripts/setup-ai-raspi4b.sh --no-llama   # omitir configuración llama
 | DHCP | SSH al router → reserva UCI `RafexPi4B  d8:3a:dd:4d:4b:ae → 192.168.1.167  infinite` |
 | Pre-flight | Verifica k3s corriendo (lo arranca si es necesario), podman disponible |
 | A0 | Instala Mosquitto; escribe `/etc/mosquitto/conf.d/rafexpi.conf` (`listen 1883 0.0.0.0, allow_anonymous true`); habilita y reinicia |
+| A0 | Instalación apt robusta: no interactiva, timeout, reintentos y recuperación `dpkg` |
 | A | Localiza `llama-server` (rutas habituales + `find`); localiza modelo `tinyllama*.gguf`; resuelve symlinks con `realpath` |
 | B | Genera `/etc/init.d/llama-server` con `ctx-size=4096 --parallel 1 --threads 4`; habilita; instala `/etc/cron.d/llama-watchdog` (autorelanza cada minuto si se cae); espera hasta 60s que responda en `:8081` |
 | C | `podman build --cgroup-manager=cgroupfs --platform linux/arm64 -t localhost/ai-analyzer:latest` |
@@ -70,6 +91,29 @@ sudo bash scripts/setup-ai-raspi4b.sh --no-llama   # omitir configuración llama
 | `N_PREDICT` | 384 | Tokens a generar |
 | `PORT` | 5000 | Puerto Flask |
 | `LOG_LEVEL` | INFO | Nivel de log |
+
+---
+
+## setup-openwrt-wifi-uplink.sh
+
+**Propósito:** Configurar router con uplink WAN por WiFi 5GHz y AP 2.4GHz abierto para el captive portal.  
+**Ejecutar en:** RafexPi4B  
+**Idempotente:** Sí
+
+```bash
+bash scripts/setup-openwrt-wifi-uplink.sh \
+  --uplink-ssid netup \
+  --uplink-pass 123 \
+  --ap-ssid "INFINITUM MOVIL"
+```
+
+Qué hace:
+- Detecta radios 2.4/5GHz (`wifi-device`) en OpenWrt
+- Crea `network.wwan` (DHCP)
+- Configura `wireless.sta_uplink` (5GHz, modo `sta`, red `wwan`)
+- Configura `wireless.ap_captive` (2.4GHz, `encryption=none`)
+- Agrega `wwan` a la zona `wan` del firewall
+- Aplica `network reload`, `wifi reload`, `ifup wwan`, `firewall reload`
 
 ---
 
@@ -143,6 +187,25 @@ Tests funcionales (`--test`):
 | 6 | llama-server responde en `:8081` |
 | 7 | Mosquitto acepta publicaciones en `:1883` |
 | 8 | `GET /dashboard` → HTML (200) |
+
+---
+
+## llm-control.sh
+
+**Propósito:** Encender/apagar el LLM local para reducir uso de CPU cuando no se está usando.  
+**Ejecutar en:** RafexPi4B
+
+```bash
+bash scripts/llm-control.sh status
+bash scripts/llm-control.sh off
+bash scripts/llm-control.sh on
+bash scripts/llm-control.sh restart
+```
+
+Comportamiento:
+- `off`: detiene `/etc/init.d/llama-server` y desactiva watchdog (`/etc/cron.d/llama-watchdog`)
+- `on`: arranca `llama-server` y reactiva watchdog
+- `status`: muestra PID, health HTTP en `:8081` y estado watchdog
 
 ---
 
@@ -267,7 +330,7 @@ Elimina entradas dnsmasq y los recursos k8s del pod dns-spoof.
 bash scripts/openwrt-reset-firewall.sh
 ```
 
-Elimina: tabla `ip captive`, `/etc/nftables.d/captive-portal.nft`, `/etc/dnsmasq.d/captive-portal.conf`, flush conntrack. No toca la configuración base de `fw4`.
+Elimina: tabla `ip captive`, `/etc/nftables.d/captive-portal.nft`, `/etc/dnsmasq.d/captive-portal.conf`, bloque captive en `/etc/dnsmasq.conf`, flush conntrack. No toca la configuración base de `fw4`.
 
 ---
 

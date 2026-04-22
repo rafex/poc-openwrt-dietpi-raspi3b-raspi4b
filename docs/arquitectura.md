@@ -22,6 +22,8 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
     │    }
     │  dnsmasq:
     │    • dominios captive portal → 192.168.1.167
+    │    • captive.localhost.com → 192.168.1.167
+    │    • DHCP option 114 → http://192.168.1.167/portal
     │    • DHCP lease time: 120m
     │    • Reservas permanentes:
     │        RafexPi4B  d8:3a:dd:4d:4b:ae → 192.168.1.167  infinite
@@ -137,6 +139,7 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
 3. SO detecta captive portal:
    GET http://connectivitycheck.gstatic.com/generate_204
         ↓  dnsmasq → 192.168.1.167
+        ↓  DHCP option 114 anuncia URL captive
         ↓  nftables DNAT tcp dport 80 → 192.168.1.167:80
         ↓
 4. Traefik (externalTrafficPolicy:Local) recibe con IP real del cliente
@@ -292,6 +295,14 @@ CREATE TABLE analyses (
 | `dns-spoof` | Deployment | nginx:alpine — demo separada |
 | `dns-spoof` | Service | ClusterIP port 80 |
 | `dns-spoof` | Ingress | `Host: rafex.dev` y `Host: www.rafex.dev` |
+
+---
+
+## Operación y logs
+
+- Los scripts `setup-*` guardan log en `/var/log/demo-openwrt/setup`.
+- Si no hay permisos en `/var/log`, usan fallback `/tmp/demo-openwrt/setup`.
+- Formato: `<script>-YYYYMMDD-HHMMSS.log`.
 
 ---
 

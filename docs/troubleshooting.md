@@ -130,6 +130,50 @@ bash scripts/setup-openwrt.sh  # recarga con las reglas correctas
 
 ---
 
+## WiFi dice "sin internet" pero no abre captive portal (Android/iPhone)
+
+Síntoma típico:
+- El teléfono marca la red como "sin internet"
+- No aparece popup de portal automáticamente
+- Solo funciona si abres manualmente una URL
+
+Checklist rápido en router:
+
+```bash
+# 1) DNS de detección captive debe resolver al portal
+nslookup connectivitycheck.gstatic.com 127.0.0.1
+nslookup captive.localhost.com 127.0.0.1
+# ambos deben devolver 192.168.1.167
+
+# 2) DHCP debe anunciar option 6 (DNS router) y 114 (URL captive)
+uci show dhcp.lan | grep dhcp_option
+# esperado:
+# dhcp.lan.dhcp_option='6,192.168.1.1'
+# dhcp.lan.dhcp_option='114,http://192.168.1.167/portal'
+
+# 3) dnsmasq debe estar corriendo y con config válida
+pidof dnsmasq
+logread -e dnsmasq | tail -40
+```
+
+Fix recomendado:
+```bash
+# desde RafexPi4B
+bash scripts/setup-openwrt.sh
+```
+
+En el móvil:
+1. "Olvidar red" y reconectar (forzar nuevo lease DHCP).
+2. Desactivar DNS privado / DoH / VPN.
+3. Probar manual: `http://captive.localhost.com/portal`.
+
+Si el popup sigue sin salir en iPhone:
+- activar/desactivar WiFi,
+- abrir Safari en HTTP (`http://neverssl.com`),
+- confirmar que no hay perfil MDM/VPN forzando DNS externo.
+
+---
+
 ## nftables: "File exists" / "Could not process rule" al ejecutar setup-openwrt.sh
 
 **Causa:** `nft -c -f` (dry-run) falla porque la tabla ya existe en el kernel
@@ -264,7 +308,7 @@ ssh -i /opt/keys/captive-portal root@192.168.1.1 \
 
 # Si no resuelve:
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
-  "cat /etc/dnsmasq.conf | grep 192.168.1.167"
+  "cat /etc/dnsmasq.conf | grep -E '192.168.1.167|captive.localhost.com|dhcp-option=114'"
 # Debe haber líneas address=/.../192.168.1.167
 
 # Recargar dnsmasq

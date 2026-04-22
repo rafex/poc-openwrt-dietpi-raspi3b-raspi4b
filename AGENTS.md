@@ -11,6 +11,18 @@ PoC educativa de seguridad en redes públicas que combina:
 - MQTT (Mosquitto) como cola de mensajes entre el sensor y el analizador IA
 - SQLite como persistencia de batches y análisis
 
+## Hito 1 (completado)
+
+Estado al **22 de abril de 2026**:
+- Captive portal funcional extremo a extremo (registro cliente/invitado y autorización nftables).
+- Stack IA funcional (sensor → MQTT → analyzer → TinyLlama → dashboard).
+- Detección captive mejorada:
+  - dnsmasq con dominios de detección en `/etc/dnsmasq.conf`
+  - DHCP option `114` (`http://192.168.1.167/portal`)
+  - dominio fallback `captive.localhost.com`
+- Scripts `setup-*` con logging persistente en `/var/log/demo-openwrt/setup` (fallback `/tmp/demo-openwrt/setup`).
+- Script operativo para apagar/encender LLM (`scripts/llm-control.sh`) y reducir CPU.
+
 ## Arquitectura
 
 ```
@@ -20,7 +32,10 @@ Router OpenWrt (192.168.1.1)   ath79/mips_24kc
     │  nftables: tabla ip captive
     │    • allowed_clients timeout 120m (clientes WiFi)
     │    • permanentes (timeout 0s): admin, RafexPi4B, RafexPi3B
-    │  dnsmasq: dominios captive portal → 192.168.1.167; lease 120m
+    │  dnsmasq: dominios captive portal → 192.168.1.167
+    │           captive.localhost.com → 192.168.1.167
+    │           DHCP option 114 → http://192.168.1.167/portal
+    │           lease 120m
     │  DHCP reservas: RafexPi4B=192.168.1.167, RafexPi3B=192.168.1.181
     │
     ├── WAN: phy1-sta0 → WiFi upstream (5 GHz)
@@ -117,8 +132,10 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 ├── scripts/
 │   ├── lib/common.sh                # constantes, SSH helpers, router_add_ip
 │   ├── setup-openwrt.sh             # configura router completo
+│   ├── setup-openwrt-wifi-uplink.sh # WAN por WiFi 5GHz + AP 2.4 abierto
 │   ├── setup-ai-raspi4b.sh          # instala stack IA en Raspi 4B
 │   ├── setup-sensor-raspi3b.sh      # instala sensor en Raspi 3B
+│   ├── llm-control.sh               # on/off/restart/status de llama-server
 │   ├── sensor-status.sh             # diagnóstico completo del sistema
 │   ├── openwrt-allow-client.sh
 │   ├── openwrt-block-client.sh
@@ -145,6 +162,9 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 - [x] `allowed_clients` timeout **120m** (subido de 30m)
 - [x] Permanentes (timeout 0s): admin `192.168.1.113`, RafexPi4B `192.168.1.167`, RafexPi3B `192.168.1.181`
 - [x] dnsmasq: dominios de detección de captive portal → 192.168.1.167
+- [x] Dominio fallback: `captive.localhost.com` → 192.168.1.167
+- [x] DHCP option `114`: `http://192.168.1.167/portal`
+- [x] DHCP option `6`: DNS del router (`192.168.1.1`) para clientes LAN
 - [x] DHCP lease time: **120m** (UCI `dhcp.lan.leasetime=120m`)
 - [x] Reservas DHCP permanentes:
   - RafexPi4B — `d8:3a:dd:4d:4b:ae` → 192.168.1.167 (leasetime=infinite)
@@ -158,6 +178,7 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 - [x] Mosquitto MQTT broker corriendo en :1883
 - [x] llama-server (TinyLlama Q4_K_M) en :8081 — ctx-size=4096, --parallel 1
 - [x] Watchdog `/etc/cron.d/llama-watchdog` — relanza llama-server automáticamente si se cae
+- [x] `scripts/llm-control.sh` para apagar/encender LLM y watchdog según uso
 - [x] Pod ai-analyzer corriendo — Flask + MQTT subscriber + worker + SQLite
 - [x] Dashboards: `/dashboard` (UI visual) y `/terminal` (SSE log en vivo)
 - [x] HTML servido desde la imagen Docker (no ConfigMap — evita errores de parseo YAML)
@@ -269,12 +290,20 @@ ssh-ed25519 AAAAC3... sensor@raspi3b
 - **No usar `systemctl`** — usar `/etc/init.d/`
 - Overlay: ~840KB — no instalar paquetes innecesarios
 - Dropbear: opciones SSH básicas únicamente
-- `/etc/dnsmasq.d/` puede no existir — fallback a `/etc/dnsmasq.conf` con marcadores
+- Para captive portal usar bloque en `/etc/dnsmasq.conf` (ruta confiable en OpenWrt)
+- Configurar por UCI en `dhcp.lan.dhcp_option`:
+  - `6,192.168.1.1` (DNS del router)
+  - `114,http://192.168.1.167/portal` (RFC 7710/8910)
+- Mantener dominio fallback `captive.localhost.com` apuntando al portal
 
 ### DietPi (ambas Raspis)
 - **No usar `systemctl` directamente** — DietPi no usa systemd como PID 1
 - Servicios con `/etc/init.d/` y `update-rc.d defaults`
 - Verificar procesos con `ps aux` o PID files
+
+### Logs de setup
+- Todos los `setup-*` escriben log en `/var/log/demo-openwrt/setup`.
+- Si no hay permisos, fallback automático a `/tmp/demo-openwrt/setup`.
 
 ### Regla de oro
 **`192.168.1.113` (admin) y `192.168.1.181` (RafexPi3B) NUNCA pierden acceso a internet.**

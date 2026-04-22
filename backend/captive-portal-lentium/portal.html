@@ -285,6 +285,8 @@
 
 <script>
 (function(){
+  const REDIRECT_URL = 'https://theworldofrafex.blog/';
+  const REDIRECT_DELAY_MS = 5000;
   const dynamic   = document.getElementById('dynamicContent');
   const tabC      = document.getElementById('tabCliente');
   const tabI      = document.getElementById('tabInvitado');
@@ -299,6 +301,14 @@
   function setBtn(btn, disabled, text) {
     btn.disabled = disabled;
     btn.textContent = text;
+  }
+
+  function scheduleRedirect(msgBox, btn, okText) {
+    showMsg(msgBox, 'ok', okText + ' Redirigiendo en 5 segundos...');
+    setBtn(btn, true, '⏳ Redirigiendo...');
+    setTimeout(() => {
+      window.location.href = REDIRECT_URL;
+    }, REDIRECT_DELAY_MS);
   }
 
   function validate(fields) {
@@ -445,8 +455,7 @@
     })
     .then(data => {
       if (data.ok) {
-        showMsg(msg, 'ok', '✔ ¡Conectado! Ya puedes navegar... despacito 🐢');
-        setBtn(btn, true, '✔ Conectado');
+        scheduleRedirect(msg, btn, '✔ ¡Conectado!');
       } else {
         showMsg(msg, 'fail', data.error || 'Error al autorizar. Intenta de nuevo.');
         setBtn(btn, false, 'Conectar ahora 🐢');
@@ -563,8 +572,7 @@
     })
     .then(data => {
       if (data.ok) {
-        showMsg(msg, 'ok', '✔ Registro exitoso. ¡Bienvenido a la red más lenta del universo conocido! 🐌');
-        setBtn(btn, true, '✔ Conectado');
+        scheduleRedirect(msg, btn, '✔ Registro exitoso.');
       } else {
         showMsg(msg, 'fail', data.error || 'Error al registrar. Intenta de nuevo.');
         setBtn(btn, false, 'Registrarme y Conectar 🌐');
