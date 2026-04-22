@@ -33,6 +33,69 @@ error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 die()   { error "$*"; exit 1; }
 step()  { echo -e "\n${BOLD}── $* ──${NC}"; }
 
+# ─── Helpers apt robustos (evitar cuelgues por locks/prompts) ───────────────
+APT_UPDATED=0
+
+run_with_timeout() {
+    local seconds="$1"
+    shift
+    if command -v timeout &>/dev/null; then
+        timeout --foreground "$seconds" "$@"
+    else
+        "$@"
+    fi
+}
+
+apt_update_once() {
+    [ "$APT_UPDATED" -eq 1 ] && return 0
+
+    local attempt=1
+    while [ "$attempt" -le 3 ]; do
+        info "Actualizando índices apt (intento $attempt/3)..."
+        if run_with_timeout 600 \
+            env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a \
+            apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 update; then
+            APT_UPDATED=1
+            ok "Índices apt actualizados"
+            return 0
+        fi
+        warn "Falló apt update (intento $attempt/3)"
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    die "No se pudo ejecutar apt-get update después de varios intentos"
+}
+
+apt_install_pkgs() {
+    [ "$#" -gt 0 ] || die "apt_install_pkgs requiere al menos 1 paquete"
+    apt_update_once
+
+    local attempt=1
+    while [ "$attempt" -le 3 ]; do
+        info "Instalando paquetes: $* (intento $attempt/3)..."
+        if run_with_timeout 1200 \
+            env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a \
+            apt-get -y -q --no-install-recommends \
+                -o Acquire::Retries=3 \
+                -o DPkg::Lock::Timeout=120 \
+                -o Dpkg::Options::=--force-confdef \
+                -o Dpkg::Options::=--force-confold \
+                install "$@"; then
+            ok "Instalación completada: $*"
+            return 0
+        fi
+
+        warn "Falló instalación apt (intento $attempt/3). Intentando recuperar dpkg..."
+        env DEBIAN_FRONTEND=noninteractive dpkg --configure -a >/dev/null 2>&1 || true
+        env DEBIAN_FRONTEND=noninteractive apt-get -f -y install >/dev/null 2>&1 || true
+        attempt=$((attempt + 1))
+        sleep 5
+    done
+
+    die "No se pudo instalar paquetes: $*"
+}
+
 # ─── Argumentos ───────────────────────────────────────────────────────────────
 NO_BUILD=false
 NO_LLAMA=false
@@ -158,7 +221,7 @@ ok "k3s corriendo: $(kubectl get nodes --no-headers | awk '{print $1,$2}')"
 
 if ! command -v podman &>/dev/null; then
     info "Instalando podman..."
-    apt-get install -y --no-install-recommends podman
+    apt_install_pkgs podman
 fi
 ok "podman: $(podman --version)"
 
@@ -168,8 +231,7 @@ step "A0) Instalando Mosquitto (MQTT broker)"
 if command -v mosquitto &>/dev/null; then
     ok "Mosquitto ya instalado: $(mosquitto -v 2>&1 | head -1)"
 else
-    apt-get install -y --no-install-recommends mosquitto mosquitto-clients
-    ok "Mosquitto instalado"
+    apt_install_pkgs mosquitto mosquitto-clients
 fi
 
 # Configuración: escuchar en todas las interfaces, sin autenticación (demo)
@@ -479,7 +541,7 @@ EOF
     # Solución: escribir un script separado y llamarlo desde cron.
     if ! command -v cron &>/dev/null && ! command -v crond &>/dev/null; then
         info "Instalando cron (necesario para el watchdog)..."
-        apt-get install -y --no-install-recommends cron
+        apt_install_pkgs cron
         if systemctl is-system-running --quiet 2>/dev/null; then
             systemctl enable --now cron
         else
