@@ -192,6 +192,25 @@ if [ "$DO_APPLY" -eq 1 ]; then
         ["traefik-helmchartconfig.yaml"]="Traefik HelmChartConfig (forwardedHeaders)"
     )
 
+    # apply_or_replace: intenta apply; si falla por selector inmutable, borra y recrea.
+    apply_or_replace() {
+        local path="$1" label="$2"
+        local out
+        if out=$($KUBECTL apply -f "$path" 2>&1); then
+            echo "$out"
+            return 0
+        fi
+        if echo "$out" | grep -q "field is immutable"; then
+            log_warn "Selector inmutable detectado en $label — borrando y recreando..."
+            $KUBECTL delete -f "$path" --ignore-not-found=true
+            $KUBECTL apply -f "$path" || die "Falló al recrear $label"
+            log_ok "$label recreado con nuevo selector"
+        else
+            echo "$out" >&2
+            die "Falló al aplicar $label"
+        fi
+    }
+
     for manifest in "${MANIFESTS_ORDER[@]}"; do
         path="$K8S_DIR/$manifest"
         if [ ! -f "$path" ]; then
@@ -199,7 +218,7 @@ if [ "$DO_APPLY" -eq 1 ]; then
             continue
         fi
         log_info "Aplicando ${MANIFESTS_DESC[$manifest]:-$manifest}..."
-        $KUBECTL apply -f "$path" || die "Falló al aplicar $manifest"
+        apply_or_replace "$path" "$manifest"
         log_ok "$manifest ✓"
     done
 
