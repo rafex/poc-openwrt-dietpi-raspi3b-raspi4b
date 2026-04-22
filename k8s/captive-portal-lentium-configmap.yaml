@@ -52,14 +52,9 @@ data:
         }
 
         location /accepted {
-            default_type text/html;
-            return 200 '<!DOCTYPE html><html><head><meta charset="UTF-8">
-<title>Conectado · Lentium</title>
-<style>body{font-family:sans-serif;max-width:400px;margin:40px auto;padding:20px;text-align:center}
-.ok{color:#16a34a;font-size:48px}</style></head><body>
-<div class="ok">✓</div><h2>¡Conectado a Lentium!</h2>
-<p>Ya puedes navegar… a tu ritmo 🐢</p>
-<p><a href="https://google.com">Ir a internet</a></p></body></html>';
+            proxy_pass http://127.0.0.1:8080/accepted;
+            proxy_set_header X-Real-IP      $remote_addr;
+            proxy_set_header X-Forwarded-For $http_x_forwarded_for;
         }
 
         location / {
