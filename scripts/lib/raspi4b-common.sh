@@ -7,6 +7,18 @@ DRY_RUN=false
 ONLY_VERIFY=false
 FORCE=false
 NO_BUILD=false
+APT_CACHE_DIR=""
+APT_CACHE_FILE=""
+
+init_demo_cache() {
+  local home_dir="${HOME:-/root}"
+  local cache_base="${home_dir}/.cache"
+  local cache_dir="${cache_base}/demo-openwrt"
+  mkdir -p "$cache_dir" 2>/dev/null || true
+  APT_CACHE_DIR="$cache_dir"
+  APT_CACHE_FILE="${APT_CACHE_DIR}/apt-installed.txt"
+  touch "$APT_CACHE_FILE" 2>/dev/null || true
+}
 
 init_log_dir() {
   local component="$1"
@@ -75,6 +87,7 @@ run_cmd() {
 
 APT_UPDATED=0
 apt_update_once() {
+  init_demo_cache
   [ "$APT_UPDATED" -eq 1 ] && return 0
   run_cmd env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a \
     apt-get -o Acquire::Retries=3 -o DPkg::Lock::Timeout=120 update
@@ -82,7 +95,25 @@ apt_update_once() {
 }
 
 apt_install_pkgs() {
+  init_demo_cache
   [ "$#" -gt 0 ] || return 0
+  local pkg missing=() updated_cache=0
+
+  for pkg in "$@"; do
+    if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed"; then
+      if [ -f "$APT_CACHE_FILE" ] && ! grep -qx "$pkg" "$APT_CACHE_FILE" 2>/dev/null; then
+        printf '%s\n' "$pkg" >> "$APT_CACHE_FILE"
+      fi
+      continue
+    fi
+    missing+=("$pkg")
+  done
+
+  if [ "${#missing[@]}" -eq 0 ]; then
+    log_info "apt cache hit: paquetes ya instalados (${#@}) en $APT_CACHE_DIR"
+    return 0
+  fi
+
   apt_update_once
   run_cmd env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a \
     apt-get -y -q --no-install-recommends \
@@ -90,7 +121,19 @@ apt_install_pkgs() {
       -o DPkg::Lock::Timeout=120 \
       -o Dpkg::Options::=--force-confdef \
       -o Dpkg::Options::=--force-confold \
-      install "$@"
+      install "${missing[@]}"
+
+  for pkg in "${missing[@]}"; do
+    if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed"; then
+      if [ -f "$APT_CACHE_FILE" ] && ! grep -qx "$pkg" "$APT_CACHE_FILE" 2>/dev/null; then
+        printf '%s\n' "$pkg" >> "$APT_CACHE_FILE"
+        updated_cache=1
+      fi
+    fi
+  done
+  if [ "$updated_cache" -eq 1 ]; then
+    log_info "apt cache actualizado: $APT_CACHE_FILE"
+  fi
 }
 
 parse_common_flags() {
