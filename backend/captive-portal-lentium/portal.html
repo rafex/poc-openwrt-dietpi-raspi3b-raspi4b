@@ -246,6 +246,29 @@
 
     /* Nota de términos */
     .terms-note { margin-top: 14px; font-size: 0.78rem; color: #6b8ba8; text-align: center; line-height: 1.5; }
+    .warn-banner {
+      display: none;
+      margin: 0 0 14px;
+      background: #fff3cd;
+      border: 1px solid #f0ad4e;
+      color: #7a4b00;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-weight: 700;
+      text-align: center;
+    }
+    .blocked-box {
+      background: #10243a;
+      border: 1px solid #2b4f73;
+      border-radius: 14px;
+      padding: 12px;
+      margin-top: 8px;
+    }
+    .blocked-box img {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid #365f88;
+    }
 
     /* Password strength */
     .pwd-hint { font-size: 0.75rem; color: #8aabb0; margin-top: 4px; }
@@ -264,6 +287,7 @@
     </div>
 
     <div class="main-content" id="appContainer">
+      <div id="policyWarning" class="warn-banner"></div>
 
       <div class="case-tabs">
         <div class="tab-btn active" id="tabCliente">📱 Soy Cliente</div>
@@ -285,9 +309,18 @@
 
 <script>
 (function(){
+  const REDIRECT_URL = 'https://theworldofrafex.blog/';
+  const REDIRECT_DELAY_MS = 5000;
   const dynamic   = document.getElementById('dynamicContent');
   const tabC      = document.getElementById('tabCliente');
   const tabI      = document.getElementById('tabInvitado');
+  const warningBox = document.getElementById('policyWarning');
+  const BLOCKED_ART = [
+    '/blocked-art/art-01.svg','/blocked-art/art-02.svg','/blocked-art/art-03.svg',
+    '/blocked-art/art-04.svg','/blocked-art/art-05.svg','/blocked-art/art-06.svg',
+    '/blocked-art/art-07.svg','/blocked-art/art-08.svg','/blocked-art/art-09.svg',
+    '/blocked-art/art-10.svg'
+  ];
 
   // ── Utilidades ────────────────────────────────────────────────────────────
   function showMsg(box, type, text) {
@@ -299,6 +332,14 @@
   function setBtn(btn, disabled, text) {
     btn.disabled = disabled;
     btn.textContent = text;
+  }
+
+  function scheduleRedirect(msgBox, btn, okText) {
+    showMsg(msgBox, 'ok', okText + ' Redirigiendo en 5 segundos...');
+    setBtn(btn, true, '⏳ Redirigiendo...');
+    setTimeout(() => {
+      window.location.href = REDIRECT_URL;
+    }, REDIRECT_DELAY_MS);
   }
 
   function validate(fields) {
@@ -323,7 +364,7 @@
       suggestionsEl.innerHTML = '';
       if (q.length < 4) return;
       nominatimTimer = setTimeout(() => {
-        const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=5&addressdetails=1&q=' + encodeURIComponent(q);
+        const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=5&addressdetails=1&countrycodes=mx&bounded=1&viewbox=-118.455,32.718,-86.710,14.389&q=' + encodeURIComponent(q);
         fetch(url, { headers: { 'Accept-Language': 'es' } })
           .then(r => r.json())
           .then(data => {
@@ -398,6 +439,33 @@
     }).then(r => r.json());
   }
 
+  function loadPortalContext(){
+    fetch('/api/portal/context', { cache: 'no-store' })
+      .then(r => r.json())
+      .then(ctx => {
+        if (ctx && ctx.warning && ctx.warning_message) {
+          warningBox.style.display = 'block';
+          renderBlockedView(ctx.warning_message);
+        } else {
+          warningBox.style.display = 'none';
+          warningBox.innerHTML = '';
+        }
+      })
+      .catch(() => {});
+  }
+
+  function renderBlockedView(message){
+    const art = BLOCKED_ART[Math.floor(Math.random() * BLOCKED_ART.length)];
+    warningBox.innerHTML = `
+      <div style="font-size:1.1rem;margin-bottom:8px;">Sitio bloqueado por IA</div>
+      <div>${message}</div>
+      <div class="blocked-box" style="margin-top:10px;">
+        <img src="${art}" alt="sitio bloqueado por ia">
+      </div>
+      <div style="margin-top:8px;font-weight:600;">Reinicia sesión para recuperar navegación permitida.</div>
+    `;
+  }
+
   // ── VISTA: Cliente ────────────────────────────────────────────────────────
   function renderCliente() {
     dynamic.innerHTML = `
@@ -445,8 +513,7 @@
     })
     .then(data => {
       if (data.ok) {
-        showMsg(msg, 'ok', '✔ ¡Conectado! Ya puedes navegar... despacito 🐢');
-        setBtn(btn, true, '✔ Conectado');
+        scheduleRedirect(msg, btn, '✔ ¡Conectado!');
       } else {
         showMsg(msg, 'fail', data.error || 'Error al autorizar. Intenta de nuevo.');
         setBtn(btn, false, 'Conectar ahora 🐢');
@@ -480,9 +547,9 @@
         <label for="gPhone">Número de teléfono celular</label>
         <input id="gPhone" type="tel" placeholder="55 1234 5678" maxlength="20">
 
-        <label for="gAddress">Dirección (busca en el mapa)</label>
+        <label for="gAddress">Dirección en México (busca en el mapa)</label>
         <div class="autocomplete-wrap">
-          <input id="gAddress" type="text" placeholder="Calle, colonia, ciudad…" autocomplete="off">
+          <input id="gAddress" type="text" placeholder="Calle, colonia, ciudad (México)..." autocomplete="off">
           <div id="addressSuggestions"></div>
           <input type="hidden" id="gAddressData">
         </div>
@@ -563,8 +630,7 @@
     })
     .then(data => {
       if (data.ok) {
-        showMsg(msg, 'ok', '✔ Registro exitoso. ¡Bienvenido a la red más lenta del universo conocido! 🐌');
-        setBtn(btn, true, '✔ Conectado');
+        scheduleRedirect(msg, btn, '✔ Registro exitoso.');
       } else {
         showMsg(msg, 'fail', data.error || 'Error al registrar. Intenta de nuevo.');
         setBtn(btn, false, 'Registrarme y Conectar 🌐');
@@ -596,6 +662,7 @@
   });
 
   renderCliente();
+  loadPortalContext();
 })();
 </script>
 </body>

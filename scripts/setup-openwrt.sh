@@ -2,7 +2,10 @@
 # setup-openwrt.sh — Configura el router OpenWrt para el captive portal
 # Idempotente: puede ejecutarse multiples veces sin efectos secundarios
 #
-# Uso: sh scripts/setup-openwrt.sh
+# Uso:
+#   sh scripts/setup-openwrt.sh
+#   sh scripts/setup-openwrt.sh --topology legacy
+#   sh scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182
 #      (ejecutar desde la Raspberry Pi)
 #
 # Requisitos:
@@ -16,6 +19,8 @@
 #
 # Variables opcionales:
 #   CAPTIVE_DOMAIN=captive.localhost.com   # dominio local de fallback para abrir portal manualmente
+#   PEOPLE_DOMAIN=people.localhost.com     # subdominio para dashboard de registros/conectados
+#   TOPOLOGY_FILE=/etc/demo-openwrt/topology.env
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -60,12 +65,68 @@ fi
 printf '[INFO]  Log file: %s\n' "$LOG_FILE"
 
 . "$SCRIPT_DIR/lib/common.sh"
+
+print_usage() {
+    cat <<EOF
+Uso:
+  sh scripts/setup-openwrt.sh [opciones]
+
+Opciones:
+  --topology legacy|split_portal   Selecciona topología.
+  --portal-ip <ip>                 Fuerza IP de destino del portal.
+  --ai-ip <ip>                     IP del nodo IA (Raspi4B normalmente).
+  -h, --help                       Muestra esta ayuda.
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --topology)
+            [ -n "${2:-}" ] || die "Falta valor para --topology"
+            TOPOLOGY="$2"
+            shift 2
+            ;;
+        --portal-ip)
+            [ -n "${2:-}" ] || die "Falta valor para --portal-ip"
+            PORTAL_IP="$2"
+            shift 2
+            ;;
+        --ai-ip)
+            [ -n "${2:-}" ] || die "Falta valor para --ai-ip"
+            AI_IP="$2"
+            shift 2
+            ;;
+        -h|--help)
+            print_usage
+            exit 0
+            ;;
+        *)
+            die "Argumento no soportado: $1"
+            ;;
+    esac
+done
+
+case "$TOPOLOGY" in
+    legacy|split_portal) ;;
+    *) die "TOPOLOGY inválida: $TOPOLOGY (usar legacy|split_portal)" ;;
+esac
+
+if [ "$TOPOLOGY" = "split_portal" ] && [ -z "${PORTAL_IP:-}" ]; then
+    PORTAL_IP="$PORTAL_NODE_IP"
+fi
+AI_IP="${AI_IP:-$RASPI4B_IP}"
+
+validate_ip "$PORTAL_IP" || die "IP de portal inválida: $PORTAL_IP"
+validate_ip "$AI_IP" || die "IP de AI inválida: $AI_IP"
+
 CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.localhost.com}"
+PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.localhost.com}"
 
 # =============================================================================
 # Pre-flight checks
 # =============================================================================
 log_info "=== Setup de OpenWrt para Captive Portal ==="
+log_info "Topología: $TOPOLOGY (portal_ip=$PORTAL_IP ai_ip=$AI_IP)"
 
 check_ssh_key
 test_router_ssh
@@ -153,6 +214,7 @@ address=/nmcheck.gnome.org/$PORTAL_IP
 
 # Dominio local de fallback (manual)
 address=/$CAPTIVE_DOMAIN/$PORTAL_IP
+address=/$PEOPLE_DOMAIN/$PORTAL_IP
 
 "
 
@@ -210,7 +272,7 @@ NFT_CONTENT="#!/usr/sbin/nft -f
 #   bridge br-lan y el hook forward ve br-lan, no la interfaz AP (phy0-ap0).
 #   Matching por subred LAN es más robusto y funciona con cualquier topología.
 #
-# SEGURIDAD: $ADMIN_IP (admin) y $PORTAL_IP (portal) NUNCA son bloqueadas.
+# SEGURIDAD: $ADMIN_IP (admin), $RASPI4B_IP (AI) y $PORTAL_IP (portal) NUNCA son bloqueadas.
 # Para resetear: nft delete table ip captive
 
 add table ip captive
@@ -221,14 +283,14 @@ table ip captive {
     # timeout 120m: las autorizaciones expiran solas (2 horas)
     #   → combinado con DHCP lease=120m: al reconectar pasan de nuevo por el portal
     #
-    # Admin ($ADMIN_IP), portal ($PORTAL_IP) y Raspis: timeout 0s = NUNCA expiran
-    #   RafexPi4B ($RASPI4B_IP) — IA + k3s, siempre necesita acceso
-    #   RafexPi3B ($RASPI3B_IP) — sensor de red, siempre capturando tráfico
+    # Admin ($ADMIN_IP), IA ($RASPI4B_IP), sensor ($RASPI3B_IP), portal node ($PORTAL_NODE_IP),
+    # AP extender ($AP_EXTENDER_IP) y portal activo ($PORTAL_IP):
+    # timeout 0s = NUNCA expiran
     set $NFT_SET {
         type ipv4_addr
         flags dynamic, timeout
         timeout 120m
-        elements = { $ADMIN_IP timeout 0s, $PORTAL_IP timeout 0s, $RASPI3B_IP timeout 0s }
+        elements = { $ADMIN_IP timeout 0s, $RASPI4B_IP timeout 0s, $RASPI3B_IP timeout 0s, $PORTAL_NODE_IP timeout 0s, $AP_EXTENDER_IP timeout 0s, $PORTAL_IP timeout 0s }
     }
 
     # Redireccion HTTP: clientes de la LAN no autorizados → portal en $PORTAL_IP
@@ -256,6 +318,18 @@ table ip captive {
 
         # Admin: acceso total siempre (REGLA DE ORO — nunca bloquear)
         ip saddr $ADMIN_IP accept
+
+        # AI node (Raspi4B): siempre permitido (topología legacy/split)
+        ip saddr $RASPI4B_IP accept
+        ip daddr $RASPI4B_IP accept
+
+        # Portal node alterno (Raspi3B #2): siempre permitido
+        ip saddr $PORTAL_NODE_IP accept
+        ip daddr $PORTAL_NODE_IP accept
+
+        # AP extender (no puede abrir portal): siempre permitido
+        ip saddr $AP_EXTENDER_IP accept
+        ip daddr $AP_EXTENDER_IP accept
 
         # Portal: siempre permitido en ambas direcciones
         ip saddr $PORTAL_IP accept
@@ -308,9 +382,12 @@ router_ssh "nft -f /tmp/captive-portal.nft" || \
 log_info "Re-confirmando IPs permanentes en el set (timeout 0s)..."
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0s }" || \
     die "No se pudo asegurar $ADMIN_IP como permanente"
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" 2>/dev/null || true
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI4B_IP timeout 0s }" 2>/dev/null || true
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI3B_IP timeout 0s }" 2>/dev/null || true
-log_ok "Permanentes: admin=$ADMIN_IP  portal/4B=$PORTAL_IP  sensor/3B=$RASPI3B_IP (timeout 0s)"
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_NODE_IP timeout 0s }" 2>/dev/null || true
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $AP_EXTENDER_IP timeout 0s }" 2>/dev/null || true
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" 2>/dev/null || true
+log_ok "Permanentes: admin=$ADMIN_IP ai/4B=$RASPI4B_IP sensor/3B=$RASPI3B_IP portal/3B2=$PORTAL_NODE_IP ap-ext=$AP_EXTENDER_IP portal-activo=$PORTAL_IP (timeout 0s)"
 
 # Limpiar conntrack para que el bloqueo sea efectivo inmediatamente
 # (conexiones ESTABLISHED bypasean el hook forward)
@@ -389,6 +466,16 @@ reserve_raspi_dhcp() {
 
 reserve_raspi_dhcp "$RASPI4B_HOSTNAME" "$RASPI4B_MAC" "$RASPI4B_IP"
 reserve_raspi_dhcp "$RASPI3B_HOSTNAME" "$RASPI3B_MAC" "$RASPI3B_IP"
+if [ -n "$PORTAL_NODE_MAC" ] && validate_ip "$PORTAL_NODE_IP"; then
+    reserve_raspi_dhcp "$PORTAL_NODE_HOSTNAME" "$PORTAL_NODE_MAC" "$PORTAL_NODE_IP"
+else
+    log_warn "PORTAL_NODE_MAC/IP no completos; no se creó reserva DHCP del portal node"
+fi
+if [ -n "$AP_EXTENDER_MAC" ] && validate_ip "$AP_EXTENDER_IP"; then
+    reserve_raspi_dhcp "$AP_EXTENDER_HOSTNAME" "$AP_EXTENDER_MAC" "$AP_EXTENDER_IP"
+else
+    log_warn "AP_EXTENDER_MAC/IP no completos; no se creó reserva DHCP del AP extender"
+fi
 
 # Recargar dnsmasq para aplicar las nuevas reservas
 log_info "Recargando dnsmasq para aplicar reservas DHCP..."
@@ -447,19 +534,32 @@ else
     log_warn "No se pudo verificar $CAPTIVE_DOMAIN en dnsmasq"
 fi
 
+log_info "Verificando dominio people..."
+PEOPLE_RESOLVED=$(router_ssh "nslookup $PEOPLE_DOMAIN 127.0.0.1 2>/dev/null | grep 'Address' | tail -1" 2>/dev/null || echo "")
+if printf '%s' "$PEOPLE_RESOLVED" | grep -q "$PORTAL_IP"; then
+    log_ok "dnsmasq resuelve correctamente: $PEOPLE_DOMAIN -> $PORTAL_IP"
+else
+    log_warn "No se pudo verificar $PEOPLE_DOMAIN en dnsmasq"
+fi
+
 # Resumen final
 printf '\n'
 log_ok "=== Setup de OpenWrt completado ==="
 printf '\n'
 log_info "Estado del sistema:"
 printf '  Router:        %s\n' "$ROUTER_IP"
-printf '  Portal/4B:     %s (%s) — permanente\n' "$PORTAL_IP" "$RASPI4B_HOSTNAME"
+printf '  Topología:     %s\n' "$TOPOLOGY"
+printf '  AI node/4B:    %s (%s) — permanente\n' "$RASPI4B_IP" "$RASPI4B_HOSTNAME"
+printf '  Portal node:   %s\n' "$PORTAL_IP"
+printf '  Portal node 3B2 reservado: %s (%s)\n' "$PORTAL_NODE_IP" "$PORTAL_NODE_HOSTNAME"
+printf '  AP extender reservado:     %s (%s)\n' "$AP_EXTENDER_IP" "$AP_EXTENDER_HOSTNAME"
 printf '  Sensor/3B:     %s (%s) — permanente\n' "$RASPI3B_IP" "$RASPI3B_HOSTNAME"
 printf '  Admin (libre): %s — permanente\n' "$ADMIN_IP"
 printf '  AP interface:  %s\n' "$AP_IFACE"
 printf '  Portal timeout: %s (acceso WiFi invitados)\n' "$PORTAL_TIMEOUT"
 printf '  DHCP leasetime: 120m\n'
 printf '  Fallback portal: http://%s/portal\n' "$CAPTIVE_DOMAIN"
+printf '  Dashboard people: http://%s/people\n' "$PEOPLE_DOMAIN"
 printf '\n'
 log_info "Comandos utiles:"
 printf '  Listar clientes:    sh scripts/openwrt-list-clients.sh\n'

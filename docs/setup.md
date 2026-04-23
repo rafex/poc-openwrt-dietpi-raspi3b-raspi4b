@@ -1,5 +1,16 @@
 # Guía de Setup — Captive Portal + IA Local
 
+## Hito 1 (completado)
+
+Estado al **22 de abril de 2026**:
+- Registro en portal Lentium operativo (`/api/register/client` y `/api/register/guest`)
+- Redirección captive por nftables + dnsmasq operativa
+- Detección mejorada con DHCP option `114` y dominio fallback `captive.localhost.com`
+- Stack IA (Mosquitto + llama-server + ai-analyzer) operativo
+- Setup modular en Raspi4B (scripts por componente) con logging persistente en `/var/log/demo-openwrt/<componente>` (fallback `/tmp/demo-openwrt/<componente>`)
+
+---
+
 ## Dispositivos y prerequisitos
 
 | Dispositivo | Hostname | IP | Requisitos |
@@ -28,6 +39,9 @@ Ejecutar **desde RafexPi4B**. Configura nftables, dnsmasq, DHCP y las reservas p
 
 ```bash
 bash scripts/setup-openwrt.sh
+# explícito por topología:
+bash scripts/setup-openwrt.sh --topology legacy
+bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182 --ai-ip 192.168.1.167
 ```
 
 Qué hace:
@@ -36,7 +50,8 @@ Qué hace:
 |---|---|
 | Pre-flight | Verifica espacio en overlay, interfaz `phy0-ap0`, SSH al router |
 | A | Agrega llave pública al router (`/etc/dropbear/authorized_keys`) |
-| B | Configura dnsmasq — dominios de detección → `192.168.1.167`; **lease time 120m** |
+| B | Configura dnsmasq en `/etc/dnsmasq.conf` (bloque captive) — dominios de detección + `captive.localhost.com` → `192.168.1.167` |
+| B | Configura DHCP: **lease time 120m**, option `6` (DNS router) y option `114` (URL del portal) |
 | C | Crea tabla nftables `ip captive`: timeout **120m** para clientes; **RafexPi4B y RafexPi3B permanentes** (timeout 0s) |
 | C.1 | **Reservas DHCP UCI permanentes** para RafexPi4B (`d8:3a:dd:4d:4b:ae → 192.168.1.167`) y RafexPi3B (`b8:27:eb:5a:ec:33 → 192.168.1.181`) con `leasetime=infinite` |
 | D | Verifica la configuración completa |
@@ -47,38 +62,113 @@ Qué hace:
 > nft delete table ip captive
 > ```
 
+Log del setup:
+```bash
+ls -1t /var/log/demo-openwrt/setup/setup-openwrt-*.log 2>/dev/null | head -1
+```
+
 ---
 
-## Paso 3 — Setup de RafexPi4B (IA + k3s)
+## Paso 2.1 — Configurar uplink WiFi (WAN por 5 GHz + AP 2.4 GHz abierto)
 
-Instala todo el stack IA: Mosquitto, llama-server, ai-analyzer en k3s, captive portal.
-También configura el hostname y la reserva DHCP de esta Raspi en el router.
-
-```bash
-sudo bash scripts/setup-ai-raspi4b.sh
-```
-
-Opciones:
+Si tu router no usa WAN Ethernet y se conecta por WiFi a una red upstream:
 
 ```bash
-sudo bash scripts/setup-ai-raspi4b.sh --no-build   # omitir build de imagen
-sudo bash scripts/setup-ai-raspi4b.sh --no-llama   # omitir llama-server
+bash scripts/setup-openwrt-wifi-uplink.sh \
+  --uplink-ssid netup \
+  --uplink-pass 123 \
+  --ap-ssid "INFINITUM MOVIL"
 ```
 
-Qué hace:
+Qué aplica:
+- `sta_uplink` (5GHz, modo `sta`, red `wwan`, DHCP)
+- `ap_captive` (2.4GHz, modo `ap`, red `lan`, `encryption=none`)
+- agrega `wwan` a zona `wan` en firewall
 
-| Fase | Qué hace |
-|---|---|
-| Hostname | Configura `/etc/hostname` = `RafexPi4B` |
-| DHCP | SSH al router → UCI reserva `RafexPi4B  d8:3a:dd:4d:4b:ae → 192.168.1.167  infinite` |
-| Pre-flight | Verifica k3s corriendo, podman disponible |
-| A0 | Instala Mosquitto, configura `:1883 allow_anonymous true`, habilita en arranque |
-| A | Localiza binario `llama-server` y modelo `tinyllama*.gguf` (busca rutas habituales + find) |
-| B | Genera servicio init.d `llama-server`: `ctx-size=4096 --parallel 1 --threads 4` |
-| C | `podman build --cgroup-manager=cgroupfs --platform linux/arm64` imagen `ai-analyzer` |
-| D | `podman save \| k3s ctr images import -` |
-| E | `kubectl apply` ai-analyzer + limpieza recursos legacy |
-| F | Verifica pods, `/health`, `/dashboard` |
+Validar en router:
+```bash
+ifstatus wwan
+iwinfo
+nslookup google.com 192.168.1.1
+```
+
+---
+
+## Paso 2.2 — Seleccionar topología de despliegue
+
+Modo legacy (actual):
+
+```bash
+sudo bash scripts/setup-topology.sh --topology=legacy
+```
+
+Modo split_portal (alternativa 3 Raspberry):
+
+```bash
+sudo bash scripts/setup-topology.sh --topology=split_portal --portal-host=192.168.1.182
+```
+
+Switch rápido:
+
+```bash
+sudo bash scripts/topology-switch.sh legacy
+sudo bash scripts/topology-switch.sh split_portal --persist
+```
+
+Validación E2E:
+
+```bash
+bash scripts/verify-topology.sh --topology=legacy
+bash scripts/verify-topology.sh --topology=split_portal
+```
+
+---
+
+## Paso 3 — Setup modular de RafexPi4B (responsabilidad única)
+
+Ahora la instalación de Raspi4B está separada por componente.
+
+### 3.1 Instalación completa (recomendada)
+
+```bash
+sudo bash scripts/setup-raspi4b-all.sh
+sudo bash scripts/setup-raspi4b-all.sh --headless-web   # IA-only (sin portales en 4B)
+```
+
+### 3.2 Instalación por componente (reinstalación parcial)
+
+```bash
+# Solo broker MQTT
+sudo bash scripts/setup-raspi4b-mosquitto.sh
+
+# Solo servicio LLM (llama.cpp)
+sudo bash scripts/setup-raspi4b-llm.sh
+
+# Solo backend AI analyzer en k3s
+sudo bash scripts/setup-raspi4b-ai-analyzer.sh
+
+# Solo portales (clásico + lentium) en k3s
+sudo bash scripts/setup-raspi4b-portals.sh
+```
+
+Flags comunes soportados por los scripts modulares:
+
+```bash
+--dry-run       # muestra qué haría
+--only-verify   # solo valida estado del componente
+--no-build      # omite build/import de imágenes (aplica a analyzer/portales/all)
+--force         # reservado para operaciones forzadas
+```
+
+`setup-raspi4b-all.sh` también soporta:
+
+```bash
+--skip-mosquitto
+--skip-llm
+--skip-analyzer
+--skip-portals
+--headless-web
+```
 
 **Prerequisito llama.cpp:** el modelo TinyLlama Q4_K_M debe estar descargado:
 
@@ -135,6 +225,17 @@ export ROUTER_IP="192.168.1.1"
 
 ---
 
+## Paso 4.1 — Setup Raspi3B #2 como nodo de portal (opcional)
+
+Solo para topología `split_portal`:
+
+```bash
+sudo bash scripts/setup-portal-raspi3b.sh
+bash scripts/portal-node-status.sh
+```
+
+---
+
 ## Paso 5 — Verificar el sistema completo
 
 ```bash
@@ -155,6 +256,9 @@ bash scripts/sensor-status.sh --follow
 | API historial | http://192.168.1.167/api/history |
 | API stats | http://192.168.1.167/api/stats |
 | Health check | http://192.168.1.167/health |
+
+Inventario completo de vistas HTML:
+- ver `docs/html-endpoints.md` (conteo, rutas, propósito y vistas dinámicas)
 
 ---
 
@@ -186,12 +290,18 @@ bash scripts/openwrt-list-clients.sh
 ### Actualizar el analizador IA (código Python, HTML)
 
 ```bash
-# En RafexPi4B — rebuild + reimport + rollout restart
-sudo bash scripts/setup-ai-raspi4b.sh --no-llama
+# En RafexPi4B — componente dedicado
+sudo bash scripts/setup-raspi4b-ai-analyzer.sh
+# o sin rebuild:
+sudo bash scripts/setup-raspi4b-ai-analyzer.sh --no-build
+```
 
-# Solo rollout (si la imagen ya está importada)
-kubectl rollout restart deployment/ai-analyzer
-kubectl rollout status deployment/ai-analyzer --timeout=120s
+### Actualizar solo portales (sin tocar LLM/MQTT)
+
+```bash
+sudo bash scripts/setup-raspi4b-portals.sh
+# o sin rebuild:
+sudo bash scripts/setup-raspi4b-portals.sh --no-build
 ```
 
 ### Actualizar el sensor
@@ -236,6 +346,13 @@ mosquitto_sub -h 192.168.1.167 -t "rafexpi/sensor/batch" -v
 # Estado de llama-server
 /etc/init.d/llama-server status
 curl -s http://192.168.1.167:8081/health
+```
+
+Control rápido del LLM (ahorro de CPU):
+```bash
+bash scripts/llm-control.sh off
+bash scripts/llm-control.sh on
+bash scripts/llm-control.sh status
 ```
 
 ---

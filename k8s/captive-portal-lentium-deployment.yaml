@@ -69,6 +69,4 @@ spec:
             path: /opt/keys
             type: Directory
         - name: lentium-data
-          hostPath:
-            path: /opt/captive-portal/lentium-data
-            type: DirectoryOrCreate
+          emptyDir: {}

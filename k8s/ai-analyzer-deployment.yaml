@@ -38,9 +38,28 @@ spec:
               value: "5000"
             - name: LOG_LEVEL
               value: "INFO"
+            - name: ROUTER_IP
+              value: "192.168.1.1"
+            - name: ROUTER_USER
+              value: "root"
+            - name: SSH_KEY
+              value: "/opt/keys/captive-portal"
+            - name: SOCIAL_BLOCK_ENABLED
+              value: "true"
+            - name: SOCIAL_POLICY_START_HOUR
+              value: "9"
+            - name: SOCIAL_POLICY_END_HOUR
+              value: "17"
+            - name: SOCIAL_POLICY_TZ
+              value: "America/Mexico_City"
+            - name: SOCIAL_MIN_HITS
+              value: "3"
           volumeMounts:
             - name: analyzer-data
               mountPath: /data
+            - name: ssh-keys
+              mountPath: /opt/keys
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /health
@@ -58,3 +77,7 @@ spec:
           hostPath:
             path: /opt/analyzer/data
             type: DirectoryOrCreate
+        - name: ssh-keys
+          hostPath:
+            path: /opt/keys
+            type: Directory

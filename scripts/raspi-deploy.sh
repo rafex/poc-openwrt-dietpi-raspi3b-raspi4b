@@ -75,6 +75,25 @@ log_error() { printf '\e[0;31m[ERROR]\e[0m %s\n' "$*" >&2; }
 log_step()  { printf '\n\e[1;36m=== %s ===\e[0m\n' "$*"; }
 die()       { log_error "$*"; exit 1; }
 
+http_code_retry() {
+    # Reintenta para evitar falsos 502 durante la transición del rollout.
+    local url="$1"
+    local attempts="${2:-8}"
+    local sleep_s="${3:-1}"
+    local code="000"
+    local i
+    for i in $(seq 1 "$attempts"); do
+        code=$(curl -s -o /dev/null -w "%{http_code}" \
+            --connect-timeout 5 --max-time 8 "$url" 2>/dev/null || echo "000")
+        case "$code" in
+            200|301|302|307|308) echo "$code"; return 0 ;;
+        esac
+        sleep "$sleep_s"
+    done
+    echo "$code"
+    return 0
+}
+
 # =============================================================================
 # PASO 0: Verificar k3s
 # =============================================================================
@@ -275,9 +294,10 @@ if [ "$DO_APPLY" -eq 1 ]; then
             die "Rollout fallido"
         }
 
-    # Verificar explícitamente 2/2
-    READY_CONTAINERS=$($KUBECTL get pods -n default -l app=captive-portal \
-        --no-headers 2>/dev/null | awk '{print $2}' | head -1)
+    # Verificar explícitamente 2/2 en la variante activa.
+    READY_CONTAINERS=$($KUBECTL get pods -n default \
+        -l "app=captive-portal,portal-variant=$ACTIVE_VARIANT" \
+        --no-headers 2>/dev/null | awk '$3=="Running"{print $2; exit}')
     log_ok "Pod listo: $READY_CONTAINERS contenedores running"
 
     # =============================================================================
@@ -287,8 +307,7 @@ if [ "$DO_APPLY" -eq 1 ]; then
 
     for endpoint in "/" "/portal" "/accepted" "/health"; do
         url="$PORTAL_URL$endpoint"
-        code=$(curl -s -o /dev/null -w "%{http_code}" \
-            --connect-timeout 5 --max-time 8 "$url" 2>/dev/null || echo "000")
+        code=$(http_code_retry "$url" 8 1)
         case "$code" in
             200)       printf '  %-35s → \e[0;32mHTTP %s\e[0m\n' "$url" "$code" ;;
             301|302*)  printf '  %-35s → \e[0;33mHTTP %s\e[0m (redirect — OK)\n' "$url" "$code" ;;
@@ -299,14 +318,15 @@ if [ "$DO_APPLY" -eq 1 ]; then
 
     # Verificar backend directo dentro del pod via kubectl exec
     log_info "Verificando backend Python (:8080) dentro del pod..."
-    POD=$($KUBECTL get pods -n default -l app=captive-portal \
-        --no-headers 2>/dev/null | awk '{print $1}' | head -1)
+    POD=$($KUBECTL get pods -n default \
+        -l "app=captive-portal,portal-variant=$ACTIVE_VARIANT" \
+        --no-headers 2>/dev/null | awk '$3=="Running"{print $1; exit}')
 
     if [ -n "$POD" ]; then
         HEALTH=$($KUBECTL exec "$POD" -n default -c backend -- \
-            wget -qO- http://localhost:8080/health 2>/dev/null || echo "error")
-        if printf '%s' "$HEALTH" | grep -q '"ok"'; then
-            log_ok "Backend Python responde: $HEALTH"
+            python -c "import urllib.request;print(urllib.request.urlopen('http://localhost:8080/accepted',timeout=5).getcode())" 2>/dev/null || echo "error")
+        if [ "$HEALTH" = "200" ]; then
+            log_ok "Backend Python responde en :8080 (HTTP 200 /accepted)"
         else
             log_warn "Backend Python no responde en :8080 (respuesta: $HEALTH)"
             log_warn "Revisar logs: kubectl logs $POD -c backend"

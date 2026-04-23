@@ -639,7 +639,7 @@ if $NO_BUILD; then
 else
     info "Build de ai-analyzer con podman..."
     # --cgroup-manager=cgroupfs necesario en DietPi (no usa systemd como PID 1)
-    # La imagen usa python:3.11-alpine (apk, sin dependencias de sd-bus)
+    # La imagen usa python:3.13-alpine3.23 (apk, sin dependencias de sd-bus)
     podman build \
         --cgroup-manager=cgroupfs \
         --platform linux/arm64 \

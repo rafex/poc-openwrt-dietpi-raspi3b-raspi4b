@@ -1,7 +1,8 @@
-FROM python:3.11-alpine
+FROM python:3.13-alpine3.23
 
 WORKDIR /app
-COPY backend.py portal.html ./
+COPY backend.py portal.html services.html blocked.html ./
+COPY blocked-art ./blocked-art
 
 RUN mkdir -p /data /opt/keys
 
