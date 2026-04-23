@@ -74,9 +74,11 @@ EOF
 
 deploy_container() {
   run_cmd podman rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  # DietPi en algunas Raspi no trae nftables userspace por defecto.
+  # netavark (red bridge de podman) depende de `nft`; con host network evitamos ese requisito.
   run_cmd podman run -d --name "$CONTAINER_NAME" \
     --restart unless-stopped \
-    -p 80:80 \
+    --network host \
     -v "$WEB_DIR:/usr/share/nginx/html:ro" \
     -v "$CONF_DIR/default.conf:/etc/nginx/conf.d/default.conf:ro" \
     "$IMAGE_NAME"
