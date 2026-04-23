@@ -257,6 +257,19 @@
       font-weight: 700;
       text-align: center;
     }
+    .risk-banner {
+      display: none;
+      margin: 0 0 14px;
+      background: #e8f3ff;
+      border: 1px solid #8ab8e6;
+      color: #0b3a66;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-weight: 600;
+      text-align: left;
+      font-size: 0.86rem;
+      line-height: 1.4;
+    }
     .blocked-box {
       background: #10243a;
       border: 1px solid #2b4f73;
@@ -288,6 +301,7 @@
 
     <div class="main-content" id="appContainer">
       <div id="policyWarning" class="warn-banner"></div>
+      <div id="riskMessage" class="risk-banner"></div>
 
       <div class="case-tabs">
         <div class="tab-btn active" id="tabCliente">📱 Soy Cliente</div>
@@ -315,6 +329,7 @@
   const tabC      = document.getElementById('tabCliente');
   const tabI      = document.getElementById('tabInvitado');
   const warningBox = document.getElementById('policyWarning');
+  const riskBox = document.getElementById('riskMessage');
   const BLOCKED_ART = [
     '/blocked-art/art-01.svg','/blocked-art/art-02.svg','/blocked-art/art-03.svg',
     '/blocked-art/art-04.svg','/blocked-art/art-05.svg','/blocked-art/art-06.svg',
@@ -458,6 +473,13 @@
         } else {
           warningBox.style.display = 'none';
           warningBox.innerHTML = '';
+        }
+        if (ctx && ctx.risk_message) {
+          riskBox.style.display = 'block';
+          riskBox.textContent = 'Aviso IA: ' + ctx.risk_message;
+        } else {
+          riskBox.style.display = 'none';
+          riskBox.textContent = '';
         }
       })
       .catch(() => {});

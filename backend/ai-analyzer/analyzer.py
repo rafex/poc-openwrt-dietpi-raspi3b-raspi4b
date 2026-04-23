@@ -34,6 +34,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
@@ -73,6 +74,7 @@ FEATURE_PORTAL_RISK_MESSAGE = os.environ.get("FEATURE_PORTAL_RISK_MESSAGE", "tru
 FEATURE_CHAT = os.environ.get("FEATURE_CHAT", "true").lower() == "true"
 FEATURE_DEVICE_PROFILING = os.environ.get("FEATURE_DEVICE_PROFILING", "true").lower() == "true"
 FEATURE_AUTO_REPORTS = os.environ.get("FEATURE_AUTO_REPORTS", "true").lower() == "true"
+SUMMARY_INTERVAL_S = int(os.environ.get("SUMMARY_INTERVAL_S", "60"))
 
 RULE_HUMAN_EXPLAIN_KEY = "human_explain_template"
 DEFAULT_HUMAN_EXPLAIN_TEMPLATE = (
@@ -243,6 +245,43 @@ def init_db():
             updated_at  TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS network_summaries (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp  TEXT NOT NULL,
+            summary    TEXT NOT NULL,
+            meta       TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS network_reports (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp  TEXT NOT NULL,
+            report     TEXT NOT NULL,
+            meta       TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS device_profiles (
+            ip          TEXT PRIMARY KEY,
+            device_type TEXT NOT NULL,
+            confidence  REAL NOT NULL DEFAULT 0.5,
+            reasons     TEXT,
+            updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            session_id  TEXT PRIMARY KEY,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  TEXT NOT NULL,
+            timestamp   TEXT NOT NULL,
+            role        TEXT NOT NULL,
+            content     TEXT NOT NULL,
+            meta        TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_batches_status   ON batches(status);
         CREATE INDEX IF NOT EXISTS idx_analyses_batch   ON analyses(batch_id);
         CREATE INDEX IF NOT EXISTS idx_analyses_created ON analyses(timestamp DESC);
@@ -252,6 +291,9 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_alerts_batch     ON network_alerts(batch_id, id DESC);
         CREATE INDEX IF NOT EXISTS idx_alerts_created   ON network_alerts(timestamp DESC);
         CREATE INDEX IF NOT EXISTS idx_alerts_sev       ON network_alerts(severity, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_summaries_ts     ON network_summaries(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_reports_ts       ON network_reports(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_chat_session_ts  ON chat_messages(session_id, id DESC);
     """)
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
@@ -582,6 +624,170 @@ def db_get_alerts(limit: int = 80) -> list[dict]:
             "meta": meta,
         })
     out.reverse()
+    return out
+
+
+def db_store_summary(text: str, meta: dict | None = None):
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO network_summaries (timestamp,summary,meta) VALUES (?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), text, json.dumps(meta or {}, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_summaries(limit: int = 20) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,timestamp,summary,meta FROM network_summaries ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    items = []
+    for r in rows:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        items.append({
+            "id": r["id"],
+            "timestamp": r["timestamp"],
+            "summary": r["summary"],
+            "meta": meta,
+        })
+    items.reverse()
+    return items
+
+
+def db_store_report(text: str, meta: dict | None = None):
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO network_reports (timestamp,report,meta) VALUES (?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), text, json.dumps(meta or {}, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_reports(limit: int = 20) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,timestamp,report,meta FROM network_reports ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    items = []
+    for r in rows:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        items.append({
+            "id": r["id"],
+            "timestamp": r["timestamp"],
+            "report": r["report"],
+            "meta": meta,
+        })
+    items.reverse()
+    return items
+
+
+def db_upsert_device_profile(ip: str, device_type: str, confidence: float, reasons: list[str]):
+    ip = str(ip or "").strip()
+    if not ip:
+        return
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO device_profiles (ip,device_type,confidence,reasons,updated_at) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(ip) DO UPDATE SET "
+        "device_type=excluded.device_type,confidence=excluded.confidence,reasons=excluded.reasons,updated_at=excluded.updated_at",
+        (
+            ip,
+            str(device_type or "desconocido"),
+            max(0.0, min(float(confidence), 1.0)),
+            json.dumps(reasons or [], ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_device_profiles(limit: int = 100) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT ip,device_type,confidence,reasons,updated_at FROM device_profiles ORDER BY updated_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            reasons = json.loads(r["reasons"] or "[]")
+        except Exception:
+            reasons = []
+        out.append({
+            "ip": r["ip"],
+            "device_type": r["device_type"],
+            "confidence": r["confidence"],
+            "reasons": reasons,
+            "updated_at": r["updated_at"],
+        })
+    return out
+
+
+def db_upsert_chat_session(session_id: str):
+    now = datetime.now(timezone.utc).isoformat()
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO chat_sessions (session_id,created_at,updated_at) VALUES (?,?,?) "
+        "ON CONFLICT(session_id) DO UPDATE SET updated_at=excluded.updated_at",
+        (session_id, now, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_store_chat_message(session_id: str, role: str, content: str, meta: dict | None = None):
+    db_upsert_chat_session(session_id)
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO chat_messages (session_id,timestamp,role,content,meta) VALUES (?,?,?,?,?)",
+        (
+            session_id,
+            datetime.now(timezone.utc).isoformat(),
+            role,
+            content,
+            json.dumps(meta or {}, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_chat_history(session_id: str, limit: int = 40) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,session_id,timestamp,role,content,meta FROM chat_messages "
+        "WHERE session_id=? ORDER BY id DESC LIMIT ?",
+        (session_id, limit),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows[::-1]:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        out.append({
+            "id": r["id"],
+            "session_id": r["session_id"],
+            "timestamp": r["timestamp"],
+            "role": r["role"],
+            "content": r["content"],
+            "meta": meta,
+        })
     return out
 
 
@@ -1143,6 +1349,204 @@ def domain_category_breakdown(limit_batches: int = 50, top_n: int = 25) -> dict:
     }
 
 
+def _infer_device_type_from_domains(domains: set[str]) -> tuple[str, float, list[str]]:
+    dset = {_normalize_domain(d) for d in domains if _normalize_domain(d)}
+    reasons = []
+    scores = {
+        "iphone_ios": 0.0,
+        "android_phone": 0.0,
+        "smart_tv": 0.0,
+        "laptop_dev": 0.0,
+        "iot": 0.0,
+    }
+    for d in dset:
+        if _domain_in_roots(d, {"icloud.com", "apple.com", "mzstatic.com"}):
+            scores["iphone_ios"] += 1.3
+            reasons.append(f"consulta {d} (ecosistema Apple)")
+        if _domain_in_roots(d, {"googleapis.com", "gvt1.com", "play.googleapis.com"}):
+            scores["android_phone"] += 1.1
+            reasons.append(f"consulta {d} (servicios Android)")
+        if _domain_in_roots(d, {"netflix.com", "nflxvideo.net", "disneyplus.com", "roku.com", "smarttv"}):
+            scores["smart_tv"] += 1.4
+            reasons.append(f"consulta {d} (consumo OTT/TV)")
+        if _domain_in_roots(d, {"github.com", "gitlab.com", "pypi.org", "npmjs.com"}):
+            scores["laptop_dev"] += 1.5
+            reasons.append(f"consulta {d} (entorno desarrollo)")
+        if _domain_in_roots(d, {"tuya", "iot", "ring.com", "blinkforhome.com"}):
+            scores["iot"] += 1.1
+            reasons.append(f"consulta {d} (patrón IoT)")
+
+    best = max(scores.items(), key=lambda x: x[1])
+    label_map = {
+        "iphone_ios": "telefono_ios",
+        "android_phone": "telefono_android",
+        "smart_tv": "smart_tv",
+        "laptop_dev": "laptop",
+        "iot": "iot",
+    }
+    if best[1] <= 0:
+        return "desconocido", 0.4, ["sin huellas suficientes de dominio"]
+    confidence = min(0.97, 0.55 + (best[1] / 6.0))
+    return label_map.get(best[0], "desconocido"), confidence, reasons[:4]
+
+
+def infer_and_store_device_profiles(summary: dict):
+    if not FEATURE_DEVICE_PROFILING:
+        return
+    cdc = summary.get("client_domain_counts") or {}
+    if not isinstance(cdc, dict):
+        return
+    for client_ip, dom_map in cdc.items():
+        if not isinstance(dom_map, dict):
+            continue
+        domains = set(dom_map.keys())
+        if not domains:
+            continue
+        dtype, conf, reasons = _infer_device_type_from_domains(domains)
+        db_upsert_device_profile(client_ip, dtype, conf, reasons)
+
+
+def _generate_summary_text(limit_batches: int = 6) -> tuple[str, dict]:
+    history = db_get_history(limit_batches)
+    if not history:
+        return "Sin datos recientes de red para resumir.", {"window_batches": 0}
+
+    packets = sum(int(x.get("packets") or 0) for x in history)
+    suspicious_events = sum(int(x.get("suspicious_count") or 0) for x in history)
+    devices = set()
+    for item in history:
+        s = item.get("summary") or {}
+        for ip in (s.get("lan_devices") or []):
+            devices.add(ip)
+
+    domain_stats = db_get_domain_stats(limit_batches=limit_batches, top_n=6)
+    top_domains = ", ".join([d["domain"] for d in domain_stats.get("combined", [])[:4]]) or "sin dominios destacados"
+    cats = domain_category_breakdown(limit_batches=limit_batches, top_n=4).get("categories", [])
+    cat_text = ", ".join([f"{c['category']} {c['pct']}%" for c in cats[:3]]) if cats else "sin categoría dominante"
+    level = "baja"
+    if packets > 2000:
+        level = "alta"
+    elif packets > 800:
+        level = "moderada"
+    summary_txt = (
+        f"Resumen de red: {len(devices)} dispositivos activos, {packets} paquetes capturados "
+        f"y {suspicious_events} eventos sospechosos en la ventana reciente. "
+        f"Actividad {level}. Dominios dominantes: {top_domains}. "
+        f"Categorías principales: {cat_text}."
+    )
+    meta = {
+        "window_batches": len(history),
+        "packets": packets,
+        "devices": len(devices),
+        "suspicious_events": suspicious_events,
+        "top_domains": domain_stats.get("combined", [])[:6],
+        "categories": cats,
+    }
+    return summary_txt, meta
+
+
+def generate_and_store_summary():
+    text, meta = _generate_summary_text(limit_batches=6)
+    db_store_summary(text, meta=meta)
+    return {"summary": text, "meta": meta}
+
+
+def _generate_report_text() -> tuple[str, dict]:
+    history = db_get_history(limit=120)
+    alerts = db_get_alerts(limit=200)
+    devices = db_get_device_profiles(limit=120)
+    domain_stats = db_get_domain_stats(limit_batches=120, top_n=20)
+    categories = domain_category_breakdown(limit_batches=120, top_n=8)
+    total_packets = sum(int(x.get("packets") or 0) for x in history)
+    suspicious = sum(int(x.get("suspicious_count") or 0) for x in history)
+    top_domains = ", ".join(d["domain"] for d in domain_stats.get("combined", [])[:8]) or "N/D"
+    cat_text = ", ".join(f"{c['category']} {c['pct']}%" for c in categories.get("categories", [])[:5]) or "N/D"
+
+    report = (
+        "Reporte de red\n"
+        f"Dispositivos detectados: {len(devices)}\n"
+        f"Dominios consultados (top): {top_domains}\n"
+        f"Paquetes observados: {total_packets}\n"
+        f"Eventos sospechosos: {suspicious}\n"
+        f"Alertas automáticas: {len(alerts)}\n"
+        f"Categorías de tráfico: {cat_text}\n"
+        "Conclusión: no se confirma ataque activo sostenido, pero existen patrones que requieren monitoreo continuo."
+    )
+    meta = {
+        "history_items": len(history),
+        "alerts": len(alerts),
+        "devices": len(devices),
+        "total_packets": total_packets,
+        "suspicious": suspicious,
+        "categories": categories.get("categories", []),
+    }
+    return report, meta
+
+
+def generate_and_store_report():
+    text, meta = _generate_report_text()
+    db_store_report(text, meta=meta)
+    return {"report": text, "meta": meta}
+
+
+def _latest_context_for_chat() -> dict:
+    summaries = db_get_summaries(limit=1)
+    alerts = db_get_alerts(limit=12)
+    categories = domain_category_breakdown(limit_batches=30, top_n=6)
+    devices = db_get_device_profiles(limit=20)
+    return {
+        "summary": summaries[-1]["summary"] if summaries else "",
+        "alerts": alerts[-8:],
+        "categories": categories.get("categories", []),
+        "devices": devices[:10],
+    }
+
+
+def _chat_answer(question: str, session_id: str) -> str:
+    if not FEATURE_CHAT:
+        return "El chat está deshabilitado por configuración."
+    ctx = _latest_context_for_chat()
+    history = db_get_chat_history(session_id, limit=12)
+    hist_txt = "\n".join([f"{m['role']}: {m['content']}" for m in history[-8:]])
+    prompt = _wrap_prompt(
+        user_body=(
+            "Responde en español claro y breve como analista de red.\n"
+            f"Contexto de red:\n{json.dumps(ctx, ensure_ascii=False, indent=2)}\n\n"
+            f"Conversación reciente:\n{hist_txt}\n\n"
+            f"Pregunta del usuario: {question}\n"
+        ),
+        system_text="Asistente SOC para PoC WiFi. No inventes datos fuera del contexto provisto.",
+    )
+    ans = call_llama(prompt).strip()
+    if not ans or ans.startswith("[Error"):
+        alerts = ctx.get("alerts") or []
+        if alerts:
+            a = alerts[-1]
+            return f"Sí, hay una señal reciente: {a.get('message', 'evento sospechoso')}."
+        return "No observo alertas críticas recientes; la red parece estable en esta ventana."
+    return ans
+
+
+def build_portal_risk_message(client_ip: str) -> dict:
+    if not FEATURE_PORTAL_RISK_MESSAGE:
+        return {"enabled": False, "message": ""}
+    alerts = db_get_alerts(limit=120)
+    client_alerts = [a for a in alerts if a.get("source_ip") == client_ip]
+    target = client_alerts[-1] if client_alerts else (alerts[-1] if alerts else None)
+    if not target:
+        return {
+            "enabled": True,
+            "message": "Estás conectado a una red pública. Usa HTTPS y evita iniciar sesión en servicios sensibles.",
+            "severity": "info",
+        }
+    return {
+        "enabled": True,
+        "message": f"Aviso de seguridad: {target.get('message', 'actividad inusual detectada')}.",
+        "severity": target.get("severity", "medium"),
+        "alert_type": target.get("alert_type", "event"),
+    }
+
+
 def detect_social_traffic(summary: dict, whitelist: set[str] | None = None) -> dict:
     combined_counts = _combined_domain_counts(summary)
     whitelist = whitelist or set()
@@ -1439,6 +1843,7 @@ def analyze_and_store(batch_id: int, summary: dict):
     policy_porn = evaluate_and_apply_porn_policy(batch_id, summary)
     human_explanation = build_human_explanation(summary, analysis, risk)
     behavior_alerts = detect_behavior_alerts(summary)
+    infer_and_store_device_profiles(summary)
     db_store_human_explanation(
         batch_id=batch_id,
         text=human_explanation,
@@ -1507,6 +1912,20 @@ def worker_thread():
             stats["analyses_error"] += 1
         finally:
             work_queue.task_done()
+
+
+def summary_worker_thread():
+    if not FEATURE_AUTO_REPORTS:
+        log.info("Summary worker deshabilitado")
+        return
+    log.info("Summary worker iniciado (intervalo=%ss)", SUMMARY_INTERVAL_S)
+    while True:
+        try:
+            out = generate_and_store_summary()
+            log.info("Resumen generado: %s", out.get("summary", "")[:120])
+        except Exception as e:
+            log.warning("Summary worker error: %s", e)
+        time.sleep(max(20, SUMMARY_INTERVAL_S))
 
 
 def enqueue_batch(summary: dict) -> int:
@@ -1629,6 +2048,12 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
         if path in ("/rulez", "/rulez/"):
             self._serve_html("rulez.html"); return
 
+        if path in ("/chat", "/chat/"):
+            self._serve_html("chat.html"); return
+
+        if path in ("/reports", "/reports/"):
+            self._serve_html("reports.html"); return
+
         if path == "/health":
             llama_ok = False
             try:
@@ -1694,6 +2119,34 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
             limit_batches = int(params.get("limit_batches", ["50"])[0])
             top = int(params.get("top", ["25"])[0])
             self.send_json(domain_category_breakdown(limit_batches=limit_batches, top_n=top))
+
+        elif path == "/api/devices/profile":
+            limit = int(params.get("limit", ["100"])[0])
+            items = db_get_device_profiles(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/summaries/latest":
+            limit = int(params.get("limit", ["20"])[0])
+            items = db_get_summaries(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/reports/latest":
+            limit = int(params.get("limit", ["10"])[0])
+            items = db_get_reports(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/portal/risk-message":
+            ip = str(params.get("ip", [""])[0]).strip()
+            self.send_json(build_portal_risk_message(ip))
+
+        elif path == "/api/chat/history":
+            session_id = str(params.get("session_id", [""])[0]).strip()
+            if not session_id:
+                self.send_error_json(400, "session_id requerido")
+                return
+            limit = int(params.get("limit", ["40"])[0])
+            items = db_get_chat_history(session_id, limit=limit)
+            self.send_json({"session_id": session_id, "count": len(items), "items": items})
 
         elif path == "/api/policy":
             limit = int(params.get("limit", ["50"])[0])
@@ -1839,6 +2292,37 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "count": len(items), "items": items})
             return
 
+        if path == "/api/reports/generate":
+            out = generate_and_store_report()
+            self.send_json({"ok": True, **out})
+            return
+
+        if path == "/api/chat":
+            if not FEATURE_CHAT:
+                self.send_error_json(503, "chat deshabilitado")
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            if length == 0:
+                self.send_error_json(400, "Body vacío"); return
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"JSON inválido: {e}"); return
+            question = str(payload.get("question", "")).strip()
+            session_id = str(payload.get("session_id", "")).strip() or f"chat-{uuid4().hex[:12]}"
+            if not question:
+                self.send_error_json(400, "question requerida"); return
+            db_store_chat_message(session_id, "user", question)
+            answer = _chat_answer(question, session_id)
+            db_store_chat_message(session_id, "assistant", answer)
+            self.send_json({
+                "ok": True,
+                "session_id": session_id,
+                "answer": answer,
+                "history": db_get_chat_history(session_id, limit=20),
+            })
+            return
+
         if path == "/api/ingest":
             length = int(self.headers.get("Content-Length", 0))
             if length == 0:
@@ -1922,6 +2406,10 @@ def main():
     # Iniciar worker (un solo hilo — procesa de uno en uno)
     t = threading.Thread(target=worker_thread, daemon=True, name="worker")
     t.start()
+
+    # Worker de resúmenes automáticos (cada 60s por defecto)
+    ts = threading.Thread(target=summary_worker_thread, daemon=True, name="summary-worker")
+    ts.start()
 
     # Iniciar MQTT subscriber
     init_mqtt()

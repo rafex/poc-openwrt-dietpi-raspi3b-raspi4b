@@ -49,6 +49,7 @@ R3_HOST     = os.environ.get("SERVICE_RASPI3_HOST", "192.168.1.181")
 R3_USER     = os.environ.get("SERVICE_RASPI3_USER", "root")
 R3_KEY      = os.environ.get("SERVICE_RASPI3_SSH_KEY", "/opt/keys/sensor")
 REPO_PATH   = os.environ.get("REPO_PATH", "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b")
+AI_ANALYZER_URL = os.environ.get("AI_ANALYZER_URL", f"http://{R4_HOST}:5000")
 
 log.info("=== Lentium Portal Backend iniciando ===")
 log.info(f"ROUTER_IP={ROUTER_IP}  PORTAL_IP={PORTAL_IP}  DB_PATH={DB_PATH}  PORT={PORT}")
@@ -498,6 +499,22 @@ def _safe_json_loads(raw: str, fallback):
         return fallback
 
 
+def _fetch_ai_risk_message(client_ip: str) -> dict:
+    if not client_ip:
+        return {"enabled": False, "message": ""}
+    try:
+        url = f"{AI_ANALYZER_URL}/api/portal/risk-message?ip={client_ip}"
+        with urllib.request.urlopen(url, timeout=2.5) as resp:
+            if resp.getcode() != 200:
+                return {"enabled": False, "message": ""}
+            payload = json.loads(resp.read().decode("utf-8"))
+            if isinstance(payload, dict):
+                return payload
+    except Exception:
+        return {"enabled": False, "message": ""}
+    return {"enabled": False, "message": ""}
+
+
 def _get_connected_clients() -> list[dict]:
     # IPs autorizadas actualmente en nftables.
     rc_set, set_stdout, _ = _router_ssh(
@@ -859,10 +876,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/portal/context":
             client_ip = get_client_ip(self)
             warned = _is_warned_ip(client_ip)
+            ai_risk = _fetch_ai_risk_message(client_ip)
             self._respond(200, {
                 "ip": client_ip,
                 "warning": warned,
                 "warning_message": "NO NO NO es sitio no" if warned else "",
+                "risk_message": ai_risk.get("message", ""),
+                "risk_severity": ai_risk.get("severity", "info"),
             })
             return
 

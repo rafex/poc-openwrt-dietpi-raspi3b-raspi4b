@@ -76,6 +76,8 @@ header h1 span{color:#38bdf8}
 .sev-high{border-left:4px solid #ef4444}
 .sev-medium{border-left:4px solid #f59e0b}
 .sev-low,.sev-info{border-left:4px solid #22c55e}
+.device-list{list-style:none;max-height:220px;overflow:auto}
+.device-list li{padding:8px;border:1px solid #334155;border-radius:8px;background:#0f172a;margin-bottom:6px;font-size:12px}
 </style>
 </head>
 <body>
@@ -84,6 +86,8 @@ header h1 span{color:#38bdf8}
   <div class="nav">
     <a href="/dashboard" class="active">Dashboard</a>
     <a href="/terminal">Terminal</a>
+    <a href="/chat">Chat</a>
+    <a href="/reports">Reports</a>
   </div>
   <div class="status-bar">
     <div class="dot" id="dot"></div>
@@ -129,6 +133,11 @@ header h1 span{color:#38bdf8}
   <div class="panel" style="margin-bottom:20px;">
     <h2>&#128200; Categor&iacute;as de tr&aacute;fico</h2>
     <div id="category-bars"></div>
+  </div>
+
+  <div class="panel" style="margin-bottom:20px;">
+    <h2>&#128187; Perfilado de dispositivos</h2>
+    <ul id="device-list" class="device-list"></ul>
   </div>
 
   <div class="grid2">
@@ -364,6 +373,26 @@ function renderCategories(items) {
   el.innerHTML = html;
 }
 
+function renderDevices(items) {
+  var el = document.getElementById('device-list');
+  if (!items || !items.length) {
+    el.innerHTML = '<li>Sin perfiles de dispositivos aún.</li>';
+    return;
+  }
+  var top = items.slice(0, 12);
+  var html = '';
+  for (var i = 0; i < top.length; i++) {
+    var d = top[i];
+    var conf = Math.round((d.confidence || 0) * 100);
+    var rs = (d.reasons || []).slice(0, 2).join('; ');
+    html += '<li><strong>' + d.ip + '</strong> → ' + d.device_type +
+      ' (' + conf + '%)' +
+      (rs ? '<div style=\"opacity:.8;margin-top:4px;\">' + rs + '</div>' : '') +
+      '</li>';
+  }
+  el.innerHTML = html;
+}
+
 function fetchLatest() {
   Promise.all([
     fetch('/api/history?limit=50').then(function(r){ return r.json(); }),
@@ -371,7 +400,8 @@ function fetchLatest() {
     fetch('/api/policy/blocked-sites?limit=120').then(function(r){ return r.json(); }),
     fetch('/api/explanations/latest?limit=20').then(function(r){ return r.json(); }),
     fetch('/api/alerts?limit=80').then(function(r){ return r.json(); }),
-    fetch('/api/domain-categories/top?limit_batches=60&top=25').then(function(r){ return r.json(); })
+    fetch('/api/domain-categories/top?limit_batches=60&top=25').then(function(r){ return r.json(); }),
+    fetch('/api/devices/profile?limit=60').then(function(r){ return r.json(); })
   ])
     .then(function(resp) {
       var data = resp[0] || {};
@@ -380,6 +410,7 @@ function fetchLatest() {
       var explainData = resp[3] || {};
       var alertData = resp[4] || {};
       var categoriesData = resp[5] || {};
+      var deviceData = resp[6] || {};
       var items = data.items || [];
       document.getElementById('dot').classList.remove('off');
       document.getElementById('status-txt').textContent = 'online';
@@ -396,6 +427,7 @@ function fetchLatest() {
       renderBlockedSites(blockedData.items || []);
       renderAlerts(alertData.items || []);
       renderCategories(categoriesData.categories || []);
+      renderDevices(deviceData.items || []);
       renderHumanExplanation(explainData.items || [], '');
 
       if (!items.length) return;

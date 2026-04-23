@@ -13,6 +13,8 @@ COPY router_mcp.py .
 COPY dashboard.html .
 COPY terminal.html .
 COPY rulez.html .
+COPY chat.html .
+COPY reports.html .
 
 EXPOSE 5000
 

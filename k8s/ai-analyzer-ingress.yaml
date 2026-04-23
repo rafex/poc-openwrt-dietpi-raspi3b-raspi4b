@@ -67,6 +67,69 @@ spec:
                 name: ai-analyzer
                 port:
                   number: 5000
+          - path: /api/domain-stats
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/explanations
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/alerts
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/domain-categories
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/summaries
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/reports
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/devices
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/chat
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /api/portal/risk-message
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
           - path: /dashboard
             pathType: Prefix
             backend:
@@ -82,6 +145,20 @@ spec:
                 port:
                   number: 5000
           - path: /rulez
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /chat
+            pathType: Prefix
+            backend:
+              service:
+                name: ai-analyzer
+                port:
+                  number: 5000
+          - path: /reports
             pathType: Prefix
             backend:
               service:
