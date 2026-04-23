@@ -405,6 +405,16 @@ if [ "$NFT_D_EXISTS" -eq 1 ]; then
     log_ok "Reglas persistidas en /etc/nftables.d/captive-portal.nft"
     log_info "Registrando include UCI en fw4 para asegurar carga en reboot..."
     router_ssh "
+        # Limpiar includes legacy (anónimos o nombrados) que apunten al captive portal
+        for sec in \$(uci show firewall 2>/dev/null | sed -n \"s/^firewall\\.\\([^=]*\\)=include$/\\1/p\"); do
+            path=\$(uci -q get firewall.\$sec.path 2>/dev/null || true)
+            case \"\$path\" in
+                */captive-portal.nft|*/captive-portal-fw4-include.sh)
+                    uci -q delete firewall.\$sec
+                    ;;
+            esac
+        done
+
         cat > /etc/captive-portal-fw4-include.sh <<'EOS'
 #!/bin/sh
 nft delete table ip captive 2>/dev/null || true
