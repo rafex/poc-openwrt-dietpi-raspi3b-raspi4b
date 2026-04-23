@@ -13,6 +13,20 @@ class RouterMCP:
     NFT_PORN_SET = "blocked_porn_ips"
     NFT_WARN_SET = "warned_clients"
     LAN_SUBNET = "192.168.1.0/24"
+    MCP_PROMPTS = {
+        "social_block": (
+            "Evalúa dominios de redes sociales detectados y decide si aplicar bloqueo por IP destino. "
+            "Responde JSON con action=block|none y reason breve."
+        ),
+        "porn_enforcement": (
+            "Evalúa señales de sitios pornográficos y decide enforcement inmediato. "
+            "Responde JSON con action=block_and_kick|none y reason breve."
+        ),
+        "social_unblock": (
+            "Evalúa si terminó la ventana de restricción o bajó el consumo; decide retiro de bloqueo social. "
+            "Responde JSON con action=unblock|none y reason breve."
+        ),
+    }
 
     def __init__(
         self,
@@ -50,6 +64,14 @@ class RouterMCP:
             timeout=timeout_s or self.timeout_s,
         )
         return res.returncode, res.stdout.strip(), res.stderr.strip()
+
+    def _obfuscated_login(self) -> str:
+        ip_parts = (self.router_ip or "").split(".")
+        if len(ip_parts) == 4:
+            ip_masked = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.xxx"
+        else:
+            ip_masked = "x.x.x.x"
+        return f"{self.router_user}@{ip_masked} (ssh key redacted)"
 
     @staticmethod
     def _normalize_ips(ips: Iterable[str]) -> list[str]:
@@ -232,3 +254,64 @@ printf 'OK\\n'
             f"nft get element {self.NFT_TABLE} {self.NFT_WARN_SET} {{ {client_ip} }} >/dev/null 2>&1"
         )
         return rc == 0
+
+    def mcp_capabilities(self) -> dict:
+        return {
+            "name": "openwrt-router-mcp",
+            "version": "1.0",
+            "tool": {
+                "name": "apply_router_policy",
+                "description": (
+                    "Abstrae operaciones de bloqueo/desbloqueo en OpenWrt usando nftables, "
+                    "sin exponer credenciales SSH en el frontend."
+                ),
+                "operations": [
+                    "ensure_policy_objects",
+                    "apply_social_block",
+                    "remove_social_block",
+                    "block_porn_ips",
+                    "kick_client_from_allowed",
+                    "mark_client_warning",
+                    "clear_client_warning",
+                    "resolve_domains_to_ips",
+                ],
+                "ssh_target_obfuscated": self._obfuscated_login(),
+            },
+            "prompts": self.MCP_PROMPTS,
+            "resources": [
+                "markdown/policy-output-example",
+                "json/action-schema-example",
+            ],
+        }
+
+    def mcp_resources(self) -> dict:
+        md = (
+            "# Ejemplo esperado (Markdown)\n\n"
+            "- policy: `social_block`\n"
+            "- trigger: tráfico detectado dentro de la ventana 09:00-17:00\n"
+            "- decision: bloquear IPs destino de dominios sociales\n"
+            "- output: JSON estricto\n"
+        )
+        json_example = {
+            "action": "block",
+            "reason": "Consumo de red social en horario restringido",
+            "category": "social",
+            "domains": ["facebook.com", "instagram.com"],
+            "ips": ["157.240.0.0", "31.13.64.0"],
+        }
+        md_json = (
+            "```json\n"
+            "{\n"
+            '  "action": "block",\n'
+            '  "reason": "Consumo de red social en horario restringido",\n'
+            '  "category": "social",\n'
+            '  "domains": ["facebook.com", "instagram.com"],\n'
+            '  "ips": ["157.240.0.0", "31.13.64.0"]\n'
+            "}\n"
+            "```"
+        )
+        return {
+            "markdown_policy_output_example": md,
+            "json_action_schema_example": json_example,
+            "markdown_json_highlight_example": md_json,
+        }

@@ -30,6 +30,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -61,6 +62,10 @@ SOCIAL_POLICY_END_HOUR = int(os.environ.get("SOCIAL_POLICY_END_HOUR", "17"))
 SOCIAL_POLICY_TZ = os.environ.get("SOCIAL_POLICY_TZ", "America/Mexico_City")
 SOCIAL_MIN_HITS = int(os.environ.get("SOCIAL_MIN_HITS", "3"))
 PORN_BLOCK_ENABLED = os.environ.get("PORN_BLOCK_ENABLED", "true").lower() == "true"
+WHITELIST_DOMAINS_DEFAULT = os.environ.get(
+    "WHITELIST_DOMAINS_DEFAULT",
+    "localhost.com,localhost.com.mx,microsoft.com,apple.com,google.com,openwrt.org",
+)
 
 SOCIAL_NETWORK_DOMAINS = {
     "facebook": ["facebook.com", "fbcdn.net", "messenger.com", "whatsapp.com", "whatsapp.net"],
@@ -190,6 +195,12 @@ def init_db():
             meta         TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS domain_whitelist (
+            domain      TEXT PRIMARY KEY,
+            reason      TEXT,
+            created_at  TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_batches_status   ON batches(status);
         CREATE INDEX IF NOT EXISTS idx_analyses_batch   ON analyses(batch_id);
         CREATE INDEX IF NOT EXISTS idx_analyses_created ON analyses(timestamp DESC);
@@ -205,6 +216,11 @@ def init_db():
         "INSERT OR IGNORE INTO ai_rules (key,value,updated_at) VALUES (?,?,?)",
         (RULE_ACTION_KEY, DEFAULT_ACTION_PROMPT_TEMPLATE, now),
     )
+    for domain in [d.strip().lower() for d in WHITELIST_DOMAINS_DEFAULT.split(",") if d.strip()]:
+        conn.execute(
+            "INSERT OR IGNORE INTO domain_whitelist (domain,reason,created_at) VALUES (?,?,?)",
+            (domain, "seed_default", now),
+        )
     conn.commit()
     conn.close()
     log.info("SQLite inicializado en %s", DB_PATH)
@@ -427,6 +443,159 @@ def db_get_prompt_logs(limit: int = 50, prompt_type: str | None = None) -> list:
     return items
 
 
+def _normalize_domain(value: str) -> str:
+    d = str(value or "").strip().lower().rstrip(".")
+    return d
+
+
+def _domain_in_roots(domain: str, roots: set[str]) -> bool:
+    d = _normalize_domain(domain)
+    if not d:
+        return False
+    for root in roots:
+        r = _normalize_domain(root)
+        if not r:
+            continue
+        if d == r or d.endswith("." + r):
+            return True
+    return False
+
+
+def db_get_whitelist() -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT domain,reason,created_at FROM domain_whitelist ORDER BY domain"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def db_get_whitelist_set() -> set[str]:
+    return {_normalize_domain(x["domain"]) for x in db_get_whitelist() if _normalize_domain(x["domain"])}
+
+
+def db_whitelist_add(domain: str, reason: str = ""):
+    d = _normalize_domain(domain)
+    if not d:
+        return
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO domain_whitelist (domain,reason,created_at) VALUES (?,?,?) "
+        "ON CONFLICT(domain) DO UPDATE SET reason=excluded.reason",
+        (d, reason or "manual", datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_whitelist_remove(domain: str):
+    d = _normalize_domain(domain)
+    if not d:
+        return
+    conn = db_connect()
+    conn.execute("DELETE FROM domain_whitelist WHERE domain=?", (d,))
+    conn.commit()
+    conn.close()
+
+
+def db_get_domain_stats(limit_batches: int = 50, top_n: int = 20) -> dict:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,payload FROM batches ORDER BY id DESC LIMIT ?",
+        (max(1, min(limit_batches, 500)),),
+    ).fetchall()
+    conn.close()
+
+    dns = Counter()
+    sni = Counter()
+    http = Counter()
+    combined = Counter()
+    scanned = 0
+
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"])
+        except Exception:
+            continue
+        scanned += 1
+        for k, counter in (
+            ("dns_query_counts", dns),
+            ("tls_sni_counts", sni),
+            ("http_host_counts", http),
+        ):
+            m = payload.get(k) or {}
+            if not isinstance(m, dict):
+                continue
+            for domain, count in m.items():
+                d = _normalize_domain(domain)
+                if not d:
+                    continue
+                try:
+                    n = int(count)
+                except Exception:
+                    n = 1
+                n = max(1, n)
+                counter[d] += n
+                combined[d] += n
+
+    def top_items(counter: Counter, n: int):
+        return [{"domain": d, "count": c} for d, c in counter.most_common(n)]
+
+    return {
+        "window_batches": scanned,
+        "visibility": {
+            "dns": "completo",
+            "tls_sni": "dominio",
+            "http": "dominio",
+        },
+        "dns": top_items(dns, top_n),
+        "tls_sni": top_items(sni, top_n),
+        "http": top_items(http, top_n),
+        "combined": top_items(combined, top_n),
+    }
+
+
+def db_get_blocked_site_events(limit: int = 80) -> list[dict]:
+    actions = db_get_policy_actions(limit)
+    allowed_actions = {
+        "social_block_on",
+        "social_block_refresh",
+        "porn_enforcement",
+        "porn_ip_block_only",
+    }
+    out = []
+    for a in actions:
+        action = str(a.get("action", ""))
+        if action not in allowed_actions:
+            continue
+        details = a.get("details") or {}
+        domains = []
+        category = "unknown"
+        reason = a.get("reason") or ""
+
+        if "social" in action:
+            category = "social"
+            social = details.get("social") or {}
+            domains = list((social.get("matched_domains") or {}).keys())
+            if not reason:
+                reason = "Tráfico de redes sociales en ventana restringida"
+        elif "porn" in action:
+            category = "porn"
+            domains = list((details.get("trigger_domains") or {}).keys())
+            if not reason:
+                reason = "Detección de tráfico a sitios pornográficos"
+
+        out.append({
+            "id": a.get("id"),
+            "timestamp": a.get("timestamp"),
+            "action": action,
+            "category": category,
+            "reason": reason,
+            "domains": domains[:30],
+        })
+    return out
+
+
 # ─── Prompt builder ───────────────────────────────────────────────────────────
 def _safe_format(template: str, context: dict) -> str:
     text = template
@@ -553,20 +722,17 @@ def call_llama(prompt: str) -> str:
 
 
 def _social_bucket_for_domain(domain: str) -> str | None:
-    d = domain.lower().strip(".")
+    d = _normalize_domain(domain)
     for bucket, roots in SOCIAL_NETWORK_DOMAINS.items():
         for root in roots:
-            if d == root or d.endswith("." + root):
+            r = _normalize_domain(root)
+            if d == r or d.endswith("." + r):
                 return bucket
     return None
 
 
 def _domain_matches_roots(domain: str, roots: set[str]) -> bool:
-    d = domain.lower().strip(".")
-    for root in roots:
-        if d == root or d.endswith("." + root):
-            return True
-    return False
+    return _domain_in_roots(domain, roots)
 
 
 def _combined_domain_counts(summary: dict) -> dict:
@@ -598,13 +764,16 @@ def _combined_domain_counts(summary: dict) -> dict:
     return combined_counts
 
 
-def detect_social_traffic(summary: dict) -> dict:
+def detect_social_traffic(summary: dict, whitelist: set[str] | None = None) -> dict:
     combined_counts = _combined_domain_counts(summary)
+    whitelist = whitelist or set()
 
     per_network = {}
     matched_domains = {}
     total_hits = 0
     for domain, count in combined_counts.items():
+        if _domain_in_roots(domain, whitelist):
+            continue
         bucket = _social_bucket_for_domain(domain)
         if not bucket:
             continue
@@ -619,11 +788,14 @@ def detect_social_traffic(summary: dict) -> dict:
     }
 
 
-def detect_porn_traffic(summary: dict) -> dict:
+def detect_porn_traffic(summary: dict, whitelist: set[str] | None = None) -> dict:
     combined_counts = _combined_domain_counts(summary)
+    whitelist = whitelist or set()
     matched_domains = {}
     total_hits = 0
     for domain, count in combined_counts.items():
+        if _domain_in_roots(domain, whitelist):
+            continue
         if not _domain_matches_roots(domain, PORN_DOMAIN_ROOTS):
             continue
         matched_domains[domain] = matched_domains.get(domain, 0) + count
@@ -638,6 +810,8 @@ def detect_porn_traffic(summary: dict) -> dict:
                 continue
             for domain, count in dom_map.items():
                 d = str(domain).lower().strip()
+                if _domain_in_roots(d, whitelist):
+                    continue
                 if not _domain_matches_roots(d, PORN_DOMAIN_ROOTS):
                     continue
                 try:
@@ -707,7 +881,8 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
     except Exception:
         local_hour = datetime.now().hour
     in_window = SOCIAL_POLICY_START_HOUR <= local_hour < SOCIAL_POLICY_END_HOUR
-    social = detect_social_traffic(summary)
+    whitelist = db_get_whitelist_set()
+    social = detect_social_traffic(summary, whitelist=whitelist)
     hits = social["total_hits"]
     should_block = in_window and hits >= SOCIAL_MIN_HITS
     base_action = "block" if should_block else ("unblock" if policy_state.get("social_block_active", False) else "none")
@@ -720,6 +895,7 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
         "social_min_hits": SOCIAL_MIN_HITS,
         "social_per_network": social["per_network"],
         "social_domains": social["matched_domains"],
+        "whitelist_domains": sorted(whitelist),
         "base_action": base_action,
         "block_active": policy_state.get("social_block_active", False),
     }
@@ -800,7 +976,8 @@ def evaluate_and_apply_porn_policy(batch_id: int, summary: dict) -> dict:
         result["reason"] = "router_mcp_unavailable"
         return result
 
-    porn = detect_porn_traffic(summary)
+    whitelist = db_get_whitelist_set()
+    porn = detect_porn_traffic(summary, whitelist=whitelist)
     result["porn_hits"] = porn["total_hits"]
     result["domains"] = porn["matched_domains"]
     result["offenders"] = porn["offenders"]
@@ -822,6 +999,8 @@ def evaluate_and_apply_porn_policy(batch_id: int, summary: dict) -> dict:
         action = {
             "client_ip": client_ip,
             "dest_ips": ip_candidates,
+            "category": "porn",
+            "trigger_domains": porn["matched_domains"],
             "block_ok": block_ok,
             "block_msg": block_msg,
             "kick_ok": kick_ok,
@@ -837,6 +1016,8 @@ def evaluate_and_apply_porn_policy(batch_id: int, summary: dict) -> dict:
         action = {
             "client_ip": None,
             "dest_ips": global_ips,
+            "category": "porn",
+            "trigger_domains": porn["matched_domains"],
             "block_ok": block_ok,
             "block_msg": block_msg,
             "kick_ok": False,
@@ -1116,8 +1297,38 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 "actions": db_get_policy_actions(limit),
             })
 
+        elif path == "/api/policy/blocked-sites":
+            limit = int(params.get("limit", ["80"])[0])
+            self.send_json({
+                "count": limit,
+                "items": db_get_blocked_site_events(limit=limit),
+            })
+
+        elif path == "/api/domain-stats":
+            limit_batches = int(params.get("limit_batches", ["50"])[0])
+            top_n = int(params.get("top", ["20"])[0])
+            self.send_json(db_get_domain_stats(limit_batches=limit_batches, top_n=top_n))
+
         elif path == "/api/rulez":
             self.send_json({"rules": db_get_rules()})
+
+        elif path == "/api/mcp/whitelist":
+            items = db_get_whitelist()
+            self.send_json({"items": items, "count": len(items)})
+
+        elif path == "/api/mcp/capabilities":
+            if router_mcp is None:
+                self.send_json({"error": "router_mcp_unavailable"}, status=503)
+            else:
+                self.send_json(router_mcp.mcp_capabilities())
+
+        elif path == "/api/mcp/resources":
+            if router_mcp is None:
+                self.send_json({"error": "router_mcp_unavailable"}, status=503)
+            else:
+                resources = router_mcp.mcp_resources()
+                resources["whitelist"] = db_get_whitelist()
+                self.send_json(resources)
 
         elif path == "/api/prompt-logs":
             limit = int(params.get("limit", ["50"])[0])
@@ -1190,6 +1401,29 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 self.send_error_json(400, "value vacío"); return
             db_set_rule(key, value)
             self.send_json({"ok": True, "rules": db_get_rules()})
+            return
+
+        if path == "/api/mcp/whitelist":
+            length = int(self.headers.get("Content-Length", 0))
+            if length == 0:
+                self.send_error_json(400, "Body vacío"); return
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"JSON inválido: {e}"); return
+            op = str(payload.get("op", "")).strip().lower()
+            domain = str(payload.get("domain", "")).strip()
+            reason = str(payload.get("reason", "")).strip()
+            if op not in {"add", "remove"}:
+                self.send_error_json(400, "op inválido (add|remove)"); return
+            if not domain:
+                self.send_error_json(400, "domain requerido"); return
+            if op == "add":
+                db_whitelist_add(domain, reason=reason or "manual")
+            else:
+                db_whitelist_remove(domain)
+            items = db_get_whitelist()
+            self.send_json({"ok": True, "count": len(items), "items": items})
             return
 
         if path == "/api/ingest":

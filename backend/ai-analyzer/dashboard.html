@@ -58,6 +58,18 @@ header h1 span{color:#38bdf8}
 .history-item .ts{font-size:11px;color:#475569;flex-shrink:0}
 .history-item .hr{font-size:12px;color:#cbd5e1;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .history-item .rk{font-size:10px;font-weight:700;padding:2px 6px;border-radius:3px;flex-shrink:0}
+.mini-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+@media(max-width:900px){.mini-grid{grid-template-columns:1fr}}
+.mini-card{background:#0f172a;border:1px solid #334155;border-radius:8px;padding:8px}
+.mini-card h3{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.domain-list{list-style:none;max-height:220px;overflow:auto}
+.domain-list li{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #1e293b;font-size:12px}
+.domain-list li:last-child{border-bottom:none}
+.blocked-list{max-height:240px;overflow:auto}
+.blocked-item{border:1px solid #334155;border-radius:8px;padding:8px;margin-bottom:8px;background:#0f172a}
+.blocked-meta{font-size:11px;color:#94a3b8;margin-bottom:4px}
+.blocked-reason{font-size:12px;color:#e2e8f0;margin-bottom:4px}
+.blocked-domains{font-size:11px;color:#7dd3fc}
 </style>
 </head>
 <body>
@@ -116,6 +128,30 @@ header h1 span{color:#38bdf8}
     <div class="panel">
       <h2>&#127760; DNS Queries <span class="badge" id="dns-badge">&#8212;</span></h2>
       <div id="dns-list" class="dns-list"></div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h2>&#127760; Dominios m&aacute;s consumidos <span class="badge">DNS/TLS-SNI/HTTP</span></h2>
+      <div class="mini-grid">
+        <div class="mini-card">
+          <h3>DNS (completo)</h3>
+          <ul id="top-dns" class="domain-list"></ul>
+        </div>
+        <div class="mini-card">
+          <h3>TLS SNI (dominio)</h3>
+          <ul id="top-sni" class="domain-list"></ul>
+        </div>
+        <div class="mini-card">
+          <h3>HTTP Host (dominio)</h3>
+          <ul id="top-http" class="domain-list"></ul>
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>&#128683; Sitios bloqueados por IA</h2>
+      <div id="blocked-sites" class="blocked-list"></div>
     </div>
   </div>
 
@@ -219,10 +255,52 @@ function renderHistory(items) {
   el.innerHTML = html;
 }
 
+function renderDomainList(elId, items) {
+  var el = document.getElementById(elId);
+  if (!items || !items.length) {
+    el.innerHTML = '<li><span>Sin datos</span><span>0</span></li>';
+    return;
+  }
+  var top = items.slice(0, 12);
+  var html = '';
+  for (var i = 0; i < top.length; i++) {
+    var d = top[i];
+    html += '<li><span title="' + d.domain + '">' + d.domain + '</span><span>' + d.count + '</span></li>';
+  }
+  el.innerHTML = html;
+}
+
+function renderBlockedSites(items) {
+  var el = document.getElementById('blocked-sites');
+  if (!items || !items.length) {
+    el.innerHTML = '<div class="empty">Sin bloqueos recientes por IA</div>';
+    return;
+  }
+  var top = items.slice(-20).reverse();
+  var html = '';
+  for (var i = 0; i < top.length; i++) {
+    var it = top[i];
+    var domains = (it.domains || []).slice(0, 6).join(', ');
+    var cat = (it.category || 'unknown').toUpperCase();
+    html += '<div class="blocked-item">' +
+      '<div class="blocked-meta">' + fmtTime(it.timestamp) + ' · ' + cat + ' · ' + (it.action || '') + '</div>' +
+      '<div class="blocked-reason">' + (it.reason || 'sin razón') + '</div>' +
+      '<div class="blocked-domains">' + (domains || 'sin dominios resueltos') + '</div>' +
+      '</div>';
+  }
+  el.innerHTML = html;
+}
+
 function fetchLatest() {
-  fetch('/api/history?limit=50')
-    .then(function(r){ return r.json(); })
-    .then(function(data) {
+  Promise.all([
+    fetch('/api/history?limit=50').then(function(r){ return r.json(); }),
+    fetch('/api/domain-stats?limit_batches=60&top=20').then(function(r){ return r.json(); }),
+    fetch('/api/policy/blocked-sites?limit=120').then(function(r){ return r.json(); })
+  ])
+    .then(function(resp) {
+      var data = resp[0] || {};
+      var domainStats = resp[1] || {};
+      var blockedData = resp[2] || {};
       var items = data.items || [];
       document.getElementById('dot').classList.remove('off');
       document.getElementById('status-txt').textContent = 'online';
@@ -233,6 +311,10 @@ function fetchLatest() {
       for (var i = 0; i < items.length; i++) totalAlerts += (items[i].suspicious_count || 0);
       document.getElementById('kpi-analyses').textContent = totalAnalyses;
       document.getElementById('kpi-alerts').textContent = totalAlerts;
+      renderDomainList('top-dns', domainStats.dns || []);
+      renderDomainList('top-sni', domainStats.tls_sni || []);
+      renderDomainList('top-http', domainStats.http || []);
+      renderBlockedSites(blockedData.items || []);
 
       if (!items.length) return;
       var latest = items[items.length - 1];
