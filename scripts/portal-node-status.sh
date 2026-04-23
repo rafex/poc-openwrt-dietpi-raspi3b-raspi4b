@@ -15,6 +15,7 @@ load_topology
 ensure_cmd podman curl
 
 CONTAINER_NAME="captive-portal-node"
+BACKEND_CONTAINER_NAME="captive-portal-node-backend"
 PORTAL_LOCAL_URL="http://127.0.0.1"
 
 log_info "--- portal-node-status ---"
@@ -28,7 +29,13 @@ else
   die "Contenedor no activo: $CONTAINER_NAME"
 fi
 
-for ep in /portal /services /blocked /api/history /api/stats /health; do
+if podman ps --format '{{.Names}}' | grep -qx "$BACKEND_CONTAINER_NAME"; then
+  log_ok "Contenedor activo: $BACKEND_CONTAINER_NAME"
+else
+  die "Contenedor no activo: $BACKEND_CONTAINER_NAME"
+fi
+
+for ep in /portal /services /blocked /people /api/history /api/stats /api/portal/context /health; do
   code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "${PORTAL_LOCAL_URL}${ep}" 2>/dev/null || echo 000)"
   case "$code" in
     200|301|302|307|308) log_ok "${ep} HTTP ${code}" ;;

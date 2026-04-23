@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>people · Portal Node</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0b1220; color: #e5e7eb; }
+    .wrap { max-width: 1000px; margin: 0 auto; padding: 20px; }
+    h1 { margin: 0 0 12px; font-size: 26px; }
+    .muted { color: #9ca3af; font-size: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 14px; }
+    .k { color: #9ca3af; font-size: 13px; }
+    .v { font-size: 22px; font-weight: 700; margin-top: 6px; }
+    table { width: 100%; border-collapse: collapse; background: #111827; border: 1px solid #1f2937; border-radius: 12px; overflow: hidden; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #1f2937; font-size: 14px; }
+    th { color: #9ca3af; font-weight: 600; }
+    tr:last-child td { border-bottom: none; }
+    .ok { color: #34d399; }
+    .warn { color: #fbbf24; }
+    .bad { color: #f87171; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>people</h1>
+    <div class="muted">Vista local en Raspi3BPortal. Fuente de datos: API de AI node.</div>
+
+    <div class="grid">
+      <div class="card"><div class="k">Estado AI</div><div class="v" id="aiState">--</div></div>
+      <div class="card"><div class="k">Análisis totales</div><div class="v" id="totalAnalyses">--</div></div>
+      <div class="card"><div class="k">En cola</div><div class="v" id="queuePending">--</div></div>
+      <div class="card"><div class="k">Último riesgo</div><div class="v" id="lastRisk">--</div></div>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Riesgo</th>
+          <th>Paquetes sospechosos</th>
+          <th>Duración (s)</th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="4" class="muted">Cargando...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    function clsRisk(risk) {
+      const r = (risk || '').toUpperCase();
+      if (r.includes('ALTO')) return 'bad';
+      if (r.includes('MEDIO')) return 'warn';
+      return 'ok';
+    }
+
+    async function loadData() {
+      const [health, stats, history] = await Promise.all([
+        fetch('/health', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        fetch('/api/stats', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+        fetch('/api/history?limit=25', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
+      ]);
+
+      const aiOk = !!(health && health.status === 'ok');
+      const aiLabel = aiOk ? 'ONLINE' : 'OFFLINE';
+      document.getElementById('aiState').textContent = aiLabel;
+      document.getElementById('aiState').className = 'v ' + (aiOk ? 'ok' : 'bad');
+
+      const items = (history && history.items) ? history.items : [];
+      const queue = (stats && stats.queue && typeof stats.queue.pending !== 'undefined') ? stats.queue.pending : '--';
+      const total = items.length;
+      const last = items[0] || {};
+      const lastRisk = last.risk || '--';
+
+      document.getElementById('totalAnalyses').textContent = String(total);
+      document.getElementById('queuePending').textContent = String(queue);
+      document.getElementById('lastRisk').textContent = lastRisk;
+      document.getElementById('lastRisk').className = 'v ' + clsRisk(lastRisk);
+
+      const tbody = document.getElementById('rows');
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="muted">Sin datos todavía</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = items.map(it => {
+        const ts = it.timestamp || it.created_at || '-';
+        const risk = (it.risk || '-').toString();
+        const sus = (typeof it.suspicious_count !== 'undefined') ? it.suspicious_count : '-';
+        const elapsed = (typeof it.elapsed_s !== 'undefined') ? it.elapsed_s : '-';
+        return `<tr>
+          <td>${ts}</td>
+          <td class="${clsRisk(risk)}">${risk}</td>
+          <td>${sus}</td>
+          <td>${elapsed}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    loadData();
+    setInterval(loadData, 5000);
+  </script>
+</body>
+</html>

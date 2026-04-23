@@ -24,6 +24,18 @@ ensure_cmd bash
 if ! $ONLY_VERIFY; then
   apt_install_pkgs podman curl ca-certificates
   run_cmd mkdir -p /etc/containers
+  ensure_portal_ssh_key
+  if ssh -i /opt/keys/captive-portal \
+      -o StrictHostKeyChecking=no \
+      -o UserKnownHostsFile=/dev/null \
+      -o BatchMode=yes \
+      -o ConnectTimeout=5 \
+      root@"${ROUTER_IP}" "echo ok" >/dev/null 2>&1; then
+    log_ok "Llave captive-portal válida contra OpenWrt"
+  else
+    log_warn "La llave /opt/keys/captive-portal no está autorizada en OpenWrt. El registro podría fallar al autorizar clientes."
+    log_warn "Solución: agrega /opt/keys/captive-portal.pub al router o ejecuta setup-openwrt.sh desde esta Raspi."
+  fi
 fi
 
 if $DRY_RUN; then
