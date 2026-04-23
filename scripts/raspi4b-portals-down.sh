@@ -1,5 +1,6 @@
 #!/bin/bash
-# Apaga los portales en Raspi4B (k3s) sin tocar AI analyzer ni llama.cpp.
+# Baja TODO lo de portal/backend en k3s de Raspi4B (deploy/svc/ingress/configmaps),
+# dejando solamente componentes de IA.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -17,8 +18,17 @@ ensure_k3s_ready
 log_info "--- raspi4b-portals-down ---"
 
 if ! $ONLY_VERIFY; then
+  # 1) Escalar a cero primero para cortar tráfico rápido
   run_cmd kubectl scale deployment/captive-portal --replicas=0 -n default
   run_cmd kubectl scale deployment/captive-portal-lentium --replicas=0 -n default
+
+  # 2) Eliminar recursos de portal/backend
+  run_cmd kubectl delete deployment/captive-portal -n default --ignore-not-found=true
+  run_cmd kubectl delete deployment/captive-portal-lentium -n default --ignore-not-found=true
+  run_cmd kubectl delete service/captive-portal -n default --ignore-not-found=true
+  run_cmd kubectl delete ingress/captive-portal -n default --ignore-not-found=true
+  run_cmd kubectl delete configmap/captive-portal-nginx-conf -n default --ignore-not-found=true
+  run_cmd kubectl delete configmap/captive-portal-lentium-nginx-conf -n default --ignore-not-found=true
 fi
 
 if $DRY_RUN; then
@@ -26,7 +36,7 @@ if $DRY_RUN; then
   exit 0
 fi
 
-log_info "Esperando que no queden pods de portal en Running..."
+log_info "Esperando que no queden pods de portal/backend en Running..."
 for _ in $(seq 1 30); do
   running="$(kubectl get pods -n default -l app=captive-portal --no-headers 2>/dev/null | awk '$3=="Running"{print $1}' | wc -l | tr -d ' ')"
   [ "${running:-0}" = "0" ] && break
@@ -39,5 +49,25 @@ if [ "${running:-0}" != "0" ]; then
   die "Aún hay pods de portal en Running"
 fi
 
-log_ok "Portales en Raspi4B apagados (replicas=0)"
-kubectl get deploy -n default captive-portal captive-portal-lentium
+if kubectl get deployment -n default captive-portal >/dev/null 2>&1; then
+  die "Deployment captive-portal aún existe"
+fi
+if kubectl get deployment -n default captive-portal-lentium >/dev/null 2>&1; then
+  die "Deployment captive-portal-lentium aún existe"
+fi
+if kubectl get service -n default captive-portal >/dev/null 2>&1; then
+  die "Service captive-portal aún existe"
+fi
+if kubectl get ingress -n default captive-portal >/dev/null 2>&1; then
+  die "Ingress captive-portal aún existe"
+fi
+
+log_ok "Portal/backend eliminados de k3s en Raspi4B"
+if kubectl get deployment -n default ai-analyzer >/dev/null 2>&1; then
+  log_ok "ai-analyzer sigue presente"
+else
+  log_warn "ai-analyzer no encontrado en default namespace"
+fi
+
+log_info "Recursos restantes relevantes:"
+kubectl get deployment,svc,ingress -n default | awk 'NR==1 || /ai-analyzer|captive-portal/'

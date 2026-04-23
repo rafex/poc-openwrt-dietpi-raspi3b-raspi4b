@@ -159,15 +159,41 @@ check_container_running() {
   if [[ "$running" != "true" ]]; then
     log_error "Contenedor $CONTAINER_NAME_BACKEND no está running"
     podman ps -a --filter "name=$CONTAINER_NAME_BACKEND" || true
+    podman inspect "$CONTAINER_NAME_BACKEND" 2>/dev/null | sed -n '1,120p' || true
     log_info "Logs backend:"
     podman logs "$CONTAINER_NAME_BACKEND" 2>/dev/null || true
     die "El backend de registro no levantó correctamente"
   fi
 }
 
+wait_backend_ready() {
+  local i code
+  for i in $(seq 1 25); do
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 "http://127.0.0.1:${BACKEND_PORT}/api/portal/context" 2>/dev/null)" || code="000"
+    case "$code" in
+      200|301|302|307|308)
+        log_ok "Backend local listo en :${BACKEND_PORT} (HTTP ${code})"
+        return 0
+        ;;
+      500|503)
+        # El backend ya está arriba pero puede fallar temporalmente por dependencias externas.
+        log_ok "Backend responde en :${BACKEND_PORT} (HTTP ${code})"
+        return 0
+        ;;
+    esac
+    sleep 1
+  done
+
+  log_error "Backend local no respondió en :${BACKEND_PORT}"
+  podman ps -a --filter "name=$CONTAINER_NAME_BACKEND" || true
+  log_info "Logs backend:"
+  podman logs "$CONTAINER_NAME_BACKEND" 2>/dev/null || true
+  die "Backend de registro no disponible"
+}
+
 verify_local() {
   local ep code
-  for ep in /portal /services /blocked /people /api/history /health; do
+  for ep in /portal /services /blocked /people /api/history /api/portal/context; do
     code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "http://127.0.0.1${ep}" 2>/dev/null)" || code="000"
     case "$code" in
       200|301|302|307|308) log_ok "${ep} local HTTP ${code}" ;;
@@ -194,6 +220,7 @@ if ! $ONLY_VERIFY; then
   write_nginx_conf
   build_backend_image
   deploy_backend_container
+  wait_backend_ready
   deploy_frontend_container
   check_container_running
 fi
