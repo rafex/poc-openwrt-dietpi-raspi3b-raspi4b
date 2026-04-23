@@ -283,13 +283,14 @@ table ip captive {
     # timeout 120m: las autorizaciones expiran solas (2 horas)
     #   → combinado con DHCP lease=120m: al reconectar pasan de nuevo por el portal
     #
-    # Admin ($ADMIN_IP), IA ($RASPI4B_IP), sensor ($RASPI3B_IP) y portal ($PORTAL_IP):
+    # Admin ($ADMIN_IP), IA ($RASPI4B_IP), sensor ($RASPI3B_IP), portal node ($PORTAL_NODE_IP),
+    # AP extender ($AP_EXTENDER_IP) y portal activo ($PORTAL_IP):
     # timeout 0s = NUNCA expiran
     set $NFT_SET {
         type ipv4_addr
         flags dynamic, timeout
         timeout 120m
-        elements = { $ADMIN_IP timeout 0s, $RASPI4B_IP timeout 0s, $RASPI3B_IP timeout 0s, $PORTAL_IP timeout 0s }
+        elements = { $ADMIN_IP timeout 0s, $RASPI4B_IP timeout 0s, $RASPI3B_IP timeout 0s, $PORTAL_NODE_IP timeout 0s, $AP_EXTENDER_IP timeout 0s, $PORTAL_IP timeout 0s }
     }
 
     # Redireccion HTTP: clientes de la LAN no autorizados → portal en $PORTAL_IP
@@ -321,6 +322,14 @@ table ip captive {
         # AI node (Raspi4B): siempre permitido (topología legacy/split)
         ip saddr $RASPI4B_IP accept
         ip daddr $RASPI4B_IP accept
+
+        # Portal node alterno (Raspi3B #2): siempre permitido
+        ip saddr $PORTAL_NODE_IP accept
+        ip daddr $PORTAL_NODE_IP accept
+
+        # AP extender (no puede abrir portal): siempre permitido
+        ip saddr $AP_EXTENDER_IP accept
+        ip daddr $AP_EXTENDER_IP accept
 
         # Portal: siempre permitido en ambas direcciones
         ip saddr $PORTAL_IP accept
@@ -375,8 +384,10 @@ router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0s }" || \
     die "No se pudo asegurar $ADMIN_IP como permanente"
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI4B_IP timeout 0s }" 2>/dev/null || true
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI3B_IP timeout 0s }" 2>/dev/null || true
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_NODE_IP timeout 0s }" 2>/dev/null || true
+router_ssh "nft add element $NFT_TABLE $NFT_SET { $AP_EXTENDER_IP timeout 0s }" 2>/dev/null || true
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" 2>/dev/null || true
-log_ok "Permanentes: admin=$ADMIN_IP  ai/4B=$RASPI4B_IP  sensor/3B=$RASPI3B_IP  portal=$PORTAL_IP (timeout 0s)"
+log_ok "Permanentes: admin=$ADMIN_IP ai/4B=$RASPI4B_IP sensor/3B=$RASPI3B_IP portal/3B2=$PORTAL_NODE_IP ap-ext=$AP_EXTENDER_IP portal-activo=$PORTAL_IP (timeout 0s)"
 
 # Limpiar conntrack para que el bloqueo sea efectivo inmediatamente
 # (conexiones ESTABLISHED bypasean el hook forward)
@@ -455,13 +466,15 @@ reserve_raspi_dhcp() {
 
 reserve_raspi_dhcp "$RASPI4B_HOSTNAME" "$RASPI4B_MAC" "$RASPI4B_IP"
 reserve_raspi_dhcp "$RASPI3B_HOSTNAME" "$RASPI3B_MAC" "$RASPI3B_IP"
-
-if [ "$TOPOLOGY" = "split_portal" ]; then
-    if [ -n "$PORTAL_NODE_MAC" ] && validate_ip "$PORTAL_NODE_IP"; then
-        reserve_raspi_dhcp "$PORTAL_NODE_HOSTNAME" "$PORTAL_NODE_MAC" "$PORTAL_NODE_IP"
-    else
-        log_warn "TOPOLOGY=split_portal pero PORTAL_NODE_MAC/IP no completos; no se creó reserva DHCP del portal node"
-    fi
+if [ -n "$PORTAL_NODE_MAC" ] && validate_ip "$PORTAL_NODE_IP"; then
+    reserve_raspi_dhcp "$PORTAL_NODE_HOSTNAME" "$PORTAL_NODE_MAC" "$PORTAL_NODE_IP"
+else
+    log_warn "PORTAL_NODE_MAC/IP no completos; no se creó reserva DHCP del portal node"
+fi
+if [ -n "$AP_EXTENDER_MAC" ] && validate_ip "$AP_EXTENDER_IP"; then
+    reserve_raspi_dhcp "$AP_EXTENDER_HOSTNAME" "$AP_EXTENDER_MAC" "$AP_EXTENDER_IP"
+else
+    log_warn "AP_EXTENDER_MAC/IP no completos; no se creó reserva DHCP del AP extender"
 fi
 
 # Recargar dnsmasq para aplicar las nuevas reservas
@@ -538,6 +551,8 @@ printf '  Router:        %s\n' "$ROUTER_IP"
 printf '  Topología:     %s\n' "$TOPOLOGY"
 printf '  AI node/4B:    %s (%s) — permanente\n' "$RASPI4B_IP" "$RASPI4B_HOSTNAME"
 printf '  Portal node:   %s\n' "$PORTAL_IP"
+printf '  Portal node 3B2 reservado: %s (%s)\n' "$PORTAL_NODE_IP" "$PORTAL_NODE_HOSTNAME"
+printf '  AP extender reservado:     %s (%s)\n' "$AP_EXTENDER_IP" "$AP_EXTENDER_HOSTNAME"
 printf '  Sensor/3B:     %s (%s) — permanente\n' "$RASPI3B_IP" "$RASPI3B_HOSTNAME"
 printf '  Admin (libre): %s — permanente\n' "$ADMIN_IP"
 printf '  AP interface:  %s\n' "$AP_IFACE"

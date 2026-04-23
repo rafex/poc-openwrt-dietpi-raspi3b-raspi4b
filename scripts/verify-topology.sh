@@ -65,6 +65,8 @@ if [[ -f "$SSH_KEY" && -f "$SSH_KEY_PUB" ]] && router_ssh 'echo ok' >/dev/null 2
   if router_ip_in_set "$ADMIN_IP"; then log_ok "Admin permanente en allowed_clients"; else die "Admin no está en allowed_clients"; fi
   if router_ip_in_set "$RASPI4B_IP"; then log_ok "Raspi4B permanente en allowed_clients"; else die "Raspi4B no está en allowed_clients"; fi
   if router_ip_in_set "$RASPI3B_IP"; then log_ok "Raspi3B sensor permanente en allowed_clients"; else die "Raspi3B sensor no está en allowed_clients"; fi
+  if router_ip_in_set "$PORTAL_NODE_IP"; then log_ok "Raspi3B portal permanente en allowed_clients"; else die "Raspi3B portal no está en allowed_clients"; fi
+  if router_ip_in_set "$AP_EXTENDER_IP"; then log_ok "AP extender permanente en allowed_clients"; else die "AP extender no está en allowed_clients"; fi
   if router_ip_in_set "$PORTAL_IP"; then log_ok "Portal node permanente en allowed_clients"; else die "Portal node no está en allowed_clients"; fi
 else
   log_warn "No se pudo validar router por SSH (skip checks nftables)"

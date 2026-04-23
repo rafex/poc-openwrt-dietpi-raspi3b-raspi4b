@@ -38,8 +38,11 @@ RASPI3B_IP="${RASPI3B_IP:-192.168.1.181}"     # Raspi 3B #1 (sensor de red)
 RASPI3B_MAC="${RASPI3B_MAC:-b8:27:eb:5a:ec:33}"
 RASPI3B_HOSTNAME="${RASPI3B_HOSTNAME:-RafexPi3B}"
 PORTAL_NODE_IP="${PORTAL_NODE_IP:-192.168.1.182}"    # Raspi 3B #2 (portal node opcional)
-PORTAL_NODE_MAC="${PORTAL_NODE_MAC:-}"
+PORTAL_NODE_MAC="${PORTAL_NODE_MAC:-b8:27:eb:2e:fc:f2}"
 PORTAL_NODE_HOSTNAME="${PORTAL_NODE_HOSTNAME:-RafexPi3BPortal}"
+AP_EXTENDER_IP="${AP_EXTENDER_IP:-192.168.1.183}"    # AP repetidor (sin portal)
+AP_EXTENDER_MAC="${AP_EXTENDER_MAC:-E8:DE:27:99:B7:57}"
+AP_EXTENDER_HOSTNAME="${AP_EXTENDER_HOSTNAME:-RafexAPExtender}"
 
 TOPOLOGY="${TOPOLOGY:-legacy}"               # legacy | split_portal
 AI_IP="${AI_IP:-$RASPI4B_IP}"
@@ -144,7 +147,8 @@ router_add_ip() {
     local ip="$1"
     local timeout_flag=""
     if [ "$ip" = "$ADMIN_IP" ] || [ "$ip" = "$PORTAL_IP" ] || \
-       [ "$ip" = "$RASPI4B_IP" ] || [ "$ip" = "$RASPI3B_IP" ]; then
+       [ "$ip" = "$RASPI4B_IP" ] || [ "$ip" = "$RASPI3B_IP" ] || \
+       [ "$ip" = "$PORTAL_NODE_IP" ] || [ "$ip" = "$AP_EXTENDER_IP" ]; then
         timeout_flag=" timeout 0s"
     fi
     router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip$timeout_flag }" 2>/dev/null || \
