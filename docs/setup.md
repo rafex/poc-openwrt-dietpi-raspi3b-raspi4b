@@ -39,6 +39,9 @@ Ejecutar **desde RafexPi4B**. Configura nftables, dnsmasq, DHCP y las reservas p
 
 ```bash
 bash scripts/setup-openwrt.sh
+# explícito por topología:
+bash scripts/setup-openwrt.sh --topology legacy
+bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182 --ai-ip 192.168.1.167
 ```
 
 Qué hace:
@@ -91,6 +94,36 @@ nslookup google.com 192.168.1.1
 
 ---
 
+## Paso 2.2 — Seleccionar topología de despliegue
+
+Modo legacy (actual):
+
+```bash
+sudo bash scripts/setup-topology.sh --topology=legacy
+```
+
+Modo split_portal (alternativa 3 Raspberry):
+
+```bash
+sudo bash scripts/setup-topology.sh --topology=split_portal --portal-host=192.168.1.182
+```
+
+Switch rápido:
+
+```bash
+sudo bash scripts/topology-switch.sh legacy
+sudo bash scripts/topology-switch.sh split_portal --persist
+```
+
+Validación E2E:
+
+```bash
+bash scripts/verify-topology.sh --topology=legacy
+bash scripts/verify-topology.sh --topology=split_portal
+```
+
+---
+
 ## Paso 3 — Setup modular de RafexPi4B (responsabilidad única)
 
 Ahora la instalación de Raspi4B está separada por componente.
@@ -99,6 +132,7 @@ Ahora la instalación de Raspi4B está separada por componente.
 
 ```bash
 sudo bash scripts/setup-raspi4b-all.sh
+sudo bash scripts/setup-raspi4b-all.sh --headless-web   # IA-only (sin portales en 4B)
 ```
 
 ### 3.2 Instalación por componente (reinstalación parcial)
@@ -133,6 +167,7 @@ Flags comunes soportados por los scripts modulares:
 --skip-llm
 --skip-analyzer
 --skip-portals
+--headless-web
 ```
 
 **Prerequisito llama.cpp:** el modelo TinyLlama Q4_K_M debe estar descargado:
@@ -186,6 +221,17 @@ export MQTT_PORT="1883"
 export MQTT_TOPIC="rafexpi/sensor/batch"
 export ANALYZER_URL="http://192.168.1.167/api/ingest"  # fallback HTTP
 export ROUTER_IP="192.168.1.1"
+```
+
+---
+
+## Paso 4.1 — Setup Raspi3B #2 como nodo de portal (opcional)
+
+Solo para topología `split_portal`:
+
+```bash
+sudo bash scripts/setup-portal-raspi3b.sh
+bash scripts/portal-node-status.sh
 ```
 
 ---

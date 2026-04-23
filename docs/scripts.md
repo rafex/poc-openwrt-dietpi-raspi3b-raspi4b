@@ -29,6 +29,8 @@ ls -1t /var/log/demo-openwrt/*/setup-*.log 2>/dev/null | head -5
 
 ```bash
 bash scripts/setup-openwrt.sh
+bash scripts/setup-openwrt.sh --topology legacy
+bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182 --ai-ip 192.168.1.167
 ```
 
 | Fase | Qué hace |
@@ -50,6 +52,51 @@ Cambios respecto a la versión anterior:
 
 > **Regla de oro:** admin `192.168.1.113`, RafexPi4B `192.168.1.167` y RafexPi3B `192.168.1.181`
 > siempre tienen `timeout 0s` — nunca se bloquean.
+
+---
+
+## Topologías (orquestación y switch)
+
+### scripts/lib/topology.env
+
+Archivo central de configuración de topología (`legacy` o `split_portal`).
+
+Ruta por defecto en repo:
+- `scripts/lib/topology.env`
+
+Override recomendado por host:
+- `/etc/demo-openwrt/topology.env`
+
+### setup-topology.sh
+
+**Propósito:** ejecutar el flujo completo según topología, sin borrar el despliegue actual.
+
+```bash
+sudo bash scripts/setup-topology.sh --topology=legacy
+sudo bash scripts/setup-topology.sh --topology=split_portal --portal-host=192.168.1.182
+```
+
+Comportamiento:
+- `legacy`: OpenWrt + stack completo Raspi4B
+- `split_portal`: OpenWrt + Raspi4B (`--skip-portals`) + portal node Raspi3B#2
+
+### topology-switch.sh
+
+**Propósito:** cambiar rápidamente el modo activo en OpenWrt (y opcionalmente persistir en topology env).
+
+```bash
+sudo bash scripts/topology-switch.sh legacy
+sudo bash scripts/topology-switch.sh split_portal --persist
+```
+
+### verify-topology.sh
+
+**Propósito:** validación E2E de endpoints + permanentes en nftables.
+
+```bash
+bash scripts/verify-topology.sh --topology=legacy
+bash scripts/verify-topology.sh --topology=split_portal
+```
 
 ---
 
@@ -132,6 +179,7 @@ Aplica:
 sudo bash scripts/setup-raspi4b-all.sh
 sudo bash scripts/setup-raspi4b-all.sh --skip-llm
 sudo bash scripts/setup-raspi4b-all.sh --skip-portals --skip-analyzer
+sudo bash scripts/setup-raspi4b-all.sh --headless-web
 ```
 
 Orden de ejecución por defecto:
@@ -139,6 +187,10 @@ Orden de ejecución por defecto:
 2. `setup-raspi4b-llm.sh`
 3. `setup-raspi4b-ai-analyzer.sh`
 4. `setup-raspi4b-portals.sh`
+
+`--headless-web`:
+- deja Raspi4B solo para IA (llama.cpp + analyzer + sqlite)
+- pensado para topología `split_portal` (portal frontend en Raspi3B#2)
 
 ### setup-ai-raspi4b.sh (legacy)
 
@@ -218,6 +270,40 @@ sudo bash scripts/setup-sensor-raspi3b.sh --dry-run   # solo mostrar qué haría
 | `BATCH_INTERVAL` | 30 | Segundos entre batches |
 | `ROUTER_IP` | 192.168.1.1 | Router para SSH opcional |
 | `USE_ROUTER_SSH` | true | Usar SSH al router para enriquecer datos |
+
+---
+
+## setup-portal-raspi3b.sh
+
+**Propósito:** instalar y desplegar portal/frontend liviano en Raspi3B#2 con podman + nginx.
+**Ejecutar en:** Raspi3B#2 (nodo portal alternativo)
+
+```bash
+sudo bash scripts/setup-portal-raspi3b.sh
+sudo bash scripts/setup-portal-raspi3b.sh --only-verify
+```
+
+Aplica:
+- instala `podman` y `curl`
+- despliega contenedor `captive-portal-node` (`nginx:alpine`)
+- sirve estáticos (`/portal`, `/services`, `/blocked`, `/blocked-art/*`)
+- proxy de `/api/*`, `/people`, `/accepted`, `/dashboard`, `/terminal`, `/rulez` al nodo IA (Raspi4B)
+
+## portal-node-deploy.sh
+
+**Propósito:** redeploy del contenedor nginx en portal node.
+
+```bash
+sudo bash scripts/portal-node-deploy.sh
+```
+
+## portal-node-status.sh
+
+**Propósito:** estado rápido del portal node y health HTTP local.
+
+```bash
+bash scripts/portal-node-status.sh
+```
 
 ---
 

@@ -5,6 +5,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=./lib/raspi4b-common.sh
 . "$SCRIPT_DIR/lib/raspi4b-common.sh"
+# shellcheck source=./lib/topology-common.sh
+. "$SCRIPT_DIR/lib/topology-common.sh"
 
 parse_common_flags "$@"
 init_log_dir "portals"
@@ -14,6 +16,7 @@ need_root
 
 log_info "--- setup-raspi4b-portals ---"
 ensure_cmd bash curl
+load_topology
 
 ensure_portal_ssh_key
 ensure_k3s_ready
@@ -39,7 +42,7 @@ if $DRY_RUN; then
   exit 0
 fi
 
-PORTAL_IP="192.168.1.167"
+PORTAL_IP="${PORTAL_IP:-$RASPI4B_IP}"
 for ep in /portal /accepted /services /people; do
   code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 8 "http://${PORTAL_IP}${ep}" 2>/dev/null || echo 000)"
   case "$code" in

@@ -143,6 +143,8 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 ├── scripts/
 │   ├── lib/common.sh                # constantes, SSH helpers, router_add_ip
 │   ├── lib/raspi4b-common.sh        # logging/flags/helpers setup modular
+│   ├── lib/topology.env             # topología base (legacy/split_portal)
+│   ├── lib/topology-common.sh       # helper bash para cargar topología
 │   ├── setup-openwrt.sh             # configura router completo
 │   ├── setup-openwrt-wifi-uplink.sh # WAN por WiFi 5GHz + AP 2.4 abierto
 │   ├── setup-ai-raspi4b.sh          # legacy (mantenido por compatibilidad)
@@ -152,6 +154,12 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 │   ├── setup-raspi4b-portals.sh     # despliega solo portales en k3s
 │   ├── setup-raspi4b-all.sh         # orquestador general Raspi4B
 │   ├── setup-sensor-raspi3b.sh      # instala sensor en Raspi 3B
+│   ├── setup-portal-raspi3b.sh      # instala portal node en Raspi3B #2
+│   ├── portal-node-deploy.sh        # redeploy nginx portal node
+│   ├── portal-node-status.sh        # status/health portal node
+│   ├── setup-topology.sh            # orquesta despliegue por topología
+│   ├── topology-switch.sh           # cambia legacy <-> split_portal
+│   ├── verify-topology.sh           # validación E2E por topología
 │   ├── llm-control.sh               # on/off/restart/status de llama-server
 │   ├── raspi-deploy.sh              # despliegue k8s de portales + ingress
 │   ├── portal-switch.sh             # alterna portal activo (lentium/clásico)
@@ -226,6 +234,12 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 - [x] Batches persistidos en SQLite (status: pending → processing → done/error)
 - [x] Reencola batches huérfanos al arrancar el pod
 
+### Topologías soportadas ✅
+- [x] `legacy`: OpenWrt -> Sensor(3B#1) -> AI+k3s+Portal(4B)
+- [x] `split_portal`: OpenWrt -> Portal(3B#2) + Sensor(3B#1) -> AI+k3s(4B)
+- [x] Archivo central: `scripts/lib/topology.env` (override en `/etc/demo-openwrt/topology.env`)
+- [x] Scripts: `setup-topology.sh`, `topology-switch.sh`, `verify-topology.sh`
+
 ## Inventario de vistas HTML (para agentes)
 
 - HTML físicos en repo: **6**
@@ -252,7 +266,7 @@ Dominios relevantes:
 
 ```sh
 ROUTER_IP="192.168.1.1"
-PORTAL_IP="192.168.1.167"        # = RASPI4B_IP
+PORTAL_IP="192.168.1.167"        # en legacy=RASPI4B_IP; en split_portal=PORTAL_NODE_IP
 ADMIN_IP="192.168.1.113"
 LAN_SUBNET="192.168.1.0/24"
 RASPI4B_IP="192.168.1.167"
@@ -261,6 +275,8 @@ RASPI4B_HOSTNAME="RafexPi4B"
 RASPI3B_IP="192.168.1.181"
 RASPI3B_MAC="b8:27:eb:5a:ec:33"
 RASPI3B_HOSTNAME="RafexPi3B"
+PORTAL_NODE_IP="192.168.1.182"   # Raspi3B #2 opcional (topología split_portal)
+TOPOLOGY="legacy|split_portal"
 PORTAL_TIMEOUT="120m"            # timeout del set nftables = leasetime DHCP clientes
 ```
 
@@ -288,7 +304,7 @@ ssh-ed25519 AAAAC3... sensor@raspi3b
 - Razón: clientes WiFi pasan por `br-lan`; el hook forward ve `br-lan`, no `phy0-ap0`
 - Tabla: `ip captive` — set: `allowed_clients`
 - `priority filter - 1` en `forward_captive` — evalúa antes que fw4
-- Permanentes (timeout 0s): admin, PORTAL_IP (RafexPi4B), RASPI3B_IP
+- Permanentes (timeout 0s): admin, RASPI4B_IP (AI), RASPI3B_IP (sensor), PORTAL_IP (según topología)
 - Clientes WiFi: `timeout 120m` (2 horas desde la última vez que pasaron por el portal)
 - Al recargar: `nft delete table ip captive` ANTES del dry-run (`nft -c -f`)
 - Limpiar conntrack al activar reglas: `conntrack -F`
