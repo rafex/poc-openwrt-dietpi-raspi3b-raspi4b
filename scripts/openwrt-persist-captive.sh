@@ -26,10 +26,18 @@ log_ok "Archivo presente: /etc/nftables.d/captive-portal.nft"
 
 log_info "Configurando include UCI en firewall (fw4)..."
 router_ssh "
+    cat > /etc/captive-portal-fw4-include.sh <<'EOS'
+#!/bin/sh
+nft delete table ip captive 2>/dev/null || true
+nft -f /etc/nftables.d/captive-portal.nft
+exit \$?
+EOS
+    chmod 755 /etc/captive-portal-fw4-include.sh
+
     uci -q delete firewall.captive_portal_nft
     uci set firewall.captive_portal_nft='include'
-    uci set firewall.captive_portal_nft.type='nftables'
-    uci set firewall.captive_portal_nft.path='/etc/nftables.d/captive-portal.nft'
+    uci set firewall.captive_portal_nft.type='script'
+    uci set firewall.captive_portal_nft.path='/etc/captive-portal-fw4-include.sh'
     uci set firewall.captive_portal_nft.enabled='1'
     uci commit firewall
 " || die "No se pudo configurar include persistente en UCI firewall"
@@ -55,4 +63,3 @@ log_ok "Persistencia corregida."
 log_info "Próxima validación recomendada:"
 printf '  1) reboot del router\n'
 printf '  2) bash scripts/openwrt-captive-doctor.sh\n'
-
