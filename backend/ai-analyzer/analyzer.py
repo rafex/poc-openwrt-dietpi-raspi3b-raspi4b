@@ -56,6 +56,11 @@ ROUTER_IP     = os.environ.get("ROUTER_IP", "192.168.1.1")
 ROUTER_USER   = os.environ.get("ROUTER_USER", "root")
 SSH_KEY       = os.environ.get("SSH_KEY", "/opt/keys/captive-portal")
 PORTAL_IP     = os.environ.get("PORTAL_IP", "192.168.1.167")
+ADMIN_IP      = os.environ.get("ADMIN_IP", "192.168.1.113")
+RASPI4B_IP    = os.environ.get("RASPI4B_IP", "192.168.1.167")
+RASPI3B_IP    = os.environ.get("RASPI3B_IP", "192.168.1.181")
+PORTAL_NODE_IP = os.environ.get("PORTAL_NODE_IP", "192.168.1.182")
+AP_EXTENDER_IP = os.environ.get("AP_EXTENDER_IP", "192.168.1.183")
 
 SOCIAL_BLOCK_ENABLED = os.environ.get("SOCIAL_BLOCK_ENABLED", "true").lower() == "true"
 SOCIAL_POLICY_START_HOUR = int(os.environ.get("SOCIAL_POLICY_START_HOUR", "9"))
@@ -2370,6 +2375,7 @@ def main():
             router_user=ROUTER_USER,
             ssh_key=SSH_KEY,
             portal_ip=PORTAL_IP,
+            bypass_ips=[ADMIN_IP, RASPI4B_IP, RASPI3B_IP, PORTAL_NODE_IP, AP_EXTENDER_IP],
             logger=log,
         )
         ok, msg = router_mcp.ensure_policy_objects()
