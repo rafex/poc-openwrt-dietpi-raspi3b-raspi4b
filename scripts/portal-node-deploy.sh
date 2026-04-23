@@ -84,13 +84,43 @@ deploy_container() {
     "$IMAGE_NAME"
 }
 
+show_port80_debug() {
+  if command -v ss >/dev/null 2>&1; then
+    log_info "Listeners en :80 (ss):"
+    ss -ltnp '( sport = :80 )' || true
+  elif command -v netstat >/dev/null 2>&1; then
+    log_info "Listeners en :80 (netstat):"
+    netstat -ltnp 2>/dev/null | grep ':80 ' || true
+  fi
+}
+
+check_container_running() {
+  local running
+  running="$(podman inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || echo false)"
+  if [[ "$running" != "true" ]]; then
+    log_error "Contenedor $CONTAINER_NAME no está running"
+    podman ps -a --filter "name=$CONTAINER_NAME" || true
+    log_info "Logs del contenedor:"
+    podman logs "$CONTAINER_NAME" 2>/dev/null || true
+    show_port80_debug
+    die "El contenedor no levantó correctamente"
+  fi
+}
+
 verify_local() {
   local ep code
   for ep in /portal /services /blocked /api/history /health; do
-    code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "http://127.0.0.1${ep}" 2>/dev/null || echo 000)"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 5 --max-time 10 "http://127.0.0.1${ep}" 2>/dev/null)" || code="000"
     case "$code" in
       200|301|302|307|308) log_ok "${ep} local HTTP ${code}" ;;
-      *) die "Verificación fallida ${ep}: HTTP ${code}" ;;
+      *)
+        log_error "Verificación fallida ${ep}: HTTP ${code}"
+        podman ps -a --filter "name=$CONTAINER_NAME" || true
+        log_info "Logs del contenedor:"
+        podman logs "$CONTAINER_NAME" 2>/dev/null || true
+        show_port80_debug
+        die "Portal node sin respuesta en ${ep}"
+        ;;
     esac
   done
 }
@@ -102,6 +132,7 @@ if ! $ONLY_VERIFY; then
   prepare_files
   write_nginx_conf
   deploy_container
+  check_container_running
 fi
 
 if ! $DRY_RUN; then

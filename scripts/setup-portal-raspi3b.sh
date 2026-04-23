@@ -27,16 +27,16 @@ if ! $ONLY_VERIFY; then
 fi
 
 if $DRY_RUN; then
-  run_cmd bash "$SCRIPT_DIR/portal-node-deploy.sh" --dry-run
+  run_cmd env -u SETUP_LOG_INITIALIZED bash "$SCRIPT_DIR/portal-node-deploy.sh" --dry-run
   log_ok "Dry-run completado"
   exit 0
 fi
 
 if $ONLY_VERIFY; then
-  bash "$SCRIPT_DIR/portal-node-status.sh"
+  env -u SETUP_LOG_INITIALIZED bash "$SCRIPT_DIR/portal-node-status.sh"
 else
-  bash "$SCRIPT_DIR/portal-node-deploy.sh"
-  bash "$SCRIPT_DIR/portal-node-status.sh"
+  env -u SETUP_LOG_INITIALIZED bash "$SCRIPT_DIR/portal-node-deploy.sh"
+  env -u SETUP_LOG_INITIALIZED bash "$SCRIPT_DIR/portal-node-status.sh"
 fi
 
 log_ok "setup-portal-raspi3b completado"
