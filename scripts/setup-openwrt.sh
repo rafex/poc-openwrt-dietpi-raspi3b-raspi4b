@@ -403,7 +403,16 @@ router_ssh "[ -d /etc/nftables.d ]" 2>/dev/null && NFT_D_EXISTS=1
 if [ "$NFT_D_EXISTS" -eq 1 ]; then
     router_ssh "cp /tmp/captive-portal.nft /etc/nftables.d/captive-portal.nft"
     log_ok "Reglas persistidas en /etc/nftables.d/captive-portal.nft"
-    log_info "fw4 cargara este archivo automaticamente al reiniciar el firewall"
+    log_info "Registrando include UCI en fw4 para asegurar carga en reboot..."
+    router_ssh "
+        uci -q delete firewall.captive_portal_nft
+        uci set firewall.captive_portal_nft='include'
+        uci set firewall.captive_portal_nft.type='nftables'
+        uci set firewall.captive_portal_nft.path='/etc/nftables.d/captive-portal.nft'
+        uci set firewall.captive_portal_nft.enabled='1'
+        uci commit firewall
+    " && log_ok "Include UCI firewall.captive_portal_nft configurado" || \
+       log_warn "No se pudo registrar include UCI para captive-portal.nft"
 else
     # Fallback: agregar carga del archivo en /etc/firewall.user
     log_warn "/etc/nftables.d/ no existe — usando /etc/firewall.user como fallback"
