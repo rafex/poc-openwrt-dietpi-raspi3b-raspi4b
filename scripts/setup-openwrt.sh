@@ -519,24 +519,24 @@ fi
 
 # Verificar dnsmasq
 log_info "Verificando dnsmasq (resolucion de dominio de deteccion)..."
-RESOLVED=$(router_ssh "nslookup connectivitycheck.gstatic.com 127.0.0.1 2>/dev/null | grep 'Address' | tail -1" 2>/dev/null || echo "")
-if printf '%s' "$RESOLVED" | grep -q "$PORTAL_IP"; then
+RESOLVED_IP=$(router_ssh "nslookup connectivitycheck.gstatic.com 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
+if [ "$RESOLVED_IP" = "$PORTAL_IP" ]; then
     log_ok "dnsmasq resuelve correctamente: connectivitycheck.gstatic.com -> $PORTAL_IP"
 else
     log_warn "No se pudo verificar dnsmasq (puede estar OK si el dominio tarda en propagarse)"
 fi
 
 log_info "Verificando dominio fallback del portal..."
-FALLBACK_RESOLVED=$(router_ssh "nslookup $CAPTIVE_DOMAIN 127.0.0.1 2>/dev/null | grep 'Address' | tail -1" 2>/dev/null || echo "")
-if printf '%s' "$FALLBACK_RESOLVED" | grep -q "$PORTAL_IP"; then
+FALLBACK_IP=$(router_ssh "nslookup $CAPTIVE_DOMAIN 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
+if [ "$FALLBACK_IP" = "$PORTAL_IP" ]; then
     log_ok "dnsmasq resuelve correctamente: $CAPTIVE_DOMAIN -> $PORTAL_IP"
 else
     log_warn "No se pudo verificar $CAPTIVE_DOMAIN en dnsmasq"
 fi
 
 log_info "Verificando dominio people..."
-PEOPLE_RESOLVED=$(router_ssh "nslookup $PEOPLE_DOMAIN 127.0.0.1 2>/dev/null | grep 'Address' | tail -1" 2>/dev/null || echo "")
-if printf '%s' "$PEOPLE_RESOLVED" | grep -q "$PORTAL_IP"; then
+PEOPLE_IP=$(router_ssh "nslookup $PEOPLE_DOMAIN 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
+if [ "$PEOPLE_IP" = "$PORTAL_IP" ]; then
     log_ok "dnsmasq resuelve correctamente: $PEOPLE_DOMAIN -> $PORTAL_IP"
 else
     log_warn "No se pudo verificar $PEOPLE_DOMAIN en dnsmasq"
@@ -544,7 +544,7 @@ fi
 
 # Verificar DHCP option 114 (URL del portal)
 log_info "Verificando DHCP option 114..."
-OPT114="$(router_ssh "uci -q get dhcp.lan.dhcp_option 2>/dev/null | grep '^114,' | tail -1" 2>/dev/null || echo "")"
+OPT114="$(router_ssh "uci -q get dhcp.lan.dhcp_option 2>/dev/null | tr ' ' '\n' | grep '^114,' | tail -1" 2>/dev/null || echo "")"
 if printf '%s' "$OPT114" | grep -q "114,http://$PORTAL_IP/portal"; then
     log_ok "DHCP option 114 correcta: $OPT114"
 else
