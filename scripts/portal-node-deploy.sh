@@ -53,6 +53,14 @@ server {
         return 302 /portal;
     }
 
+    # Rutas típicas de detección captive en SO móviles/escritorio
+    location = /generate_204 { return 302 /portal; }
+    location = /hotspot-detect.html { return 302 /portal; }
+    location = /connecttest.txt { return 302 /portal; }
+    location = /ncsi.txt { return 302 /portal; }
+    location = /canonical.html { return 302 /portal; }
+    location = /success.txt { return 302 /portal; }
+
     location = /portal { try_files /portal.html =404; }
     location = /services { try_files /services.html =404; }
     location = /blocked { try_files /blocked.html =404; }

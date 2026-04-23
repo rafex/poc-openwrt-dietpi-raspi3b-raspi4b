@@ -542,6 +542,32 @@ else
     log_warn "No se pudo verificar $PEOPLE_DOMAIN en dnsmasq"
 fi
 
+# Verificar DHCP option 114 (URL del portal)
+log_info "Verificando DHCP option 114..."
+OPT114="$(router_ssh "uci -q get dhcp.lan.dhcp_option 2>/dev/null | grep '^114,' | tail -1" 2>/dev/null || echo "")"
+if printf '%s' "$OPT114" | grep -q "114,http://$PORTAL_IP/portal"; then
+    log_ok "DHCP option 114 correcta: $OPT114"
+else
+    log_warn "DHCP option 114 no coincide (actual: ${OPT114:-<vacía>}, esperado: 114,http://$PORTAL_IP/portal)"
+fi
+
+# Verificar regla DNAT hacia portal
+log_info "Verificando regla DNAT hacia portal..."
+DNAT_RULE="$(router_ssh "nft list chain ip captive prerouting 2>/dev/null | grep -F 'dnat to $PORTAL_IP:80' | head -1" 2>/dev/null || echo "")"
+if [ -n "$DNAT_RULE" ]; then
+    log_ok "Regla DNAT detectada: $DNAT_RULE"
+else
+    log_warn "No se encontró DNAT a $PORTAL_IP:80 en chain prerouting"
+fi
+
+# Reachability HTTP del portal desde el router
+log_info "Verificando reachability HTTP al portal desde OpenWrt..."
+if router_ssh "uclient-fetch -T 5 -qO- http://$PORTAL_IP/portal >/dev/null 2>&1"; then
+    log_ok "OpenWrt alcanza http://$PORTAL_IP/portal"
+else
+    log_warn "OpenWrt NO alcanza http://$PORTAL_IP/portal"
+fi
+
 # Resumen final
 printf '\n'
 log_ok "=== Setup de OpenWrt completado ==="
