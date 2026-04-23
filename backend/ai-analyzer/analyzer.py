@@ -66,6 +66,20 @@ WHITELIST_DOMAINS_DEFAULT = os.environ.get(
     "WHITELIST_DOMAINS_DEFAULT",
     "localhost.com,localhost.com.mx,microsoft.com,apple.com,google.com,openwrt.org",
 )
+FEATURE_HUMAN_EXPLAIN = os.environ.get("FEATURE_HUMAN_EXPLAIN", "true").lower() == "true"
+FEATURE_DOMAIN_CLASSIFIER = os.environ.get("FEATURE_DOMAIN_CLASSIFIER", "true").lower() == "true"
+FEATURE_DOMAIN_CLASSIFIER_LLM = os.environ.get("FEATURE_DOMAIN_CLASSIFIER_LLM", "false").lower() == "true"
+FEATURE_PORTAL_RISK_MESSAGE = os.environ.get("FEATURE_PORTAL_RISK_MESSAGE", "true").lower() == "true"
+FEATURE_CHAT = os.environ.get("FEATURE_CHAT", "true").lower() == "true"
+FEATURE_DEVICE_PROFILING = os.environ.get("FEATURE_DEVICE_PROFILING", "true").lower() == "true"
+FEATURE_AUTO_REPORTS = os.environ.get("FEATURE_AUTO_REPORTS", "true").lower() == "true"
+
+RULE_HUMAN_EXPLAIN_KEY = "human_explain_template"
+DEFAULT_HUMAN_EXPLAIN_TEMPLATE = (
+    "Resume en español para humanos la actividad de red en máximo 4 líneas.\\n"
+    "Incluye: dispositivo principal, dominios dominantes, nivel de actividad y riesgo práctico.\\n"
+    "Datos:\\n{traffic}\\n"
+)
 
 SOCIAL_NETWORK_DOMAINS = {
     "facebook": ["facebook.com", "fbcdn.net", "messenger.com", "whatsapp.com", "whatsapp.net"],
@@ -201,11 +215,43 @@ def init_db():
             created_at  TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS human_explanations (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id   INTEGER NOT NULL REFERENCES batches(id),
+            timestamp  TEXT NOT NULL,
+            text       TEXT NOT NULL,
+            meta       TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS network_alerts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id    INTEGER NOT NULL REFERENCES batches(id),
+            timestamp   TEXT NOT NULL,
+            severity    TEXT NOT NULL,
+            alert_type  TEXT NOT NULL,
+            message     TEXT NOT NULL,
+            source_ip   TEXT,
+            domain      TEXT,
+            meta        TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS domain_categories (
+            domain      TEXT PRIMARY KEY,
+            category    TEXT NOT NULL,
+            confidence  REAL NOT NULL DEFAULT 0.5,
+            source      TEXT NOT NULL DEFAULT 'rule',
+            updated_at  TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_batches_status   ON batches(status);
         CREATE INDEX IF NOT EXISTS idx_analyses_batch   ON analyses(batch_id);
         CREATE INDEX IF NOT EXISTS idx_analyses_created ON analyses(timestamp DESC);
         CREATE INDEX IF NOT EXISTS idx_policy_created   ON policy_actions(timestamp DESC);
         CREATE INDEX IF NOT EXISTS idx_prompt_type      ON model_prompt_logs(prompt_type, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_human_batch      ON human_explanations(batch_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_alerts_batch     ON network_alerts(batch_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_alerts_created   ON network_alerts(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_alerts_sev       ON network_alerts(severity, id DESC);
     """)
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
@@ -215,6 +261,10 @@ def init_db():
     conn.execute(
         "INSERT OR IGNORE INTO ai_rules (key,value,updated_at) VALUES (?,?,?)",
         (RULE_ACTION_KEY, DEFAULT_ACTION_PROMPT_TEMPLATE, now),
+    )
+    conn.execute(
+        "INSERT OR IGNORE INTO ai_rules (key,value,updated_at) VALUES (?,?,?)",
+        (RULE_HUMAN_EXPLAIN_KEY, DEFAULT_HUMAN_EXPLAIN_TEMPLATE, now),
     )
     for domain in [d.strip().lower() for d in WHITELIST_DOMAINS_DEFAULT.split(",") if d.strip()]:
         conn.execute(
@@ -441,6 +491,128 @@ def db_get_prompt_logs(limit: int = 50, prompt_type: str | None = None) -> list:
         })
     items.reverse()
     return items
+
+
+def db_store_human_explanation(batch_id: int, text: str, meta: dict | None = None):
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO human_explanations (batch_id,timestamp,text,meta) VALUES (?,?,?,?)",
+        (
+            batch_id,
+            datetime.now(timezone.utc).isoformat(),
+            text,
+            json.dumps(meta or {}, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_human_explanations(limit: int = 20) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,batch_id,timestamp,text,meta FROM human_explanations ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        out.append({
+            "id": r["id"],
+            "batch_id": r["batch_id"],
+            "timestamp": r["timestamp"],
+            "text": r["text"],
+            "meta": meta,
+        })
+    out.reverse()
+    return out
+
+
+def db_store_alerts(batch_id: int, alerts: list[dict]):
+    if not alerts:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    conn = db_connect()
+    for a in alerts:
+        conn.execute(
+            "INSERT INTO network_alerts (batch_id,timestamp,severity,alert_type,message,source_ip,domain,meta) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                batch_id,
+                now,
+                str(a.get("severity") or "info").lower(),
+                str(a.get("type") or "generic"),
+                str(a.get("message") or ""),
+                str(a.get("source_ip") or ""),
+                str(a.get("domain") or ""),
+                json.dumps(a.get("meta") or {}, ensure_ascii=False),
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+def db_get_alerts(limit: int = 80) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,batch_id,timestamp,severity,alert_type,message,source_ip,domain,meta "
+        "FROM network_alerts ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        out.append({
+            "id": r["id"],
+            "batch_id": r["batch_id"],
+            "timestamp": r["timestamp"],
+            "severity": r["severity"],
+            "alert_type": r["alert_type"],
+            "message": r["message"],
+            "source_ip": r["source_ip"],
+            "domain": r["domain"],
+            "meta": meta,
+        })
+    out.reverse()
+    return out
+
+
+def db_get_domain_category(domain: str) -> dict | None:
+    d = _normalize_domain(domain)
+    if not d:
+        return None
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT domain,category,confidence,source,updated_at FROM domain_categories WHERE domain=?",
+        (d,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def db_set_domain_category(domain: str, category: str, confidence: float, source: str):
+    d = _normalize_domain(domain)
+    c = str(category or "otros").strip().lower()
+    s = str(source or "rule").strip().lower()
+    if not d:
+        return
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO domain_categories (domain,category,confidence,source,updated_at) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(domain) DO UPDATE SET "
+        "category=excluded.category,confidence=excluded.confidence,source=excluded.source,updated_at=excluded.updated_at",
+        (d, c, float(confidence), s, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
 
 
 def _normalize_domain(value: str) -> str:
@@ -764,6 +936,213 @@ def _combined_domain_counts(summary: dict) -> dict:
     return combined_counts
 
 
+def _top_domains_text(summary: dict, n: int = 4) -> str:
+    combined = _combined_domain_counts(summary)
+    if not combined:
+        return "-"
+    top = sorted(combined.items(), key=lambda x: -x[1])[:n]
+    return ", ".join(f"{d}({c})" for d, c in top)
+
+
+def _fallback_human_explain(summary: dict, analysis_text: str, risk: str) -> str:
+    talker = "-"
+    top_talkers = summary.get("top_talkers") or []
+    if top_talkers:
+        talker = str(top_talkers[0].get("ip") or "-")
+    pkt = int(summary.get("total_packets") or 0)
+    domains = _top_domains_text(summary, 4)
+    suspicious = int(len(summary.get("suspicious") or []))
+    risk_phrase = "bajo"
+    if risk == "MEDIO":
+        risk_phrase = "moderado"
+    elif risk == "ALTO":
+        risk_phrase = "alto"
+    return (
+        f"En los últimos {summary.get('duration_seconds', 30)} segundos, el dispositivo {talker} "
+        f"concentró la mayor actividad. Se observaron {pkt} paquetes y consultas a: {domains}. "
+        f"Se detectaron {suspicious} señales sospechosas. El riesgo operativo estimado es {risk_phrase}. "
+        f"{analysis_text[:180].strip()}"
+    ).strip()
+
+
+def build_human_explanation(summary: dict, analysis_text: str, risk: str) -> str:
+    if not FEATURE_HUMAN_EXPLAIN:
+        return _fallback_human_explain(summary, analysis_text, risk)
+    tpl = db_get_rule(RULE_HUMAN_EXPLAIN_KEY, DEFAULT_HUMAN_EXPLAIN_TEMPLATE)
+    traffic = (
+        f"packets={summary.get('total_packets', 0)} "
+        f"bytes={summary.get('total_bytes_fmt', '0 B')} "
+        f"pps={summary.get('pps', 0)} "
+        f"top_domains={_top_domains_text(summary, 5)} "
+        f"suspicious={len(summary.get('suspicious') or [])} "
+        f"top_talker={(summary.get('top_talkers') or [{}])[0].get('ip', '-')}"
+    )
+    user_body = _safe_format(tpl, {"traffic": traffic})
+    prompt = _wrap_prompt(
+        user_body=user_body,
+        system_text="Eres analista de red y traductor técnico. Explica para audiencia no técnica.",
+    )
+    response = call_llama(prompt).strip()
+    if not response or response.startswith("[Error"):
+        return _fallback_human_explain(summary, analysis_text, risk)
+    db_log_prompt(
+        prompt_type="human_explain",
+        prompt=prompt,
+        response=response,
+        meta={"risk": risk},
+    )
+    return response
+
+
+def _is_rare_domain(domain: str) -> bool:
+    d = _normalize_domain(domain)
+    if not d or "." not in d:
+        return False
+    tld = d.rsplit(".", 1)[-1]
+    uncommon_tlds = {"xyz", "top", "click", "gq", "work", "cam", "rest", "zip"}
+    left = d.split(".", 1)[0]
+    looks_dga = len(left) >= 12 and sum(ch.isdigit() for ch in left) >= 3
+    return tld in uncommon_tlds or looks_dga
+
+
+def detect_behavior_alerts(summary: dict) -> list[dict]:
+    alerts = []
+    combined = _combined_domain_counts(summary)
+    total_domain_hits = sum(combined.values()) if combined else 0
+    unique_domains = len(combined)
+
+    if unique_domains >= 25:
+        alerts.append({
+            "severity": "medium" if unique_domains < 45 else "high",
+            "type": "many_distinct_domains",
+            "message": f"Se detectaron {unique_domains} dominios distintos en una sola ventana.",
+            "meta": {"unique_domains": unique_domains},
+        })
+
+    if combined:
+        top_domain, top_count = sorted(combined.items(), key=lambda x: -x[1])[0]
+        concentration = (top_count / total_domain_hits) if total_domain_hits else 0
+        if top_count >= 12 and concentration >= 0.45:
+            alerts.append({
+                "severity": "medium",
+                "type": "repeated_domain_queries",
+                "message": f"Dominio repetido anómalamente: {top_domain} ({top_count} consultas).",
+                "domain": top_domain,
+                "meta": {"count": top_count, "ratio": round(concentration, 3)},
+            })
+
+    rare_domains = [d for d in combined.keys() if _is_rare_domain(d)]
+    for d in rare_domains[:8]:
+        alerts.append({
+            "severity": "high",
+            "type": "rare_domain_pattern",
+            "message": f"Dominio con patrón inusual detectado: {d}",
+            "domain": d,
+        })
+
+    for s in (summary.get("suspicious") or []):
+        alerts.append({
+            "severity": "medium",
+            "type": f"sensor_{s.get('type', 'event')}",
+            "message": s.get("detail") or f"Evento sospechoso: {s.get('type', 'event')}",
+            "source_ip": s.get("src") or "",
+            "meta": s,
+        })
+    return alerts
+
+
+def _heuristic_domain_category(domain: str) -> tuple[str, float]:
+    d = _normalize_domain(domain)
+    if not d:
+        return "otros", 0.4
+    rules = [
+        ("redes_sociales", ("facebook.com", "instagram.com", "x.com", "twitter.com", "tiktok.com", "snapchat.com")),
+        ("streaming", ("youtube.com", "googlevideo.com", "netflix.com", "disneyplus.com", "spotify.com", "twitch.tv")),
+        ("desarrollo", ("github.com", "gitlab.com", "pypi.org", "npmjs.com", "docker.com")),
+        ("infraestructura", ("cloudflare.com", "cloudflare-dns.com", "akamai", "fastly", "amazonaws.com", "azure.com", "gstatic.com")),
+        ("mensajeria", ("whatsapp.com", "telegram.org", "messenger.com", "signal.org")),
+        ("productividad", ("office.com", "microsoft.com", "google.com", "notion.so", "slack.com")),
+        ("adulto", tuple(PORN_DOMAIN_ROOTS)),
+    ]
+    for cat, roots in rules:
+        if _domain_in_roots(d, set(roots)):
+            return cat, 0.92
+    return "otros", 0.55
+
+
+def _llm_domain_category(domain: str) -> tuple[str, float]:
+    prompt = _wrap_prompt(
+        user_body=(
+            "Clasifica este dominio en una categoría de red. "
+            "Responde SOLO JSON: {\"category\":\"...\",\"confidence\":0.0}\n"
+            f"dominio: {domain}\n"
+            "categorías válidas: infraestructura, redes_sociales, streaming, desarrollo, mensajeria, productividad, adulto, otros"
+        ),
+        system_text="Clasificador determinista de dominios.",
+    )
+    response = call_llama(prompt)
+    m = re.search(r"\{.*\}", response or "", flags=re.S)
+    if not m:
+        return "otros", 0.4
+    try:
+        obj = json.loads(m.group(0))
+    except Exception:
+        return "otros", 0.4
+    cat = str(obj.get("category") or "otros").strip().lower()
+    conf = float(obj.get("confidence") or 0.5)
+    allowed = {"infraestructura", "redes_sociales", "streaming", "desarrollo", "mensajeria", "productividad", "adulto", "otros"}
+    if cat not in allowed:
+        cat = "otros"
+    conf = max(0.0, min(conf, 1.0))
+    return cat, conf
+
+
+def classify_domain(domain: str) -> dict:
+    cached = db_get_domain_category(domain)
+    if cached:
+        return cached
+    cat, conf = _heuristic_domain_category(domain)
+    source = "rule"
+    if FEATURE_DOMAIN_CLASSIFIER and FEATURE_DOMAIN_CLASSIFIER_LLM and cat == "otros":
+        cat, conf = _llm_domain_category(domain)
+        source = "llm"
+    db_set_domain_category(domain, cat, conf, source)
+    return db_get_domain_category(domain) or {
+        "domain": _normalize_domain(domain), "category": cat, "confidence": conf, "source": source, "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+
+def domain_category_breakdown(limit_batches: int = 50, top_n: int = 25) -> dict:
+    stats_map = db_get_domain_stats(limit_batches=limit_batches, top_n=max(60, top_n))
+    cat_counter = Counter()
+    detail = []
+    for item in stats_map.get("combined", []):
+        domain = item.get("domain")
+        count = int(item.get("count") or 0)
+        if not domain or count <= 0:
+            continue
+        cat_info = classify_domain(domain)
+        cat = cat_info.get("category") or "otros"
+        cat_counter[cat] += count
+        detail.append({
+            "domain": domain,
+            "count": count,
+            "category": cat,
+            "confidence": cat_info.get("confidence", 0.5),
+            "source": cat_info.get("source", "rule"),
+        })
+    total = sum(cat_counter.values()) or 1
+    categories = [
+        {"category": c, "count": n, "pct": round((n / total) * 100.0, 2)}
+        for c, n in cat_counter.most_common(top_n)
+    ]
+    return {
+        "window_batches": stats_map.get("window_batches", 0),
+        "categories": categories,
+        "domains": detail[:top_n],
+    }
+
+
 def detect_social_traffic(summary: dict, whitelist: set[str] | None = None) -> dict:
     combined_counts = _combined_domain_counts(summary)
     whitelist = whitelist or set()
@@ -1058,6 +1437,14 @@ def analyze_and_store(batch_id: int, summary: dict):
         risk = "MEDIO" if risk == "BAJO" else risk
     policy_social = evaluate_and_apply_social_policy(batch_id, summary)
     policy_porn = evaluate_and_apply_porn_policy(batch_id, summary)
+    human_explanation = build_human_explanation(summary, analysis, risk)
+    behavior_alerts = detect_behavior_alerts(summary)
+    db_store_human_explanation(
+        batch_id=batch_id,
+        text=human_explanation,
+        meta={"risk": risk, "packets": summary.get("total_packets", 0)},
+    )
+    db_store_alerts(batch_id=batch_id, alerts=behavior_alerts)
 
     result = {
         "id":               stats["analyses_ok"] + 1,
@@ -1073,6 +1460,8 @@ def analyze_and_store(batch_id: int, summary: dict):
         "suspicious":       summary.get("suspicious", []),
         "lan_devices":      summary.get("lan_devices", []),
         "dns_queries":      summary.get("dns_queries", [])[:20],
+        "human_explanation": human_explanation,
+        "alerts": behavior_alerts,
         "policy": {
             "social": policy_social,
             "porn": policy_porn,
@@ -1269,6 +1658,15 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                     },
                     "min_hits": SOCIAL_MIN_HITS,
                 },
+                "features": {
+                    "human_explain": FEATURE_HUMAN_EXPLAIN,
+                    "domain_classifier": FEATURE_DOMAIN_CLASSIFIER,
+                    "domain_classifier_llm": FEATURE_DOMAIN_CLASSIFIER_LLM,
+                    "portal_risk_message": FEATURE_PORTAL_RISK_MESSAGE,
+                    "chat": FEATURE_CHAT,
+                    "device_profiling": FEATURE_DEVICE_PROFILING,
+                    "auto_reports": FEATURE_AUTO_REPORTS,
+                },
             })
 
         elif path == "/api/history":
@@ -1281,6 +1679,21 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/stats":
             self.send_json({**stats, "queue": db_queue_stats()})
+
+        elif path == "/api/explanations/latest":
+            limit = int(params.get("limit", ["20"])[0])
+            items = db_get_human_explanations(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/alerts":
+            limit = int(params.get("limit", ["80"])[0])
+            items = db_get_alerts(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/domain-categories/top":
+            limit_batches = int(params.get("limit_batches", ["50"])[0])
+            top = int(params.get("top", ["25"])[0])
+            self.send_json(domain_category_breakdown(limit_batches=limit_batches, top_n=top))
 
         elif path == "/api/policy":
             limit = int(params.get("limit", ["50"])[0])
@@ -1395,7 +1808,7 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
 
             key = str(payload.get("key", "")).strip()
             value = str(payload.get("value", "")).strip()
-            if key not in {RULE_ANALYSIS_KEY, RULE_ACTION_KEY}:
+            if key not in {RULE_ANALYSIS_KEY, RULE_ACTION_KEY, RULE_HUMAN_EXPLAIN_KEY}:
                 self.send_error_json(400, "key inválida"); return
             if not value:
                 self.send_error_json(400, "value vacío"); return
