@@ -7,7 +7,7 @@ Estado al **22 de abril de 2026**:
 - Redirección captive por nftables + dnsmasq operativa
 - Detección mejorada con DHCP option `114` y dominio fallback `captive.localhost.com`
 - Stack IA (Mosquitto + llama-server + ai-analyzer) operativo
-- Scripts `setup-*` con logging persistente en `/var/log/demo-openwrt/setup` (fallback `/tmp/demo-openwrt/setup`)
+- Setup modular en Raspi4B (scripts por componente) con logging persistente en `/var/log/demo-openwrt/<componente>` (fallback `/tmp/demo-openwrt/<componente>`)
 
 ---
 
@@ -91,37 +91,49 @@ nslookup google.com 192.168.1.1
 
 ---
 
-## Paso 3 — Setup de RafexPi4B (IA + k3s)
+## Paso 3 — Setup modular de RafexPi4B (responsabilidad única)
 
-Instala todo el stack IA: Mosquitto, llama-server, ai-analyzer en k3s, captive portal.
-También configura el hostname y la reserva DHCP de esta Raspi en el router.
+Ahora la instalación de Raspi4B está separada por componente.
 
-```bash
-sudo bash scripts/setup-ai-raspi4b.sh
-```
-
-Opciones:
+### 3.1 Instalación completa (recomendada)
 
 ```bash
-sudo bash scripts/setup-ai-raspi4b.sh --no-build   # omitir build de imagen
-sudo bash scripts/setup-ai-raspi4b.sh --no-llama   # omitir llama-server
+sudo bash scripts/setup-raspi4b-all.sh
 ```
 
-Qué hace:
+### 3.2 Instalación por componente (reinstalación parcial)
 
-| Fase | Qué hace |
-|---|---|
-| Hostname | Configura `/etc/hostname` = `RafexPi4B` |
-| DHCP | SSH al router → UCI reserva `RafexPi4B  d8:3a:dd:4d:4b:ae → 192.168.1.167  infinite` |
-| Pre-flight | Verifica k3s corriendo, podman disponible |
-| A0 | Instala Mosquitto, configura `:1883 allow_anonymous true`, habilita en arranque |
-| A0 | Instalación apt robusta: no interactiva, timeout, reintentos y recuperación de `dpkg` |
-| A | Localiza binario `llama-server` y modelo `tinyllama*.gguf` (busca rutas habituales + find) |
-| B | Genera servicio init.d `llama-server`: `ctx-size=4096 --parallel 1 --threads 4` |
-| C | `podman build --cgroup-manager=cgroupfs --platform linux/arm64` imagen `ai-analyzer` |
-| D | `podman save \| k3s ctr images import -` |
-| E | `kubectl apply` ai-analyzer + limpieza recursos legacy |
-| F | Verifica pods, `/health`, `/dashboard` |
+```bash
+# Solo broker MQTT
+sudo bash scripts/setup-raspi4b-mosquitto.sh
+
+# Solo servicio LLM (llama.cpp)
+sudo bash scripts/setup-raspi4b-llm.sh
+
+# Solo backend AI analyzer en k3s
+sudo bash scripts/setup-raspi4b-ai-analyzer.sh
+
+# Solo portales (clásico + lentium) en k3s
+sudo bash scripts/setup-raspi4b-portals.sh
+```
+
+Flags comunes soportados por los scripts modulares:
+
+```bash
+--dry-run       # muestra qué haría
+--only-verify   # solo valida estado del componente
+--no-build      # omite build/import de imágenes (aplica a analyzer/portales/all)
+--force         # reservado para operaciones forzadas
+```
+
+`setup-raspi4b-all.sh` también soporta:
+
+```bash
+--skip-mosquitto
+--skip-llm
+--skip-analyzer
+--skip-portals
+```
 
 **Prerequisito llama.cpp:** el modelo TinyLlama Q4_K_M debe estar descargado:
 
@@ -199,6 +211,9 @@ bash scripts/sensor-status.sh --follow
 | API stats | http://192.168.1.167/api/stats |
 | Health check | http://192.168.1.167/health |
 
+Inventario completo de vistas HTML:
+- ver `docs/html-endpoints.md` (conteo, rutas, propósito y vistas dinámicas)
+
 ---
 
 ## Paso 6 — Prueba real con dispositivo WiFi
@@ -229,12 +244,18 @@ bash scripts/openwrt-list-clients.sh
 ### Actualizar el analizador IA (código Python, HTML)
 
 ```bash
-# En RafexPi4B — rebuild + reimport + rollout restart
-sudo bash scripts/setup-ai-raspi4b.sh --no-llama
+# En RafexPi4B — componente dedicado
+sudo bash scripts/setup-raspi4b-ai-analyzer.sh
+# o sin rebuild:
+sudo bash scripts/setup-raspi4b-ai-analyzer.sh --no-build
+```
 
-# Solo rollout (si la imagen ya está importada)
-kubectl rollout restart deployment/ai-analyzer
-kubectl rollout status deployment/ai-analyzer --timeout=120s
+### Actualizar solo portales (sin tocar LLM/MQTT)
+
+```bash
+sudo bash scripts/setup-raspi4b-portals.sh
+# o sin rebuild:
+sudo bash scripts/setup-raspi4b-portals.sh --no-build
 ```
 
 ### Actualizar el sensor

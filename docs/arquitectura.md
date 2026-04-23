@@ -73,7 +73,7 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
     │       POST /accept → SSH+nft al router (clásico)      │
     │                                                       │
     │   Pod ai-analyzer (1/1)                               │
-    │     python:3.11-alpine :5000                          │
+    │     python:3.13-alpine3.23 :5000                      │
     │     MQTT subscriber → SQLite queue → worker thread    │
     │     Worker: llama-server :8081 (1 análisis a la vez)  │
     │     SQLite: /opt/analyzer/data/sensor.db              │
@@ -289,7 +289,7 @@ CREATE TABLE analyses (
 | `captive-portal` | Ingress | Traefik → puerto 80 path `/` |
 | `captive-portal-nginx-conf` | ConfigMap | nginx.conf + index.html + accepted.html |
 | `traefik` | HelmChartConfig | `externalTrafficPolicy:Local` + `forwardedHeaders.insecure` |
-| `ai-analyzer` | Deployment | 1 réplica, python:3.11-alpine |
+| `ai-analyzer` | Deployment | 1 réplica, python:3.13-alpine3.23 |
 | `ai-analyzer` | Service | ClusterIP port 5000 |
 | `ai-analyzer` | Ingress | `/dashboard`, `/terminal`, `/api/*`, `/health` |
 | `dns-spoof` | Deployment | nginx:alpine — demo separada |
@@ -300,9 +300,10 @@ CREATE TABLE analyses (
 
 ## Operación y logs
 
-- Los scripts `setup-*` guardan log en `/var/log/demo-openwrt/setup`.
-- Si no hay permisos en `/var/log`, usan fallback `/tmp/demo-openwrt/setup`.
+- Los scripts setup modulares guardan log en `/var/log/demo-openwrt/<componente>`.
+- Si no hay permisos en `/var/log`, usan fallback `/tmp/demo-openwrt/<componente>`.
 - Formato: `<script>-YYYYMMDD-HHMMSS.log`.
+- Inventario de vistas HTML (conteo/rutas/propósito): `docs/html-endpoints.md`.
 
 ---
 
@@ -324,7 +325,9 @@ SNAT y Traefik recibe la IP real directamente. En un cluster de 1 nodo no hay de
 
 ---
 
-## Por qué python:3.11-alpine en ai-analyzer
+## Por qué python:3.13-alpine3.23 en ai-analyzer
+
+La base estándar del repo para imágenes Python es `python:3.13-alpine3.23`.
 
 `python:3.11-slim` (Debian) + crun (runtime de contenedores de podman) intenta conectar
 a sd-bus (D-Bus/systemd). DietPi no usa systemd como PID 1 — falla con

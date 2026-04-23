@@ -6,17 +6,17 @@ Todos los scripts viven en `scripts/`. Los que interactúan con el router se eje
 
 ## Logging de setup
 
-Todos los scripts `setup-*` escriben logs completos (`stdout` + `stderr`) en:
+Los scripts modulares de Raspi4B escriben logs completos (`stdout` + `stderr`) por componente:
 
-- Primario: `/var/log/demo-openwrt/setup`
-- Fallback automático: `/tmp/demo-openwrt/setup`
+- Primario: `/var/log/demo-openwrt/<componente>`
+- Fallback automático: `/tmp/demo-openwrt/<componente>`
 
 Formato:
 - `<script>-YYYYMMDD-HHMMSS.log`
 
 Ejemplo:
 ```bash
-ls -1t /var/log/demo-openwrt/setup/setup-*.log 2>/dev/null | head -5
+ls -1t /var/log/demo-openwrt/*/setup-*.log 2>/dev/null | head -5
 ```
 
 ---
@@ -53,31 +53,96 @@ Cambios respecto a la versión anterior:
 
 ---
 
-## setup-ai-raspi4b.sh
+## Setup modular Raspi4B
 
-**Propósito:** Instalación del stack IA completo en RafexPi4B.  
-**Ejecutar en:** RafexPi4B (como root)  
-**Idempotente:** Sí
+### scripts/lib/raspi4b-common.sh
+
+**Propósito:** librería compartida para setup modular en Raspi4B.
+
+Incluye:
+- logging estandarizado por componente
+- parsing de flags comunes (`--dry-run`, `--only-verify`, `--no-build`, `--force`)
+- helpers de apt idempotentes
+- validaciones (`need_root`, `ensure_cmd`, `ensure_k3s_ready`)
+
+### setup-raspi4b-mosquitto.sh
+
+**Propósito:** instalar/configurar/verificar solo Mosquitto.
 
 ```bash
-sudo bash scripts/setup-ai-raspi4b.sh
-sudo bash scripts/setup-ai-raspi4b.sh --no-build   # omitir build de imagen
-sudo bash scripts/setup-ai-raspi4b.sh --no-llama   # omitir configuración llama-server
+sudo bash scripts/setup-raspi4b-mosquitto.sh
+sudo bash scripts/setup-raspi4b-mosquitto.sh --only-verify
 ```
 
-| Fase | Qué hace |
-|---|---|
-| Hostname | `/etc/hostname` = `RafexPi4B`; actualiza `/etc/hosts` y `hostname` en caliente |
-| DHCP | SSH al router → reserva UCI `RafexPi4B  d8:3a:dd:4d:4b:ae → 192.168.1.167  infinite` |
-| Pre-flight | Verifica k3s corriendo (lo arranca si es necesario), podman disponible |
-| A0 | Instala Mosquitto; escribe `/etc/mosquitto/conf.d/rafexpi.conf` (`listen 1883 0.0.0.0, allow_anonymous true`); habilita y reinicia |
-| A0 | Instalación apt robusta: no interactiva, timeout, reintentos y recuperación `dpkg` |
-| A | Localiza `llama-server` (rutas habituales + `find`); localiza modelo `tinyllama*.gguf`; resuelve symlinks con `realpath` |
-| B | Genera `/etc/init.d/llama-server` con `ctx-size=4096 --parallel 1 --threads 4`; habilita; instala `/etc/cron.d/llama-watchdog` (autorelanza cada minuto si se cae); espera hasta 60s que responda en `:8081` |
-| C | `podman build --cgroup-manager=cgroupfs --platform linux/arm64 -t localhost/ai-analyzer:latest` |
-| D | `podman save localhost/ai-analyzer:latest \| k3s ctr images import -` |
-| E | `kubectl apply` ai-analyzer-deployment/svc/ingress; limpia recursos legacy (dashboard separado); `rollout restart` |
-| F | `rollout status --timeout=120s`; verifica `/health` y `/dashboard` |
+Aplica:
+- instalación `mosquitto` + `mosquitto-clients`
+- `/etc/mosquitto/conf.d/rafexpi.conf`
+- restart del servicio
+- test publish local en `127.0.0.1:1883`
+
+### setup-raspi4b-llm.sh
+
+**Propósito:** instalar/configurar/verificar solo `llama.cpp` (`llama-server`).
+
+```bash
+sudo bash scripts/setup-raspi4b-llm.sh
+sudo bash scripts/setup-raspi4b-llm.sh --only-verify
+```
+
+Aplica:
+- detección binario `llama-server`
+- detección modelo `.gguf` (Qwen2.5-0.5B o TinyLlama)
+- generación de `/etc/init.d/llama-server`
+- watchdog `/etc/cron.d/llama-watchdog`
+- health check `http://127.0.0.1:8081/health`
+
+### setup-raspi4b-ai-analyzer.sh
+
+**Propósito:** desplegar solo `ai-analyzer` en k3s.
+
+```bash
+sudo bash scripts/setup-raspi4b-ai-analyzer.sh
+sudo bash scripts/setup-raspi4b-ai-analyzer.sh --no-build
+```
+
+Aplica:
+- build/import `localhost/ai-analyzer:latest` (opcional con `--no-build`)
+- `kubectl apply` deployment/svc/ingress de analyzer
+- `rollout restart` + verificación de endpoints (`/health`, `/dashboard`, `/terminal`, `/rulez`)
+
+### setup-raspi4b-portals.sh
+
+**Propósito:** desplegar solo portales (clásico + lentium) en k3s.
+
+```bash
+sudo bash scripts/setup-raspi4b-portals.sh
+sudo bash scripts/setup-raspi4b-portals.sh --no-build
+```
+
+Aplica:
+- garantía de llaves SSH del portal
+- ejecución de `scripts/raspi-deploy.sh` (con o sin build)
+- verificación HTTP de `/portal`, `/accepted`, `/services`, `/people`
+
+### setup-raspi4b-all.sh
+
+**Propósito:** orquestador general de Raspi4B (responsabilidad compuesta).
+
+```bash
+sudo bash scripts/setup-raspi4b-all.sh
+sudo bash scripts/setup-raspi4b-all.sh --skip-llm
+sudo bash scripts/setup-raspi4b-all.sh --skip-portals --skip-analyzer
+```
+
+Orden de ejecución por defecto:
+1. `setup-raspi4b-mosquitto.sh`
+2. `setup-raspi4b-llm.sh`
+3. `setup-raspi4b-ai-analyzer.sh`
+4. `setup-raspi4b-portals.sh`
+
+### setup-ai-raspi4b.sh (legacy)
+
+Se mantiene por compatibilidad histórica, pero la recomendación operativa es usar los scripts modulares anteriores.
 
 **Variables de entorno configurables** (en el deployment k8s `ai-analyzer-deployment.yaml`):
 

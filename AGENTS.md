@@ -19,8 +19,8 @@ Estado al **22 de abril de 2026**:
 - Detección captive mejorada:
   - dnsmasq con dominios de detección en `/etc/dnsmasq.conf`
   - DHCP option `114` (`http://192.168.1.167/portal`)
-  - dominio fallback `captive.localhost.com`
-- Scripts `setup-*` con logging persistente en `/var/log/demo-openwrt/setup` (fallback `/tmp/demo-openwrt/setup`).
+  - dominio fallback `captive.localhost.com` y subdominio `people.localhost.com`
+- Scripts `setup-*` con logging persistente por componente en `/var/log/demo-openwrt/<componente>` (fallback `/tmp/demo-openwrt/<componente>`).
 - Script operativo para apagar/encender LLM (`scripts/llm-control.sh`) y reducir CPU.
 
 ## Arquitectura
@@ -53,15 +53,17 @@ Router OpenWrt (192.168.1.1)   ath79/mips_24kc
     │      ctx-size=4096, --parallel 1               │
     │                                                │
     │  k3s Pods:                                     │
-    │    ├── captive-portal (2/2)                    │
-    │    │     nginx:alpine :80 + captive-backend    │
+    │    ├── captive-portal-lentium (2/2)            │
+    │    │     nginx:alpine :80 + captive-backend-lentium │
+    │    │     GET /portal /services /blocked /people │
     │    ├── ai-analyzer (1/1)                       │
-    │    │     python:3.11-alpine :5000              │
+    │    │     python:3.13-alpine3.23 :5000          │
     │    │     SQLite: /data/sensor.db               │
     │    │     MQTT subscriber: rafexpi/sensor/batch  │
     │    │     Worker: 1 análisis a la vez           │
     │    │     GET /dashboard  — UI visual           │
     │    │     GET /terminal   — log en vivo (SSE)   │
+    │    │     GET /rulez      — reglas/prompts IA   │
     │    │     GET /api/history /api/stats /api/queue │
     │    │     POST /api/ingest (HTTP fallback)       │
     │    └── dns-spoof (nginx:alpine — demo separada) │
@@ -105,12 +107,21 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 │   ├── captive-portal/
 │   │   ├── backend.py           # HTTP Python :8080 — autoriza clientes via SSH+nft
 │   │   └── Dockerfile           # python:3.13-alpine
+│   ├── captive-portal-lentium/
+│   │   ├── backend.py           # Portal Lentium + /services + /people + /blocked
+│   │   ├── portal.html
+│   │   ├── services.html
+│   │   ├── blocked.html
+│   │   ├── blocked-art/art-*.svg
+│   │   └── Dockerfile           # python:3.13-alpine3.23
 │   └── ai-analyzer/
 │       ├── analyzer.py          # MQTT subscriber + worker + Flask API + SSE
 │       ├── dashboard.html       # UI visual (servido desde Python)
 │       ├── terminal.html        # Terminal SSE en vivo
+│       ├── rulez.html           # editor de reglas/prompts (SQLite)
+│       ├── router_mcp.py        # abstracción de acciones al router OpenWrt
 │       ├── requirements.txt     # requests, paho-mqtt
-│       └── Dockerfile           # python:3.11-alpine
+│       └── Dockerfile           # python:3.13-alpine3.23
 ├── sensor/
 │   ├── sensor.py                # tshark capture + TrafficAggregator + MQTT/HTTP
 │   ├── requirements.txt         # requests, paho-mqtt
@@ -131,14 +142,23 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 │   └── dns-spoof-ingress.yaml       # Host: rafex.dev, www.rafex.dev
 ├── scripts/
 │   ├── lib/common.sh                # constantes, SSH helpers, router_add_ip
+│   ├── lib/raspi4b-common.sh        # logging/flags/helpers setup modular
 │   ├── setup-openwrt.sh             # configura router completo
 │   ├── setup-openwrt-wifi-uplink.sh # WAN por WiFi 5GHz + AP 2.4 abierto
-│   ├── setup-ai-raspi4b.sh          # instala stack IA en Raspi 4B
+│   ├── setup-ai-raspi4b.sh          # legacy (mantenido por compatibilidad)
+│   ├── setup-raspi4b-mosquitto.sh   # instala/configura solo Mosquitto
+│   ├── setup-raspi4b-llm.sh         # instala/configura solo llama.cpp
+│   ├── setup-raspi4b-ai-analyzer.sh # despliega solo ai-analyzer en k3s
+│   ├── setup-raspi4b-portals.sh     # despliega solo portales en k3s
+│   ├── setup-raspi4b-all.sh         # orquestador general Raspi4B
 │   ├── setup-sensor-raspi3b.sh      # instala sensor en Raspi 3B
 │   ├── llm-control.sh               # on/off/restart/status de llama-server
+│   ├── raspi-deploy.sh              # despliegue k8s de portales + ingress
+│   ├── portal-switch.sh             # alterna portal activo (lentium/clásico)
 │   ├── sensor-status.sh             # diagnóstico completo del sistema
 │   ├── openwrt-allow-client.sh
 │   ├── openwrt-block-client.sh
+│   ├── openwrt-kick-client.sh
 │   ├── openwrt-list-clients.sh
 │   ├── openwrt-flush-clients.sh
 │   ├── openwrt-reserve-raspi.sh     # reserva DHCP manual (complemento)
@@ -174,18 +194,20 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 ### RafexPi4B / k3s ✅
 - [x] k3s v1.34.6+k3s1 corriendo
 - [x] Traefik 3.6.10 expone el portal en :80 (`externalTrafficPolicy: Local`)
-- [x] Pod captive-portal 2/2 Running — nginx sidecar + backend Python
+- [x] Pod `captive-portal-lentium` 2/2 Running — nginx sidecar + backend Python
 - [x] Mosquitto MQTT broker corriendo en :1883
 - [x] llama-server (TinyLlama Q4_K_M) en :8081 — ctx-size=4096, --parallel 1
 - [x] Watchdog `/etc/cron.d/llama-watchdog` — relanza llama-server automáticamente si se cae
 - [x] `scripts/llm-control.sh` para apagar/encender LLM y watchdog según uso
 - [x] Pod ai-analyzer corriendo — Flask + MQTT subscriber + worker + SQLite
-- [x] Dashboards: `/dashboard` (UI visual) y `/terminal` (SSE log en vivo)
+- [x] UIs IA: `/dashboard` (visual), `/terminal` (SSE), `/rulez` (reglas/prompts)
+- [x] UIs portal Lentium: `/portal`, `/services`, `/people`, `/blocked`
 - [x] HTML servido desde la imagen Docker (no ConfigMap — evita errores de parseo YAML)
 - [x] hostPath `/opt/analyzer/data/sensor.db` — persiste entre reinicios de pod
+- [x] hostPath `/opt/captive-portal/lentium-data/lentium.db` — persiste registros del portal
 - [x] Pod dns-spoof (nginx:alpine) — demo DNS poisoning separada
 - [x] Hostname configurado: RafexPi4B
-- [x] Reserva DHCP configurada automáticamente al correr `setup-ai-raspi4b.sh`
+- [x] Setup modular disponible: `setup-raspi4b-{mosquitto,llm,ai-analyzer,portals,all}.sh`
 
 ### RafexPi3B / Sensor ✅
 - [x] tshark capturando en eth0 (modo promiscuo, 18 campos tab-separated)
@@ -203,6 +225,28 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 - [x] Worker thread procesa 1 batch a la vez (no hay saturación de KV cache)
 - [x] Batches persistidos en SQLite (status: pending → processing → done/error)
 - [x] Reencola batches huérfanos al arrancar el pod
+
+## Inventario de vistas HTML (para agentes)
+
+- HTML físicos en repo: **6**
+- Vistas HTML dinámicas (sin archivo `.html`): **2**
+- Total vistas HTML accesibles: **8**
+
+| Ruta | Fuente | Propósito |
+|---|---|---|
+| `/portal` (también `/`) | `backend/captive-portal-lentium/portal.html` | Registro cliente/invitado y autorización en router |
+| `/services` | `backend/captive-portal-lentium/services.html` | Control operativo de servicios de la PoC |
+| `/blocked` | `backend/captive-portal-lentium/blocked.html` | Pantalla “sitio bloqueado por IA” |
+| `/blocked-art/*` | `backend/captive-portal-lentium/blocked-art/art-01..10.svg` | Arte aleatorio para bloqueo |
+| `/people` | HTML generado por `backend/captive-portal-lentium/backend.py` | Dashboard de personas registradas/conectadas |
+| `/accepted` | HTML inline en `backend/captive-portal-lentium/backend.py` | Confirmación de acceso (compatibilidad) |
+| `/dashboard` | `backend/ai-analyzer/dashboard.html` | Dashboard IA de tráfico/riesgo |
+| `/terminal` | `backend/ai-analyzer/terminal.html` | Log en vivo por SSE |
+| `/rulez` | `backend/ai-analyzer/rulez.html` | Editor de reglas/prompts IA en SQLite |
+
+Dominios relevantes:
+- `captive.localhost.com` → abrir portal (`/portal`)
+- `people.localhost.com` → dashboard de personas (`/people`)
 
 ## Constantes globales (lib/common.sh)
 
@@ -269,11 +313,11 @@ ssh-ed25519 AAAAC3... sensor@raspi3b
 - Endpoint: `POST http://192.168.1.167:8081/completion`
 
 ### Imagen Docker ai-analyzer
-- Base: `python:3.11-alpine` — NO `python:3.11-slim`
-- Razón: `python:3.11-slim` (Debian) + `podman run` + DietPi sin systemd PID 1 → `sd-bus: No such file or directory`
+- Base: `python:3.13-alpine3.23`
+- Regla de repo: cualquier imagen Python debe usar `python:3.13-alpine3.23`
 - Build: `podman build --cgroup-manager=cgroupfs --platform linux/arm64`
 - Import: `podman save | k3s ctr images import -`
-- HTML (dashboard.html, terminal.html) copiados dentro de la imagen — NO en ConfigMap
+- HTML (dashboard.html, terminal.html, rulez.html) copiados dentro de la imagen — NO en ConfigMap
   - ConfigMap con HTML/JS falla al hacer `kubectl apply` por literales JS (`{}`, template strings)
 
 ### Traefik — IP real del cliente
@@ -302,8 +346,8 @@ ssh-ed25519 AAAAC3... sensor@raspi3b
 - Verificar procesos con `ps aux` o PID files
 
 ### Logs de setup
-- Todos los `setup-*` escriben log en `/var/log/demo-openwrt/setup`.
-- Si no hay permisos, fallback automático a `/tmp/demo-openwrt/setup`.
+- Los setups escriben logs por componente en `/var/log/demo-openwrt/<componente>`.
+- Si no hay permisos, fallback automático a `/tmp/demo-openwrt/<componente>`.
 
 ### Regla de oro
 **`192.168.1.113` (admin) y `192.168.1.181` (RafexPi3B) NUNCA pierden acceso a internet.**
