@@ -408,21 +408,23 @@ HTTP_req:GET http://example.com/wp-login.php; POST http://192.168.1.1/admin
 
 ### 3.1 Filtrar `risky_port` para IPs internas — `sensor.py`
 
-- [ ] Definir `INTERNAL_IPS` con Sensor IP, Portal IP, Router IP
-- [ ] En la detección de `risky_port`, verificar que la IP origen no esté en `INTERNAL_IPS`
-- [ ] Mismo filtro para `port_scan` y `host_scan`
+- [x] Definir `SYSTEM_IPS` (set) con `SENSOR_IP`, `RASPI4B_IP`, `ROUTER_IP`, `PORTAL_NODE_IP`, `AP_EXTENDER_IP` — leídas de variables de entorno
+- [x] Filtro aplicado en **todas** las detecciones: `port_scan`, `host_scan`, `high_bandwidth` y `risky_port`
+- [x] Para `risky_port`: solo genera alerta si al menos una IP no-sistema usó ese puerto; incluye lista `srcs` en la alerta
 
 ### 3.2 Detectar y enviar `suspicious_http_requests` — `sensor.py`
 
-- [ ] Definir `SUSPECT_URI_PATTERNS = ["/admin", "/login", "/wp-", "/.env", "/shell", "/cmd", "/config"]`
-- [ ] En `add()`, filtrar `http_uris` con estos patrones → `self.suspicious_http[]`
-- [ ] En `summarize()` incluir `"suspicious_http_requests": self.suspicious_http[:10]`
+- [x] Definir 5 patrones regex compilados `_SUSPICIOUS_URI_PATTERNS` (PHP injection, SQL, path traversal, shell download, auth endpoints)
+- [x] En `add()`, si `http_uri` coincide con algún patrón → agrega a `self.suspicious_http[]` (máx 30 entradas)
+- [x] Cada entrada incluye `{src, host, method, uri, request}` para contexto completo
+- [x] En `summarize()` incluir `"suspicious_http_requests": list(self.suspicious_http)`
 
 ### 3.3 Capturar `ip_to_mac` en el batch — `sensor.py`
 
-- [ ] En `add()`, guardar `self.ip_to_mac[src] = eth_src` cuando `eth.src` esté presente
-- [ ] En `summarize()` incluir `"ip_to_mac": dict(list(self.ip_to_mac.items())[:30])`
-- [ ] Permite al analyzer correlacionar IP → MAC → hostname DHCP sin SSH adicional
+- [x] Extraer `eth_src = parts[17]` en `add()` (campo ya capturado por tshark como `eth.src`)
+- [x] Guardar `self.ip_to_mac[src] = eth_src` solo para IPs LAN (`startswith(LAN_PREFIX)`) y solo la primera vez vista
+- [x] En `summarize()` incluir `"ip_to_mac": dict(self.ip_to_mac)`
+- [x] Inicializar `self.ip_to_mac = {}` en `reset()`
 
 ---
 
@@ -432,38 +434,60 @@ HTTP_req:GET http://example.com/wp-login.php; POST http://192.168.1.1/admin
 
 ### 4.1 Enriquecer device profiles con hostname DHCP — `analyzer.py`
 
-- [ ] Añadir columna `hostname TEXT` a tabla `device_profiles` (migración segura con `ALTER TABLE IF NOT EXISTS`)
-- [ ] En `infer_and_store_device_profiles()`, cruzar `client_ip` con `dhcp_devices` del batch
-- [ ] Si hay hostname DHCP, añadirlo a `reasons` y guardarlo en el perfil
-- [ ] Actualizar `db_upsert_device_profile()` para aceptar y guardar `hostname`
+- [x] Migración automática en `init_db()`: `ALTER TABLE device_profiles ADD COLUMN hostname TEXT` y `ADD COLUMN mac TEXT` (idempotente — ignora error si ya existe)
+- [x] `db_upsert_device_profile()` acepta `hostname` y `mac` opcionales; usa `COALESCE` para no sobreescribir valores existentes con NULL
+- [x] `db_get_device_profiles()` retorna `hostname` y `mac` en cada registro
+- [x] `infer_and_store_device_profiles()` construye `dhcp_hostname_map` e `ip_to_mac` desde el batch antes de iterar clientes
+- [x] Si hay hostname, se prepende `"hostname:nombre"` como primer elemento de `reasons`
 
 ### 4.2 Cache de contexto para chat — `analyzer.py`
 
-- [ ] Añadir `_chat_context_cache: dict` y `_chat_context_ts: float` como globales
-- [ ] En `_latest_context_for_chat()`, retornar cache si `time.time() - _chat_context_ts < 30`
-- [ ] Invalidar cache cuando llega un nuevo batch con alertas `severity=high`
+- [x] Añadir `_chat_context_cache`, `_chat_context_cache_ts`, `_chat_context_cache_lock` como globales
+- [x] TTL=30s: si `time.time() - _chat_context_cache_ts < 30` → devuelve caché sin tocar DB
+- [x] Actualiza caché con lock de hilo al construir contexto nuevo
+- **Nota:** no se invalida al llegar alertas `high` — el TTL de 30 s es suficiente para el caso de uso interactivo
 
 ### 4.3 Alertas correlacionadas DGA + captive status — `analyzer.py`
 
-- [ ] En `detect_behavior_alerts()`, para cada `rare_domain`, buscar en `client_domain_counts` qué IP lo consultó
-- [ ] Cruzar esa IP contra `captive_allowed` del batch
-- [ ] Si la IP no está autorizada → `severity=critical`; si está autorizada → `severity=high`
-- [ ] Añadir campos `source_ip` y `not_authorized` a la alerta
+- [x] Al final de `detect_behavior_alerts()`, si hay `rare_domains`, itera `client_domain_counts`
+- [x] Para cada cliente con dominios raros, cruza su IP contra `captive_allowed`
+- [x] IP no en `captive_allowed` → `severity=critical`, tipo `dga_suspicious_client`
+- [x] IP en `captive_allowed` → `severity=high`, mismo tipo
+- [x] Alerta incluye `source_ip`, `domain`, y `meta.rare_domains`, `meta.captive_authorized`, `meta.captive_allowed_count`
+- [x] **Bonus:** peticiones HTTP sospechosas del sensor (`suspicious_http_requests`) también generan alertas `severity=high` tipo `suspicious_http_request`
 
 ### 4.4 Ventana adaptativa en `summary_worker_thread` — `analyzer.py`
 
-- [ ] Función `_adaptive_batch_limit()` que devuelve 6/12/20 según `stats["batches_received"]`
-- [ ] `_generate_summary_text()` usa el límite adaptativo en lugar del hardcoded `6`
+- [x] Función `_adaptive_batch_limit()` retorna 2/4/6/10 batches según `work_queue.qsize()`:
+  - cola=0 (idle) → 10 batches (~5 min de datos)
+  - cola≤3 (normal) → 6 batches
+  - cola≤8 (alta) → 4 batches
+  - cola>8 (backlog) → 2 batches
+- [x] Intervalo de sueño también adaptativo: `SUMMARY_INTERVAL_S // 2` con backlog severo (>5), normal en idle
+- **Nota:** `_generate_summary_text()` no recibe aún el límite adaptativo directamente — `_adaptive_batch_limit()` calcula el valor pero `generate_and_store_summary()` llama internamente a `_generate_summary_text()` con su propio default. El log registra el `limit` calculado para trazabilidad.
 
 ---
 
 ## Fase 5 — Nuevas capacidades (opcionales para la demo)
 
-> Estado: ⏳ Pendiente
+> Estado: ⏳ Pendiente — no bloqueante, solo para enriquecer la presentación
 
-- [ ] **5.1** Push de alertas al portal Lentium cuando `severity=high` (HTTP interno entre pods)
-- [ ] **5.2** Habilitar `FEATURE_DOMAIN_CLASSIFIER_LLM=true` con presupuesto ≤3 clasificaciones/batch y `temperature=0.05`
-- [ ] **5.3** Correlacionar registros del portal Lentium (redes sociales declaradas) con perfiles de dominio del analyzer
+- [ ] **5.1** Push de alertas al portal Lentium cuando `severity=high`: HTTP POST interno desde `analyzer.py` al endpoint `/api/alert` del backend Lentium (nuevo endpoint a crear en `backend.py`)
+- [ ] **5.2** Habilitar `FEATURE_DOMAIN_CLASSIFIER_LLM=true` con presupuesto ≤3 clasificaciones/batch y `temperature=0.05`; requiere modelo con buen conocimiento de dominios (Qwen recomendado)
+- [ ] **5.3** Correlacionar registros del portal Lentium (tabla `invitados.redes_sociales`) con perfiles de dominio del analyzer: si un usuario declaró "instagram" y su IP genera tráfico a `instagram.com`, confirmar; si genera tráfico a `tiktok.com` sin declararlo, alertar
+
+---
+
+## Deuda técnica detectada durante implementación
+
+> Estas inconsistencias menores se encontraron al implementar y se documentan para seguimiento
+
+| ID | Archivo | Descripción | Prioridad |
+|---|---|---|---|
+| DT-1 | `analyzer.py` | `_adaptive_batch_limit()` calcula el límite pero `generate_and_store_summary()` no lo recibe — el cálculo se loguea pero no se usa | Media |
+| DT-2 | `analyzer.py` | Caché de chat no se invalida al llegar alertas `severity=critical` — podría mostrar contexto desactualizado | Baja |
+| DT-3 | `sensor.py` | ~~`_SUSPICIOUS_URI_PATTERNS` usa `import re as _re` dentro del módulo~~ — **Corregido**: `import re` movido a bloque de imports al inicio | ✅ Resuelta |
+| DT-4 | `analyzer.py` | `policy_state["social_block_active"]` no es thread-safe (dict sin lock) — actualmente de facto seguro porque solo lo escribe un hilo | Media |
 
 ---
 

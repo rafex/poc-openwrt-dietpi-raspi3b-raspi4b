@@ -24,6 +24,7 @@ Variables de entorno:
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -91,13 +92,12 @@ SYSTEM_IPS = {
 }
 
 # Patrones URI sospechosos — se detectan en peticiones HTTP planas
-import re as _re
 _SUSPICIOUS_URI_PATTERNS = [
-    _re.compile(r"(?i)(\.php\?|/admin|/wp-login|/xmlrpc|/shell|/cmd|/eval)"),
-    _re.compile(r"(?i)(union\s+select|%27|%3cscript|<script|javascript:)"),
-    _re.compile(r"(?i)(\.\./|%2e%2e|etc/passwd|/proc/self)"),
-    _re.compile(r"(?i)(wget|curl)\s+http"),
-    _re.compile(r"(?i)/api/v[0-9]+/(user|token|auth|login|reset)"),
+    re.compile(r"(?i)(\.php\?|/admin|/wp-login|/xmlrpc|/shell|/cmd|/eval)"),
+    re.compile(r"(?i)(union\s+select|%27|%3cscript|<script|javascript:)"),
+    re.compile(r"(?i)(\.\./|%2e%2e|etc/passwd|/proc/self)"),
+    re.compile(r"(?i)(wget|curl)\s+http"),
+    re.compile(r"(?i)/api/v[0-9]+/(user|token|auth|login|reset)"),
 ]
 
 # ─── Utilidades ──────────────────────────────────────────────────────────────
