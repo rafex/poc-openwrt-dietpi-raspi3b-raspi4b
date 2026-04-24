@@ -48,10 +48,15 @@ router_ssh "
                 ;;
         esac
     done
+    # Migrar archivo legacy fuera de /etc/nftables.d para evitar parseo de fw4
+    if [ -s /etc/nftables.d/captive-portal.nft ] && [ ! -s /etc/captive-portal.nft ]; then
+        cp /etc/nftables.d/captive-portal.nft /etc/captive-portal.nft
+    fi
+    rm -f /etc/nftables.d/captive-portal.nft 2>/dev/null || true
     cat > /etc/captive-portal-fw4-include.sh <<'EOS'
 #!/bin/sh
 nft delete table ip captive 2>/dev/null || true
-nft -f /etc/nftables.d/captive-portal.nft
+nft -f /etc/captive-portal.nft
 exit \$?
 EOS
     chmod 755 /etc/captive-portal-fw4-include.sh

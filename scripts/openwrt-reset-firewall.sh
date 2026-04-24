@@ -6,7 +6,7 @@
 #
 # Efecto:
 #   - Elimina la tabla 'ip captive' (redireccion HTTP + bloqueo de forward)
-#   - Elimina /etc/nftables.d/captive-portal.nft (persistencia)
+#   - Elimina /etc/captive-portal.nft + include script (persistencia)
 #   - Elimina la configuracion dnsmasq del captive portal
 #   - Limpia conntrack
 #   - Todos los clientes WiFi quedan con acceso libre
@@ -73,7 +73,7 @@ fi
 # =============================================================================
 log_info "--- PASO 2: Eliminando archivos de persistencia ---"
 
-# /etc/nftables.d/captive-portal.nft
+# /etc/nftables.d/captive-portal.nft (legacy)
 router_ssh "
     if [ -f /etc/nftables.d/captive-portal.nft ]; then
         rm -f /etc/nftables.d/captive-portal.nft
@@ -89,6 +89,16 @@ router_ssh "
         rm -f /etc/captive-portal.nft
         echo 'Eliminado: /etc/captive-portal.nft'
     fi
+"
+
+# /etc/captive-portal-fw4-include.sh + sección UCI include
+router_ssh "
+    if [ -f /etc/captive-portal-fw4-include.sh ]; then
+        rm -f /etc/captive-portal-fw4-include.sh
+        echo 'Eliminado: /etc/captive-portal-fw4-include.sh'
+    fi
+    uci -q delete firewall.captive_portal_nft
+    uci commit firewall
 "
 
 # Limpiar linea de /etc/firewall.user si existe

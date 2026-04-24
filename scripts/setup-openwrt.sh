@@ -394,54 +394,42 @@ log_ok "Permanentes: admin=$ADMIN_IP ai/4B=$RASPI4B_IP sensor/3B=$RASPI3B_IP por
 log_info "Limpiando conntrack..."
 router_ssh "conntrack -F 2>/dev/null && echo 'conntrack flush OK' || echo 'conntrack no disponible (OK)'"
 
-# Copiar el archivo a la ubicacion de persistencia
+# Copiar el archivo a la ubicacion de persistencia (fuera de /etc/nftables.d para evitar parseo fw4)
 log_info "Persistiendo configuracion nftables..."
-# Verificar si /etc/nftables.d/ existe
-NFT_D_EXISTS=0
-router_ssh "[ -d /etc/nftables.d ]" 2>/dev/null && NFT_D_EXISTS=1
+router_ssh "cp /tmp/captive-portal.nft /etc/captive-portal.nft"
+log_ok "Reglas persistidas en /etc/captive-portal.nft"
+log_info "Registrando include UCI en fw4 para asegurar carga en reboot..."
+router_ssh "
+    # Limpiar includes legacy (anónimos o nombrados) que apunten al captive portal.
+    # Nota: usar clave completa (ej. firewall.@include[0]) evita errores con [ ].
+    for key in \$(uci -q show firewall 2>/dev/null | awk -F= '/=include$/{print \$1}'); do
+        path=\$(uci -q get \"\$key.path\" 2>/dev/null || true)
+        case \"\$path\" in
+            */captive-portal.nft|*/captive-portal-fw4-include.sh)
+                uci -q delete \"\$key\"
+                ;;
+        esac
+    done
 
-if [ "$NFT_D_EXISTS" -eq 1 ]; then
-    router_ssh "cp /tmp/captive-portal.nft /etc/nftables.d/captive-portal.nft"
-    log_ok "Reglas persistidas en /etc/nftables.d/captive-portal.nft"
-    log_info "Registrando include UCI en fw4 para asegurar carga en reboot..."
-    router_ssh "
-        # Limpiar includes legacy (anónimos o nombrados) que apunten al captive portal.
-        # Nota: usar clave completa (ej. firewall.@include[0]) evita errores con [ ].
-        for key in \$(uci -q show firewall 2>/dev/null | awk -F= '/=include$/{print \$1}'); do
-            path=\$(uci -q get \"\$key.path\" 2>/dev/null || true)
-            case \"\$path\" in
-                */captive-portal.nft|*/captive-portal-fw4-include.sh)
-                    uci -q delete \"\$key\"
-                    ;;
-            esac
-        done
+    # Borrar archivo legacy que fw4 auto-incluye y rompe por sintaxis top-level
+    rm -f /etc/nftables.d/captive-portal.nft 2>/dev/null || true
 
-        cat > /etc/captive-portal-fw4-include.sh <<'EOS'
+    cat > /etc/captive-portal-fw4-include.sh <<'EOS'
 #!/bin/sh
 nft delete table ip captive 2>/dev/null || true
-nft -f /etc/nftables.d/captive-portal.nft
+nft -f /etc/captive-portal.nft
 exit \$?
 EOS
-        chmod 755 /etc/captive-portal-fw4-include.sh
+    chmod 755 /etc/captive-portal-fw4-include.sh
 
-        uci -q delete firewall.captive_portal_nft
-        uci set firewall.captive_portal_nft='include'
-        uci set firewall.captive_portal_nft.type='script'
-        uci set firewall.captive_portal_nft.path='/etc/captive-portal-fw4-include.sh'
-        uci set firewall.captive_portal_nft.enabled='1'
-        uci commit firewall
-    " && log_ok "Include UCI firewall.captive_portal_nft configurado" || \
-       log_warn "No se pudo registrar include UCI para captive-portal.nft"
-else
-    # Fallback: agregar carga del archivo en /etc/firewall.user
-    log_warn "/etc/nftables.d/ no existe — usando /etc/firewall.user como fallback"
-    router_ssh "cp /tmp/captive-portal.nft /etc/captive-portal.nft"
-    router_ssh "
-        grep -q 'captive-portal.nft' /etc/firewall.user 2>/dev/null || \
-        echo 'nft -f /etc/captive-portal.nft' >> /etc/firewall.user
-    "
-    log_ok "Carga de reglas agregada a /etc/firewall.user"
-fi
+    uci -q delete firewall.captive_portal_nft
+    uci set firewall.captive_portal_nft='include'
+    uci set firewall.captive_portal_nft.type='script'
+    uci set firewall.captive_portal_nft.path='/etc/captive-portal-fw4-include.sh'
+    uci set firewall.captive_portal_nft.enabled='1'
+    uci commit firewall
+" && log_ok "Include UCI firewall.captive_portal_nft configurado" || \
+   log_warn "No se pudo registrar include UCI para captive-portal"
 
 # Limpiar temporal del router
 router_ssh "rm -f /tmp/captive-portal.nft"

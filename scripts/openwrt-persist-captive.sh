@@ -6,7 +6,7 @@
 #
 # Qué hace:
 #   1) Verifica acceso SSH al router.
-#   2) Asegura include persistente de /etc/nftables.d/captive-portal.nft en UCI firewall.
+#   2) Asegura include persistente de /etc/captive-portal.nft en UCI firewall.
 #   3) Reinicia firewall y valida tabla ip captive.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,11 +18,15 @@ check_ssh_key
 test_router_ssh
 
 log_info "Validando archivo nft persistente en el router..."
-if ! router_ssh "[ -s /etc/nftables.d/captive-portal.nft ]"; then
-    die "No existe /etc/nftables.d/captive-portal.nft en el router.
+if router_ssh "[ -s /etc/nftables.d/captive-portal.nft ]"; then
+    log_warn "Detectado archivo legacy en /etc/nftables.d; migrando a /etc/captive-portal.nft..."
+    router_ssh "cp /etc/nftables.d/captive-portal.nft /etc/captive-portal.nft"
+fi
+if ! router_ssh "[ -s /etc/captive-portal.nft ]"; then
+    die "No existe /etc/captive-portal.nft en el router.
 Ejecuta primero: bash scripts/setup-openwrt.sh"
 fi
-log_ok "Archivo presente: /etc/nftables.d/captive-portal.nft"
+log_ok "Archivo presente: /etc/captive-portal.nft"
 
 log_info "Configurando include UCI en firewall (fw4)..."
 router_ssh "
@@ -37,10 +41,13 @@ router_ssh "
         esac
     done
 
+    # Borrar archivo legacy que fw4 auto-incluye y rompe por sintaxis top-level
+    rm -f /etc/nftables.d/captive-portal.nft 2>/dev/null || true
+
     cat > /etc/captive-portal-fw4-include.sh <<'EOS'
 #!/bin/sh
 nft delete table ip captive 2>/dev/null || true
-nft -f /etc/nftables.d/captive-portal.nft
+nft -f /etc/captive-portal.nft
 exit \$?
 EOS
     chmod 755 /etc/captive-portal-fw4-include.sh
