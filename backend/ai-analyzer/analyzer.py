@@ -75,6 +75,10 @@ WHITELIST_DOMAINS_DEFAULT = os.environ.get(
 FEATURE_HUMAN_EXPLAIN = os.environ.get("FEATURE_HUMAN_EXPLAIN", "true").lower() == "true"
 FEATURE_DOMAIN_CLASSIFIER = os.environ.get("FEATURE_DOMAIN_CLASSIFIER", "true").lower() == "true"
 FEATURE_DOMAIN_CLASSIFIER_LLM = os.environ.get("FEATURE_DOMAIN_CLASSIFIER_LLM", "false").lower() == "true"
+DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST = int(os.environ.get("DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST", "2"))
+DOMAIN_CLASSIFIER_LLM_TIMEOUT_S = int(os.environ.get("DOMAIN_CLASSIFIER_LLM_TIMEOUT_S", "8"))
+DOMAIN_CLASSIFIER_LLM_N_PREDICT = int(os.environ.get("DOMAIN_CLASSIFIER_LLM_N_PREDICT", "48"))
+DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE = int(os.environ.get("DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE", "4"))
 FEATURE_PORTAL_RISK_MESSAGE = os.environ.get("FEATURE_PORTAL_RISK_MESSAGE", "true").lower() == "true"
 FEATURE_CHAT = os.environ.get("FEATURE_CHAT", "true").lower() == "true"
 FEATURE_DEVICE_PROFILING = os.environ.get("FEATURE_DEVICE_PROFILING", "true").lower() == "true"
@@ -1069,7 +1073,14 @@ def build_action_prompt(policy_context: dict) -> str:
 
 
 # ─── llama.cpp ───────────────────────────────────────────────────────────────
-def call_llama(prompt: str) -> str:
+def call_llama(
+    prompt: str,
+    *,
+    timeout_s: int = 120,
+    n_predict: int | None = None,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+) -> str:
     stats["llama_calls"] += 1
     try:
         t0   = time.time()
@@ -1082,13 +1093,13 @@ def call_llama(prompt: str) -> str:
             f"{LLAMA_URL}/completion",
             json={
                 "prompt":      prompt,
-                "n_predict":   N_PREDICT,
-                "temperature": 0.7,
-                "top_p":       0.9,
+                "n_predict":   int(n_predict if n_predict is not None else N_PREDICT),
+                "temperature": float(temperature),
+                "top_p":       float(top_p),
                 "stop":        stop_tokens,
                 "stream":      False,
             },
-            timeout=120,
+            timeout=max(1, int(timeout_s)),
         )
         elapsed = round(time.time() - t0, 1)
         if resp.status_code == 200:
@@ -1291,7 +1302,13 @@ def _llm_domain_category(domain: str) -> tuple[str, float]:
         ),
         system_text="Clasificador determinista de dominios.",
     )
-    response = call_llama(prompt)
+    response = call_llama(
+        prompt,
+        timeout_s=DOMAIN_CLASSIFIER_LLM_TIMEOUT_S,
+        n_predict=DOMAIN_CLASSIFIER_LLM_N_PREDICT,
+        temperature=0.1,
+        top_p=0.5,
+    )
     m = re.search(r"\{.*\}", response or "", flags=re.S)
     if not m:
         return "otros", 0.4
@@ -1308,13 +1325,19 @@ def _llm_domain_category(domain: str) -> tuple[str, float]:
     return cat, conf
 
 
-def classify_domain(domain: str) -> dict:
+def classify_domain(domain: str, *, allow_llm: bool = True, refresh_cached_otros: bool = False) -> dict:
     cached = db_get_domain_category(domain)
     if cached:
-        return cached
+        if not (
+            allow_llm
+            and refresh_cached_otros
+            and str(cached.get("category") or "") == "otros"
+            and str(cached.get("source") or "") != "llm"
+        ):
+            return cached
     cat, conf = _heuristic_domain_category(domain)
     source = "rule"
-    if FEATURE_DOMAIN_CLASSIFIER and FEATURE_DOMAIN_CLASSIFIER_LLM and cat == "otros":
+    if FEATURE_DOMAIN_CLASSIFIER and FEATURE_DOMAIN_CLASSIFIER_LLM and allow_llm and cat == "otros":
         cat, conf = _llm_domain_category(domain)
         source = "llm"
     db_set_domain_category(domain, cat, conf, source)
@@ -1327,12 +1350,35 @@ def domain_category_breakdown(limit_batches: int = 50, top_n: int = 25) -> dict:
     stats_map = db_get_domain_stats(limit_batches=limit_batches, top_n=max(60, top_n))
     cat_counter = Counter()
     detail = []
+    queue_now = work_queue.qsize()
+    llm_safe_mode = (
+        FEATURE_DOMAIN_CLASSIFIER
+        and FEATURE_DOMAIN_CLASSIFIER_LLM
+        and queue_now <= DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE
+    )
+    llm_budget = max(0, DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST if llm_safe_mode else 0)
+
     for item in stats_map.get("combined", []):
         domain = item.get("domain")
         count = int(item.get("count") or 0)
         if not domain or count <= 0:
             continue
-        cat_info = classify_domain(domain)
+        cached = db_get_domain_category(domain)
+        allow_llm = llm_budget > 0
+        refresh_cached_otros = bool(
+            cached
+            and str(cached.get("category") or "") == "otros"
+            and str(cached.get("source") or "") != "llm"
+        )
+
+        cat_info = classify_domain(
+            domain,
+            allow_llm=allow_llm,
+            refresh_cached_otros=allow_llm and refresh_cached_otros,
+        )
+        if allow_llm and str(cat_info.get("source") or "") == "llm":
+            llm_budget = max(0, llm_budget - 1)
+
         cat = cat_info.get("category") or "otros"
         cat_counter[cat] += count
         detail.append({
@@ -1349,6 +1395,16 @@ def domain_category_breakdown(limit_batches: int = 50, top_n: int = 25) -> dict:
     ]
     return {
         "window_batches": stats_map.get("window_batches", 0),
+        "llm_classifier": {
+            "enabled": FEATURE_DOMAIN_CLASSIFIER_LLM,
+            "safe_mode": llm_safe_mode,
+            "queue_size": queue_now,
+            "max_queue_size": DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE,
+            "max_new_per_request": DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST,
+            "used_budget": max(0, DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST - llm_budget) if llm_safe_mode else 0,
+            "timeout_s": DOMAIN_CLASSIFIER_LLM_TIMEOUT_S,
+            "n_predict": DOMAIN_CLASSIFIER_LLM_N_PREDICT,
+        },
         "categories": categories,
         "domains": detail[:top_n],
     }
@@ -2092,6 +2148,10 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                     "human_explain": FEATURE_HUMAN_EXPLAIN,
                     "domain_classifier": FEATURE_DOMAIN_CLASSIFIER,
                     "domain_classifier_llm": FEATURE_DOMAIN_CLASSIFIER_LLM,
+                    "domain_classifier_llm_max_new_per_request": DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST,
+                    "domain_classifier_llm_timeout_s": DOMAIN_CLASSIFIER_LLM_TIMEOUT_S,
+                    "domain_classifier_llm_n_predict": DOMAIN_CLASSIFIER_LLM_N_PREDICT,
+                    "domain_classifier_llm_max_queue_size": DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE,
                     "portal_risk_message": FEATURE_PORTAL_RISK_MESSAGE,
                     "chat": FEATURE_CHAT,
                     "device_profiling": FEATURE_DEVICE_PROFILING,

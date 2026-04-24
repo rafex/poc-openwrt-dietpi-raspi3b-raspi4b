@@ -54,6 +54,18 @@ spec:
               value: "America/Mexico_City"
             - name: SOCIAL_MIN_HITS
               value: "3"
+            - name: FEATURE_DOMAIN_CLASSIFIER
+              value: "true"
+            - name: FEATURE_DOMAIN_CLASSIFIER_LLM
+              value: "true"
+            - name: DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST
+              value: "2"
+            - name: DOMAIN_CLASSIFIER_LLM_TIMEOUT_S
+              value: "8"
+            - name: DOMAIN_CLASSIFIER_LLM_N_PREDICT
+              value: "48"
+            - name: DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE
+              value: "4"
           volumeMounts:
             - name: analyzer-data
               mountPath: /data
