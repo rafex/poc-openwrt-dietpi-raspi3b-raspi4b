@@ -56,11 +56,11 @@ is_int() {
 json_get() {
   local json="$1"
   local key_path="$2"
-  python3 -c '
-import json, sys
-path = sys.argv[1].split('.')
+  JSON_INPUT="$json" python3 - "$key_path" <<'PY'
+import json, os, sys
+path = sys.argv[1].split(".")
 try:
-    data = json.load(sys.stdin)
+    data = json.loads(os.environ.get("JSON_INPUT", ""))
 except Exception:
     print("")
     raise SystemExit(0)
@@ -77,7 +77,7 @@ elif isinstance(cur, bool):
     print("true" if cur else "false")
 else:
     print(cur)
-' "$key_path" <<<"$json"
+PY
 }
 
 fmt_num() {
