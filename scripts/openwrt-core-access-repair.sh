@@ -38,6 +38,31 @@ router_ssh "
 " || true
 log_ok "blocked_social_ips y blocked_porn_ips vaciados"
 
+log_info "Saneando includes legacy de firewall para captive..."
+router_ssh "
+    for key in \$(uci -q show firewall 2>/dev/null | awk -F= '/=include$/{print \$1}'); do
+        path=\$(uci -q get \"\$key.path\" 2>/dev/null || true)
+        case \"\$path\" in
+            */captive-portal.nft|*/captive-portal-fw4-include.sh)
+                uci -q delete \"\$key\"
+                ;;
+        esac
+    done
+    cat > /etc/captive-portal-fw4-include.sh <<'EOS'
+#!/bin/sh
+nft delete table ip captive 2>/dev/null || true
+nft -f /etc/nftables.d/captive-portal.nft
+exit \$?
+EOS
+    chmod 755 /etc/captive-portal-fw4-include.sh
+    uci set firewall.captive_portal_nft='include'
+    uci set firewall.captive_portal_nft.type='script'
+    uci set firewall.captive_portal_nft.path='/etc/captive-portal-fw4-include.sh'
+    uci set firewall.captive_portal_nft.enabled='1'
+    uci commit firewall
+" || true
+log_ok "Include de firewall saneado"
+
 log_info "Reiniciando firewall y recargando dnsmasq..."
 router_ssh "/etc/init.d/firewall restart" || die "No se pudo reiniciar firewall"
 router_ssh "/etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart" || true
@@ -59,4 +84,3 @@ log_ok "Reparación completada."
 log_info "Siguiente paso recomendado:"
 printf '  1) ejecutar setup-openwrt.sh actualizado\n'
 printf '  2) verificar con openwrt-captive-doctor.sh\n'
-

@@ -26,12 +26,13 @@ log_ok "Archivo presente: /etc/nftables.d/captive-portal.nft"
 
 log_info "Configurando include UCI en firewall (fw4)..."
 router_ssh "
-    # Limpiar includes legacy (anónimos o nombrados) que apunten al captive portal
-    for sec in \$(uci show firewall 2>/dev/null | sed -n \"s/^firewall\\.\\([^=]*\\)=include$/\\1/p\"); do
-        path=\$(uci -q get firewall.\$sec.path 2>/dev/null || true)
+    # Limpiar includes legacy (anónimos o nombrados) que apunten al captive portal.
+    # Nota: usar clave completa (ej. firewall.@include[0]) evita errores con [ ].
+    for key in \$(uci -q show firewall 2>/dev/null | awk -F= '/=include$/{print \$1}'); do
+        path=\$(uci -q get \"\$key.path\" 2>/dev/null || true)
         case \"\$path\" in
             */captive-portal.nft|*/captive-portal-fw4-include.sh)
-                uci -q delete firewall.\$sec
+                uci -q delete \"\$key\"
                 ;;
         esac
     done
