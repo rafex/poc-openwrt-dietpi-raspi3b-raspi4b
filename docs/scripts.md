@@ -396,6 +396,27 @@ Muestra:
 
 ---
 
+## mqtt-queue-status.sh
+
+**Propósito:** estado detallado del broker Mosquitto y de la cola/procesamiento del `ai-analyzer`.  
+**Ejecutar en:** RafexPi4B
+
+```bash
+bash scripts/mqtt-queue-status.sh
+bash scripts/mqtt-queue-status.sh --watch
+bash scripts/mqtt-queue-status.sh --watch --interval 5
+```
+
+Muestra:
+- servicio `mosquitto`, PID y puerto `1883`
+- métricas `$SYS` del broker (clientes, subscripciones, mensajes, bytes)
+- estado de cola del analyzer (`pending`, `processing`, `queue_size`)
+- procesados OK/error, `batches_received`, `llama_calls`, `llama_errors`
+- estado del pod `ai-analyzer` en k3s y conteo de errores/warnings recientes en logs
+- resumen de SQLite (`batches` por status y último `batch_id`) si el archivo está disponible
+
+---
+
 ## openwrt-allow-client.sh
 
 **Propósito:** Autorizar manualmente una IP en el captive portal.  
