@@ -56,7 +56,7 @@ is_int() {
 json_get() {
   local json="$1"
   local key_path="$2"
-  python3 - "$key_path" <<'PY' <<<"$json"
+  python3 -c '
 import json, sys
 path = sys.argv[1].split('.')
 try:
@@ -77,7 +77,7 @@ elif isinstance(cur, bool):
     print("true" if cur else "false")
 else:
     print(cur)
-PY
+' "$key_path" <<<"$json"
 }
 
 fmt_num() {
