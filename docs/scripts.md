@@ -378,6 +378,24 @@ Comportamiento:
 
 ---
 
+## llm-status.sh
+
+**Propósito:** diagnóstico detallado del LLM, incluyendo qué modelo está corriendo realmente.  
+**Ejecutar en:** RafexPi4B
+
+```bash
+bash scripts/llm-status.sh
+```
+
+Muestra:
+- estado del servicio `/etc/init.d/llama-server`
+- PID en ejecución (si existe)
+- health HTTP en `:8081`
+- modelo en ejecución (leído de `/proc/<pid>/cmdline`)
+- modelo configurado en el servicio (fallback)
+
+---
+
 ## openwrt-allow-client.sh
 
 **Propósito:** Autorizar manualmente una IP en el captive portal.  
