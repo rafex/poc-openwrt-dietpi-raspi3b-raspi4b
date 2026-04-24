@@ -313,3 +313,186 @@ podman build --cgroup-manager=cgroupfs --platform linux/arm64 \
 podman save localhost/ai-analyzer:latest | k3s ctr images import -
 kubectl rollout restart deployment/ai-analyzer
 ```
+
+---
+
+---
+
+# PLAN — Mejoras al Sensor y al Analizador IA (Python)
+
+> Estado general: ✅ Fases 1-4 completadas — Fase 5 opcional pendiente
+> Última actualización: 2026-04-24
+> Implementado en sesión continua; todos los cambios en `sensor/sensor.py` y `backend/ai-analyzer/analyzer.py`
+
+## Contexto
+
+Tras analizar el código actual de `sensor/sensor.py` y `backend/ai-analyzer/analyzer.py` se identificaron
+10 brechas concretas entre los datos que el sensor captura, lo que llega al LLM y las decisiones que
+el sistema toma. Este plan las corrige por fases priorizando impacto alto y riesgo bajo.
+
+## Brechas identificadas
+
+| # | Archivo | Brecha | Impacto |
+|---|---|---|---|
+| B1 | analyzer.py | `_prompt_body()` ignora `client_domain_counts`, `dhcp_devices`, `captive_allowed`, `http_requests` | LLM no sabe qué dispositivo hace qué |
+| B2 | analyzer.py | `call_llama()` usa temperatura/tokens fijos para todas las tareas | Política con temp=0.7 es no determinista; chat podría ser más creativo |
+| B3 | analyzer.py | `evaluate_and_apply_social_policy()` llama LLM aunque esté fuera del horario | ~50% llamadas innecesarias |
+| B4 | analyzer.py | `FEATURE_DOMAIN_CLASSIFIER_LLM=false` — dominios desconocidos siempre quedan como "otros" | Clasificación incompleta en producción |
+| B5 | analyzer.py | `detect_behavior_alerts()` no correlaciona dominios DGA con `captive_allowed` | No sabe si el cliente está o no autorizado en el portal |
+| B6 | analyzer.py | `infer_and_store_device_profiles()` ignora `dhcp_devices` (hostname+MAC) | Perfiles sin nombre real del dispositivo |
+| B7 | sensor.py | `risky_port` se dispara para IPs internas del sistema (Raspis, router) | Falsos positivos permanentes |
+| B8 | analyzer.py | `summary_worker_thread` siempre usa 6 batches (~3 min) sin importar actividad | Resúmenes automáticos muy cortos en redes activas |
+| B9 | analyzer.py | `_latest_context_for_chat()` consulta 4 funciones DB en cada pregunta | Latencia en chat; sin caché |
+| B10 | sensor.py + analyzer.py | `http_requests` con rutas completas se capturan pero nunca llegan al LLM | Rutas `/login`, `/admin`, `/wp-admin` ignoradas |
+
+---
+
+## Fase 1 — Prompt enrichment y temperatura diferenciada
+
+> Estado: ✅ Completada
+
+### 1.1 Enriquecer `_prompt_body()` — `analyzer.py`
+
+- [x] Añadir top 2 entradas de `client_domain_counts` (cliente más activo + sus top 3 dominios con conteo `×N`)
+- [x] Añadir conteo de `captive_allowed` (número de IPs autorizadas en el portal cautivo)
+- [x] Añadir top 2 `http_requests` si existen (líneas literales `METHOD http://host/uri`)
+- [x] Añadir hostname DHCP en `top_talkers` mostrando `ip(hostname)` en lugar de solo IP
+
+**Implementado:** prompt pasa de ~120 a ~180 tokens con 3 líneas nuevas:
+```
+Clientes_top:192.168.1.5(laptop)→youtube.com×12,google.com×4,fbcdn.net×2; ...
+Portal_autorizados:3
+HTTP_req:GET http://example.com/wp-login.php; POST http://192.168.1.1/admin
+```
+
+### 1.2 Temperatura diferenciada en `call_llama()` — `analyzer.py`
+
+- [x] `call_llama()` ya aceptaba `temperature`, `top_p`, `n_predict` — se pasaron valores específicos en cada sitio de llamada
+
+| Tarea | `temperature` | `top_p` | Sitio |
+|---|---|---|---|
+| Análisis SOC (`analysis`) | 0.4 | 0.85 | `analyze_and_store()` |
+| Decisión de política (`action`) | 0.1 | 0.5 | `evaluate_and_apply_social_policy()` |
+| Explicación humana (`human_explain`) | 0.6 | 0.9 | `build_human_explanation()` |
+| Clasificador de dominio (`domain_classifier`) | 0.05 | 0.3 | `_llm_domain_category()` (ya existía) |
+| Chat interactivo (`chat`) | 0.75 | 0.95 | `_chat_answer()` |
+
+---
+
+## Fase 2 — Reducción de llamadas LLM innecesarias
+
+> Estado: ✅ Completada
+
+### 2.1 Short-circuit en `evaluate_and_apply_social_policy()` — `analyzer.py`
+
+- [x] Si `not in_window AND not social_block_active` → retorna `noop` inmediatamente sin llamar LLM
+- [x] Si `not in_window AND social_block_active` → llama `router_mcp.remove_social_block()` directamente y retorna, sin LLM
+- [x] LLM solo se invoca cuando `in_window=True` (dentro de ventana 9h-17h por defecto)
+- [x] Logging de debug con `"social_policy short-circuit: fuera de ventana"` para trazabilidad
+
+**Ahorro real:** en horario 17h–9h (16 horas/día) se evitan 1–3 llamadas LLM por batch. Con batch cada 30 s → ~1920 llamadas evitadas por noche.
+
+### 2.2 Cache en memoria de clasificación de dominios — `analyzer.py`
+
+- [x] Añadir `_domain_cache: dict[str, tuple[dict, float]]` con TTL=300s y `_domain_cache_lock`
+- [x] `classify_domain()` consulta caché en memoria → SQLite → heurística/LLM (en ese orden)
+- [x] Al obtener resultado de SQLite o LLM, lo escribe en caché con `time.time() + 300`
+- [x] Caché respeta el flag `refresh_cached_otros` para forzar reclasificación LLM
+- **Nota:** no se invalida explícitamente al escribir; el TTL corto (5 min) es suficiente para dominios que cambian de categoría raramente
+
+---
+
+## Fase 3 — Mejoras al sensor
+
+> Estado: ✅ Completada
+
+### 3.1 Filtrar `risky_port` para IPs internas — `sensor.py`
+
+- [ ] Definir `INTERNAL_IPS` con Sensor IP, Portal IP, Router IP
+- [ ] En la detección de `risky_port`, verificar que la IP origen no esté en `INTERNAL_IPS`
+- [ ] Mismo filtro para `port_scan` y `host_scan`
+
+### 3.2 Detectar y enviar `suspicious_http_requests` — `sensor.py`
+
+- [ ] Definir `SUSPECT_URI_PATTERNS = ["/admin", "/login", "/wp-", "/.env", "/shell", "/cmd", "/config"]`
+- [ ] En `add()`, filtrar `http_uris` con estos patrones → `self.suspicious_http[]`
+- [ ] En `summarize()` incluir `"suspicious_http_requests": self.suspicious_http[:10]`
+
+### 3.3 Capturar `ip_to_mac` en el batch — `sensor.py`
+
+- [ ] En `add()`, guardar `self.ip_to_mac[src] = eth_src` cuando `eth.src` esté presente
+- [ ] En `summarize()` incluir `"ip_to_mac": dict(list(self.ip_to_mac.items())[:30])`
+- [ ] Permite al analyzer correlacionar IP → MAC → hostname DHCP sin SSH adicional
+
+---
+
+## Fase 4 — Mejoras internas del analyzer
+
+> Estado: ✅ Completada
+
+### 4.1 Enriquecer device profiles con hostname DHCP — `analyzer.py`
+
+- [ ] Añadir columna `hostname TEXT` a tabla `device_profiles` (migración segura con `ALTER TABLE IF NOT EXISTS`)
+- [ ] En `infer_and_store_device_profiles()`, cruzar `client_ip` con `dhcp_devices` del batch
+- [ ] Si hay hostname DHCP, añadirlo a `reasons` y guardarlo en el perfil
+- [ ] Actualizar `db_upsert_device_profile()` para aceptar y guardar `hostname`
+
+### 4.2 Cache de contexto para chat — `analyzer.py`
+
+- [ ] Añadir `_chat_context_cache: dict` y `_chat_context_ts: float` como globales
+- [ ] En `_latest_context_for_chat()`, retornar cache si `time.time() - _chat_context_ts < 30`
+- [ ] Invalidar cache cuando llega un nuevo batch con alertas `severity=high`
+
+### 4.3 Alertas correlacionadas DGA + captive status — `analyzer.py`
+
+- [ ] En `detect_behavior_alerts()`, para cada `rare_domain`, buscar en `client_domain_counts` qué IP lo consultó
+- [ ] Cruzar esa IP contra `captive_allowed` del batch
+- [ ] Si la IP no está autorizada → `severity=critical`; si está autorizada → `severity=high`
+- [ ] Añadir campos `source_ip` y `not_authorized` a la alerta
+
+### 4.4 Ventana adaptativa en `summary_worker_thread` — `analyzer.py`
+
+- [ ] Función `_adaptive_batch_limit()` que devuelve 6/12/20 según `stats["batches_received"]`
+- [ ] `_generate_summary_text()` usa el límite adaptativo en lugar del hardcoded `6`
+
+---
+
+## Fase 5 — Nuevas capacidades (opcionales para la demo)
+
+> Estado: ⏳ Pendiente
+
+- [ ] **5.1** Push de alertas al portal Lentium cuando `severity=high` (HTTP interno entre pods)
+- [ ] **5.2** Habilitar `FEATURE_DOMAIN_CLASSIFIER_LLM=true` con presupuesto ≤3 clasificaciones/batch y `temperature=0.05`
+- [ ] **5.3** Correlacionar registros del portal Lentium (redes sociales declaradas) con perfiles de dominio del analyzer
+
+---
+
+## Métricas esperadas tras Fases 1–4
+
+| Métrica | Antes | Después |
+|---|---|---|
+| Llamadas LLM por batch (fuera de horario) | 3 | 1 |
+| Tokens al LLM en prompt de análisis | ~120 | ~180 |
+| Falsos positivos `risky_port` por IPs internas | sí | no |
+| Perfiles de dispositivo con hostname real | nunca | cuando DHCP disponible |
+| Latencia del chat (consulta DB por pregunta) | sin caché | caché 30 s |
+| Dominios DGA correlacionados con portal status | no | sí |
+
+---
+
+## Progreso
+
+| Fase | Tarea | Estado |
+|---|---|---|
+| 1.1 | Enriquecer `_prompt_body()` | ✅ Completada |
+| 1.2 | Temperatura diferenciada en `call_llama()` | ✅ Completada |
+| 2.1 | Short-circuit política social | ✅ Completada |
+| 2.2 | Cache clasificación dominios | ✅ Completada |
+| 3.1 | Filtrar `risky_port` IPs internas | ✅ Completada |
+| 3.2 | `suspicious_http_requests` en sensor | ✅ Completada |
+| 3.3 | `ip_to_mac` en batch sensor | ✅ Completada |
+| 4.1 | Device profiles con hostname DHCP | ✅ Completada |
+| 4.2 | Cache contexto chat | ✅ Completada |
+| 4.3 | Alertas DGA + captive correlacionadas | ✅ Completada |
+| 4.4 | Ventana adaptativa en summary worker | ✅ Completada |
+| 5.x | Capacidades opcionales demo | ⏳ Pendiente |

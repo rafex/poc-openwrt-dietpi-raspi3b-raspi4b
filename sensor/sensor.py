@@ -81,6 +81,25 @@ TSHARK_FIELDS = [
 PROTO_NAMES = {1: "ICMP", 6: "TCP", 17: "UDP", 2: "IGMP", 58: "ICMPv6"}
 LAN_PREFIX  = "192.168.1."
 
+# IPs propias del sistema que no deben generar alertas de risky_port
+SYSTEM_IPS = {
+    os.environ.get("SENSOR_IP",     "192.168.1.181"),
+    os.environ.get("RASPI4B_IP",    "192.168.1.167"),
+    os.environ.get("ROUTER_IP",     "192.168.1.1"),
+    os.environ.get("PORTAL_NODE_IP","192.168.1.182"),
+    os.environ.get("AP_EXTENDER_IP","192.168.1.183"),
+}
+
+# Patrones URI sospechosos — se detectan en peticiones HTTP planas
+import re as _re
+_SUSPICIOUS_URI_PATTERNS = [
+    _re.compile(r"(?i)(\.php\?|/admin|/wp-login|/xmlrpc|/shell|/cmd|/eval)"),
+    _re.compile(r"(?i)(union\s+select|%27|%3cscript|<script|javascript:)"),
+    _re.compile(r"(?i)(\.\./|%2e%2e|etc/passwd|/proc/self)"),
+    _re.compile(r"(?i)(wget|curl)\s+http"),
+    _re.compile(r"(?i)/api/v[0-9]+/(user|token|auth|login|reset)"),
+]
+
 # ─── Utilidades ──────────────────────────────────────────────────────────────
 def fmt_bytes(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB"):
@@ -134,9 +153,11 @@ class TrafficAggregator:
             self.http_hosts  = []
             self.tls_sni_hosts = []
             self.http_uris   = []
+            self.suspicious_http = []             # Fase 3.2 — URIs con patrones maliciosos
             self.arps        = []
             self.client_domain_counts = defaultdict(lambda: defaultdict(int))
             self.client_domain_dsts = defaultdict(lambda: defaultdict(set))
+            self.ip_to_mac   = {}                 # Fase 3.3 — ip → mac (eth.src observada)
 
     def add(self, line: str):
         """Parsea una línea de tshark y acumula sus datos."""
@@ -160,6 +181,7 @@ class TrafficAggregator:
             http_uri   = parts[13]
             arp_src    = parts[14]
             arp_dst    = parts[15]
+            eth_src    = parts[17].split(",")[0]   # Fase 3.3 — MAC del emisor
             tls_sni    = parts[19]
 
             plen = int(length_raw) if length_raw.isdigit() else 0
@@ -221,10 +243,25 @@ class TrafficAggregator:
                                     self.client_domain_dsts[src][host].add(dst)
 
                 if http_uri and http_host:
-                    self.http_uris.append(f"{http_method} http://{http_host}{http_uri}")
+                    full_req = f"{http_method} http://{http_host}{http_uri}"
+                    self.http_uris.append(full_req)
+                    # Fase 3.2 — detectar patrones maliciosos en URIs HTTP
+                    if any(p.search(http_uri) for p in _SUSPICIOUS_URI_PATTERNS):
+                        if len(self.suspicious_http) < 30:
+                            self.suspicious_http.append({
+                                "src":     src,
+                                "host":    http_host,
+                                "method":  http_method,
+                                "uri":     http_uri,
+                                "request": full_req,
+                            })
 
                 if arp_src and arp_dst:
                     self.arps.append({"src": arp_src, "dst": arp_dst})
+
+                # Fase 3.3 — mapear IP → MAC para LAN
+                if src and eth_src and src.startswith(LAN_PREFIX) and src not in self.ip_to_mac:
+                    self.ip_to_mac[src] = eth_src
 
         except Exception as e:
             log.debug("parse error: %s — %r", e, line[:100])
@@ -243,9 +280,11 @@ class TrafficAggregator:
 
             suspicious = []
 
-            # Detección de escaneo de puertos
+            # Detección de escaneo de puertos (excluir IPs del sistema)
             for src, ports in self.src_ports.items():
-                if len(ports) >= 15 and not src.startswith(LAN_PREFIX + "1."):
+                if src in SYSTEM_IPS:
+                    continue
+                if len(ports) >= 15:
                     suspicious.append({
                         "type":   "port_scan",
                         "src":    src,
@@ -253,8 +292,10 @@ class TrafficAggregator:
                         "ports":  sorted(ports)[:20],
                     })
 
-            # Detección de escaneo de hosts
+            # Detección de escaneo de hosts (excluir IPs del sistema)
             for src, dsts in self.src_dsts.items():
+                if src in SYSTEM_IPS:
+                    continue
                 if len(dsts) >= 20:
                     suspicious.append({
                         "type":   "host_scan",
@@ -262,8 +303,10 @@ class TrafficAggregator:
                         "detail": f"contactó {len(dsts)} hosts distintos",
                     })
 
-            # Alto volumen de tráfico
+            # Alto volumen de tráfico (excluir IPs del sistema)
             for src, byt in self.src_bytes.items():
+                if src in SYSTEM_IPS:
+                    continue
                 mbps = (byt * 8) / duration / 1_000_000
                 if mbps > 5:
                     suspicious.append({
@@ -272,14 +315,22 @@ class TrafficAggregator:
                         "detail": f"{mbps:.1f} Mbps enviados",
                     })
 
-            # Puertos sospechosos contactados
+            # Puertos sospechosos — solo IPs externas o LAN no-sistema (Fase 3.1)
             risky_ports = {22, 23, 3389, 5900, 445, 139, 1433, 3306, 5432}
             for port, count in self.dst_ports.items():
                 if port in risky_ports and count > 5:
+                    # Buscar la IP origen que más contactó este puerto
+                    offender_srcs = [
+                        ip for ip, ports in self.src_ports.items()
+                        if port in ports and ip not in SYSTEM_IPS
+                    ]
+                    if not offender_srcs:
+                        continue   # solo IPs del sistema usaron este puerto → ignorar
                     suspicious.append({
                         "type":   "risky_port",
                         "port":   port,
                         "detail": f"puerto {port} contactado {count} veces",
+                        "srcs":   offender_srcs[:5],
                     })
 
             lan_devices = sorted(set(
@@ -322,9 +373,11 @@ class TrafficAggregator:
                     client: {domain: sorted(list(ips))[:20] for domain, ips in domain_map.items()}
                     for client, domain_map in self.client_domain_dsts.items()
                 },
-                "suspicious":       suspicious,
-                "arp_events":       self.arps[:30],
-                "lan_devices":      lan_devices[:30],
+                "suspicious":                suspicious,
+                "suspicious_http_requests":  list(self.suspicious_http),   # Fase 3.2
+                "ip_to_mac":                 dict(self.ip_to_mac),          # Fase 3.3
+                "arp_events":                self.arps[:30],
+                "lan_devices":               lan_devices[:30],
             }
 
 
