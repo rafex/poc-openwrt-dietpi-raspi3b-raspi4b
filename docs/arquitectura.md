@@ -1,6 +1,54 @@
 # Arquitectura del PoC — Captive Portal + IA Local en Red WiFi
 
-## Visión general
+> Documentación técnica detallada. Para la visión general dirigida a personas, ver [vision-general.md](vision-general.md).
+
+## Diagrama de arquitectura
+
+```mermaid
+graph TD
+    Internet(("🌐 Internet"))
+    Router["🔌 OpenWrt 25\nTP-Link TL-WDR3600\n192.168.1.1\nnftables · dnsmasq · DHCP"]
+    AP["📡 AP phy0-ap0\n'INFINITUM MOVIL'\n2.4 GHz WPA2"]
+    WAN["WAN phy1-sta0\n5 GHz upstream"]
+    Cliente["📱 Clientes WiFi\n192.168.1.x\nlease 120 min"]
+
+    subgraph k3s ["k3s — RafexPi4B (192.168.1.167) — DietPi arm64"]
+        Traefik["Traefik :80\nexternalTrafficPolicy:Local\nX-Forwarded-For → IP real"]
+        PortalL["Pod captive-portal-lentium ✅ 2/2\nnginx + Python :8080\nSQLite lentium.db"]
+        PortalC["Pod captive-portal ⏸️ 0/1\nnginx + Python :8080\n(respaldo)"]
+        Analyzer["Pod ai-analyzer 1/1\nPython :5000\nSQLite sensor.db\nSSE /api/stream"]
+        DnsSpoof["Pod dns-spoof 1/1\nnginx — demo DNS poisoning"]
+    end
+
+    Mosquitto["🦟 Mosquitto :1883\ninit.d — fuera de k3s\ntopic: rafexpi/sensor/batch"]
+    LlamaServer["🦙 llama-server :8081\ninit.d — fuera de k3s\nTinyLlama 1.1B Q4_K_M\nChatML · 4096 ctx · 4 threads"]
+
+    Pi3B["🔬 RafexPi3B-A\n192.168.1.181\nDietPi arm32"]
+    Sensor["sensor.py\ntshark eth0 promiscuo\n20 campos · batch 30s\nMQTT QoS=1"]
+    SSH_Router["SSH al router\nconntrack · DHCP leases\ncaptive_allowed · ip_to_mac"]
+
+    Admin["💻 Laptop admin\n192.168.1.113\nallowlist timeout=0s"]
+
+    Internet -->|upstream WiFi 5GHz| WAN
+    WAN --> Router
+    Router --> AP
+    AP -->|DHCP 192.168.1.x| Cliente
+    Cliente -->|HTTP tcp:80 → DNAT| Traefik
+    Traefik --> PortalL
+    Traefik -.->|inactivo| PortalC
+    PortalL -->|SSH nft add allowed_clients| Router
+    Pi3B --- Sensor
+    Sensor -->|enriquece batch| SSH_Router
+    SSH_Router -->|ssh root@192.168.1.1| Router
+    Sensor -->|MQTT publish QoS=1| Mosquitto
+    Sensor -.->|HTTP fallback POST /api/ingest| Analyzer
+    Mosquitto -->|subscribe on_mqtt_message| Analyzer
+    Analyzer -->|POST /completion| LlamaServer
+    Analyzer -->|SSE broadcast| Admin
+    Admin -->|kubectl · ssh| k3s
+```
+
+## Visión general (texto)
 
 PoC educativo de seguridad en redes públicas que combina hardware real (Raspberry Pi 3B + 4B + router OpenWrt) con un LLM local. El sistema captura tráfico de red real, lo analiza con TinyLlama en batches y lo presenta en dashboards en vivo.
 
@@ -130,6 +178,8 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
 ---
 
 ## Flujo completo — cliente WiFi nuevo (portal Lentium)
+
+> Versión detallada con diagrama en [portales.md](portales.md).
 
 ```
 1. Cliente conecta al WiFi "INFINITUM MOVIL"
@@ -353,3 +403,7 @@ Solución: copiar los HTML dentro de la imagen Docker y servirlos con `open().re
 | Raspberry Pi 4B | RafexPi4B | 192.168.1.167 | d8:3a:dd:4d:4b:ae | DietPi Debian trixie arm64 |
 | Raspberry Pi 3B | RafexPi3B | 192.168.1.181 | b8:27:eb:5a:ec:33 | DietPi Debian arm |
 | Laptop admin | — | 192.168.1.113 | — | — |
+
+---
+
+← [Portales](portales.md) | [Índice](../README.md) | [LLM →](llm.md)
