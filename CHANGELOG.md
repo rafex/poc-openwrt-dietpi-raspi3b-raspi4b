@@ -2,6 +2,41 @@
 
 Todos los cambios significativos de este proyecto están documentados en este archivo.
 
+## [0.3.0] - 2026-04-24
+
+### ✨ Características
+
+- **Herramientas de Diagnóstico**: 
+  - `llm-status.sh` - Inspección detallada de llama-server (PID, modelo cargado, health check HTTP)
+  - `mqtt-queue-status.sh` - Diagnóstico integral de broker Mosquitto y cola IA (con modo `--watch`)
+- **Bundle AI Stack Modular**: `setup-raspi4b-ai-stack.sh` para instalar solo stack IA sin portales
+- **Soporte Modelos Personalizados**: Flag `--model-path=/ruta/modelo.gguf` en `setup-raspi4b-llm.sh`
+- **Control Inteligente de LLM**:
+  - Sistema de budgeting en clasificador de dominios
+  - Safe-mode adaptativo basado en tamaño de cola
+  - Parámetros configurables: timeout, n_predict, temperature, top_p
+  - Métricas expuestas en `/api/stats`
+
+### 🔧 Cambios Técnicos
+
+- **OpenWrt**: Migración de nftables a `/etc/captive-portal.nft` (fuera de `/etc/nftables.d` para evitar parseo automático de fw4)
+- **Búsqueda de Modelos**: Patrones más flexibles y fallback robusto con `find()` 
+- **LLM**: Parámetros en `call_llama()` ahora son configurables (timeout_s, n_predict, temperature, top_p)
+- **Portabilidad**: Mejoras en compatibilidad de Python y manejo de redirecciones en scripts
+
+### 🐛 Correcciones
+
+- **openwrt-core-access-repair.sh**: Manejo mejorado de errores en firewall restart (tolera warnings de tabla inet fw4)
+- **mqtt-queue-status.sh**: Compatibilidad con shells restrictivos (migración de stdin a variables de entorno)
+- **Dominio Classifier**: Refresco selectivo de categorías cached como "otros" solo si vienen de reglas
+
+### 📦 Variables de Entorno Nuevas
+
+- `DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST` (default: 2)
+- `DOMAIN_CLASSIFIER_LLM_TIMEOUT_S` (default: 8)
+- `DOMAIN_CLASSIFIER_LLM_N_PREDICT` (default: 48)
+- `DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE` (default: 4)
+
 ## [0.2.0] - 2026-04-22
 
 ### ✨ Características

@@ -157,6 +157,24 @@ Aplica:
 - `kubectl apply` deployment/svc/ingress de analyzer
 - `rollout restart` + verificación de endpoints (`/health`, `/dashboard`, `/terminal`, `/rulez`)
 
+### setup-raspi4b-ai-stack.sh
+
+**Propósito:** bundle mínimo de IA en Raspi4B (solo `mosquitto` + `llama.cpp` + `ai-analyzer`).
+
+```bash
+sudo bash scripts/setup-raspi4b-ai-stack.sh
+sudo bash scripts/setup-raspi4b-ai-stack.sh --no-build
+sudo bash scripts/setup-raspi4b-ai-stack.sh --skip-llm
+```
+
+Aplica:
+- `setup-raspi4b-mosquitto.sh`
+- `setup-raspi4b-llm.sh`
+- `setup-raspi4b-ai-analyzer.sh`
+- verificación final de pantallas clave: `/dashboard` y `/rulez`
+
+No despliega portales.
+
 ### setup-raspi4b-portals.sh
 
 **Propósito:** desplegar solo portales (clásico + lentium) en k3s.
@@ -357,6 +375,45 @@ Comportamiento:
 - `off`: detiene `/etc/init.d/llama-server` y desactiva watchdog (`/etc/cron.d/llama-watchdog`)
 - `on`: arranca `llama-server` y reactiva watchdog
 - `status`: muestra PID, health HTTP en `:8081` y estado watchdog
+
+---
+
+## llm-status.sh
+
+**Propósito:** diagnóstico detallado del LLM, incluyendo qué modelo está corriendo realmente.  
+**Ejecutar en:** RafexPi4B
+
+```bash
+bash scripts/llm-status.sh
+```
+
+Muestra:
+- estado del servicio `/etc/init.d/llama-server`
+- PID en ejecución (si existe)
+- health HTTP en `:8081`
+- modelo en ejecución (leído de `/proc/<pid>/cmdline`)
+- modelo configurado en el servicio (fallback)
+
+---
+
+## mqtt-queue-status.sh
+
+**Propósito:** estado detallado del broker Mosquitto y de la cola/procesamiento del `ai-analyzer`.  
+**Ejecutar en:** RafexPi4B
+
+```bash
+bash scripts/mqtt-queue-status.sh
+bash scripts/mqtt-queue-status.sh --watch
+bash scripts/mqtt-queue-status.sh --watch --interval 5
+```
+
+Muestra:
+- servicio `mosquitto`, PID y puerto `1883`
+- métricas `$SYS` del broker (clientes, subscripciones, mensajes, bytes)
+- estado de cola del analyzer (`pending`, `processing`, `queue_size`)
+- procesados OK/error, `batches_received`, `llama_calls`, `llama_errors`
+- estado del pod `ai-analyzer` en k3s y conteo de errores/warnings recientes en logs
+- resumen de SQLite (`batches` por status y último `batch_id`) si el archivo está disponible
 
 ---
 

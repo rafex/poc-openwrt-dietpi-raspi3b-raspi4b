@@ -24,8 +24,9 @@ check_warn() { log_warn "$*"; FAIL=1; }
 
 # 1) DHCP option 114 (URL del portal) y DNS option 6
 OPTS="$(router_ssh "uci -q get dhcp.lan.dhcp_option 2>/dev/null || true")"
-OPT114="$(printf '%s\n' "$OPTS" | grep '^114,' | tail -1)"
-OPT6="$(printf '%s\n' "$OPTS" | grep '^6,' | tail -1)"
+OPTS_SPLIT="$(printf '%s\n' "$OPTS" | tr ' ' '\n')"
+OPT114="$(printf '%s\n' "$OPTS_SPLIT" | grep '^114,' | tail -1)"
+OPT6="$(printf '%s\n' "$OPTS_SPLIT" | grep '^6,' | tail -1)"
 
 if [ -n "$OPT114" ] && printf '%s' "$OPT114" | grep -q "http://$PORTAL_IP/portal"; then
   check_ok "DHCP option 114 OK: $OPT114"
@@ -42,7 +43,7 @@ fi
 # 2) DNS de detección captive -> portal_ip
 check_dns_domain() {
   dom="$1"
-  resolved="$(router_ssh "nslookup '$dom' 127.0.0.1 2>/dev/null | awk '/^Address [0-9]+: /{print \$3}' | tail -1")"
+  resolved="$(router_ssh "nslookup '$dom' 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1")"
   if [ "$resolved" = "$PORTAL_IP" ]; then
     check_ok "DNS $dom -> $resolved"
   else

@@ -257,6 +257,19 @@
       font-weight: 700;
       text-align: center;
     }
+    .risk-banner {
+      display: none;
+      margin: 0 0 14px;
+      background: #e8f3ff;
+      border: 1px solid #8ab8e6;
+      color: #0b3a66;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-weight: 600;
+      text-align: left;
+      font-size: 0.86rem;
+      line-height: 1.4;
+    }
     .blocked-box {
       background: #10243a;
       border: 1px solid #2b4f73;
@@ -288,6 +301,7 @@
 
     <div class="main-content" id="appContainer">
       <div id="policyWarning" class="warn-banner"></div>
+      <div id="riskMessage" class="risk-banner"></div>
 
       <div class="case-tabs">
         <div class="tab-btn active" id="tabCliente">📱 Soy Cliente</div>
@@ -310,11 +324,12 @@
 <script>
 (function(){
   const REDIRECT_URL = 'https://theworldofrafex.blog/';
-  const REDIRECT_DELAY_MS = 5000;
+  const REDIRECT_DELAY_MS = 3000;
   const dynamic   = document.getElementById('dynamicContent');
   const tabC      = document.getElementById('tabCliente');
   const tabI      = document.getElementById('tabInvitado');
   const warningBox = document.getElementById('policyWarning');
+  const riskBox = document.getElementById('riskMessage');
   const BLOCKED_ART = [
     '/blocked-art/art-01.svg','/blocked-art/art-02.svg','/blocked-art/art-03.svg',
     '/blocked-art/art-04.svg','/blocked-art/art-05.svg','/blocked-art/art-06.svg',
@@ -335,11 +350,20 @@
   }
 
   function scheduleRedirect(msgBox, btn, okText) {
-    showMsg(msgBox, 'ok', okText + ' Redirigiendo en 5 segundos...');
+    const t0 = Date.now();
+    function renderTick() {
+      const leftMs = Math.max(0, REDIRECT_DELAY_MS - (Date.now() - t0));
+      const leftS = Math.ceil(leftMs / 1000);
+      showMsg(msgBox, 'ok', `${okText} Redirigiendo en ${leftS}s...`);
+      if (leftMs <= 0) window.location.href = REDIRECT_URL;
+    }
     setBtn(btn, true, '⏳ Redirigiendo...');
-    setTimeout(() => {
-      window.location.href = REDIRECT_URL;
-    }, REDIRECT_DELAY_MS);
+    renderTick();
+    const timer = setInterval(() => {
+      const leftMs = Math.max(0, REDIRECT_DELAY_MS - (Date.now() - t0));
+      if (leftMs <= 0) clearInterval(timer);
+      renderTick();
+    }, 250);
   }
 
   function validate(fields) {
@@ -450,6 +474,13 @@
           warningBox.style.display = 'none';
           warningBox.innerHTML = '';
         }
+        if (ctx && ctx.risk_message) {
+          riskBox.style.display = 'block';
+          riskBox.textContent = 'Aviso IA: ' + ctx.risk_message;
+        } else {
+          riskBox.style.display = 'none';
+          riskBox.textContent = '';
+        }
       })
       .catch(() => {});
   }
@@ -487,7 +518,7 @@
       </div>
       <div class="terms-note">
         Al conectarte aceptas los Términos de uso de Lentium.<br>
-        Tu sesión expirará automáticamente tras 2 horas de inactividad.
+        Tendrás acceso a internet por 120 minutos; después debes autenticarte de nuevo.
       </div>
     `;
 
@@ -568,7 +599,7 @@
       </div>
       <div class="terms-note">
         Al registrarte aceptas que Lentium guarde tus datos durante tu sesión.<br>
-        No compartimos tu información con… bueno, nadie que importe.
+        Tendrás acceso a internet por 120 minutos; después debes autenticarte de nuevo.
       </div>
     `;
 

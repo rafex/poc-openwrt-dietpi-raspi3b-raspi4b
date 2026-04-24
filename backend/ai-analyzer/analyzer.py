@@ -30,9 +30,11 @@ import re
 import sqlite3
 import threading
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import paho.mqtt.client as mqtt
@@ -54,6 +56,11 @@ ROUTER_IP     = os.environ.get("ROUTER_IP", "192.168.1.1")
 ROUTER_USER   = os.environ.get("ROUTER_USER", "root")
 SSH_KEY       = os.environ.get("SSH_KEY", "/opt/keys/captive-portal")
 PORTAL_IP     = os.environ.get("PORTAL_IP", "192.168.1.167")
+ADMIN_IP      = os.environ.get("ADMIN_IP", "192.168.1.113")
+RASPI4B_IP    = os.environ.get("RASPI4B_IP", "192.168.1.167")
+RASPI3B_IP    = os.environ.get("RASPI3B_IP", "192.168.1.181")
+PORTAL_NODE_IP = os.environ.get("PORTAL_NODE_IP", "192.168.1.182")
+AP_EXTENDER_IP = os.environ.get("AP_EXTENDER_IP", "192.168.1.183")
 
 SOCIAL_BLOCK_ENABLED = os.environ.get("SOCIAL_BLOCK_ENABLED", "true").lower() == "true"
 SOCIAL_POLICY_START_HOUR = int(os.environ.get("SOCIAL_POLICY_START_HOUR", "9"))
@@ -61,6 +68,29 @@ SOCIAL_POLICY_END_HOUR = int(os.environ.get("SOCIAL_POLICY_END_HOUR", "17"))
 SOCIAL_POLICY_TZ = os.environ.get("SOCIAL_POLICY_TZ", "America/Mexico_City")
 SOCIAL_MIN_HITS = int(os.environ.get("SOCIAL_MIN_HITS", "3"))
 PORN_BLOCK_ENABLED = os.environ.get("PORN_BLOCK_ENABLED", "true").lower() == "true"
+WHITELIST_DOMAINS_DEFAULT = os.environ.get(
+    "WHITELIST_DOMAINS_DEFAULT",
+    "localhost.com,localhost.com.mx,microsoft.com,apple.com,google.com,openwrt.org",
+)
+FEATURE_HUMAN_EXPLAIN = os.environ.get("FEATURE_HUMAN_EXPLAIN", "true").lower() == "true"
+FEATURE_DOMAIN_CLASSIFIER = os.environ.get("FEATURE_DOMAIN_CLASSIFIER", "true").lower() == "true"
+FEATURE_DOMAIN_CLASSIFIER_LLM = os.environ.get("FEATURE_DOMAIN_CLASSIFIER_LLM", "false").lower() == "true"
+DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST = int(os.environ.get("DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST", "2"))
+DOMAIN_CLASSIFIER_LLM_TIMEOUT_S = int(os.environ.get("DOMAIN_CLASSIFIER_LLM_TIMEOUT_S", "8"))
+DOMAIN_CLASSIFIER_LLM_N_PREDICT = int(os.environ.get("DOMAIN_CLASSIFIER_LLM_N_PREDICT", "48"))
+DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE = int(os.environ.get("DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE", "4"))
+FEATURE_PORTAL_RISK_MESSAGE = os.environ.get("FEATURE_PORTAL_RISK_MESSAGE", "true").lower() == "true"
+FEATURE_CHAT = os.environ.get("FEATURE_CHAT", "true").lower() == "true"
+FEATURE_DEVICE_PROFILING = os.environ.get("FEATURE_DEVICE_PROFILING", "true").lower() == "true"
+FEATURE_AUTO_REPORTS = os.environ.get("FEATURE_AUTO_REPORTS", "true").lower() == "true"
+SUMMARY_INTERVAL_S = int(os.environ.get("SUMMARY_INTERVAL_S", "60"))
+
+RULE_HUMAN_EXPLAIN_KEY = "human_explain_template"
+DEFAULT_HUMAN_EXPLAIN_TEMPLATE = (
+    "Resume en español para humanos la actividad de red en máximo 4 líneas.\\n"
+    "Incluye: dispositivo principal, dominios dominantes, nivel de actividad y riesgo práctico.\\n"
+    "Datos:\\n{traffic}\\n"
+)
 
 SOCIAL_NETWORK_DOMAINS = {
     "facebook": ["facebook.com", "fbcdn.net", "messenger.com", "whatsapp.com", "whatsapp.net"],
@@ -190,11 +220,89 @@ def init_db():
             meta         TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS domain_whitelist (
+            domain      TEXT PRIMARY KEY,
+            reason      TEXT,
+            created_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS human_explanations (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id   INTEGER NOT NULL REFERENCES batches(id),
+            timestamp  TEXT NOT NULL,
+            text       TEXT NOT NULL,
+            meta       TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS network_alerts (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id    INTEGER NOT NULL REFERENCES batches(id),
+            timestamp   TEXT NOT NULL,
+            severity    TEXT NOT NULL,
+            alert_type  TEXT NOT NULL,
+            message     TEXT NOT NULL,
+            source_ip   TEXT,
+            domain      TEXT,
+            meta        TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS domain_categories (
+            domain      TEXT PRIMARY KEY,
+            category    TEXT NOT NULL,
+            confidence  REAL NOT NULL DEFAULT 0.5,
+            source      TEXT NOT NULL DEFAULT 'rule',
+            updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS network_summaries (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp  TEXT NOT NULL,
+            summary    TEXT NOT NULL,
+            meta       TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS network_reports (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp  TEXT NOT NULL,
+            report     TEXT NOT NULL,
+            meta       TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS device_profiles (
+            ip          TEXT PRIMARY KEY,
+            device_type TEXT NOT NULL,
+            confidence  REAL NOT NULL DEFAULT 0.5,
+            reasons     TEXT,
+            updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_sessions (
+            session_id  TEXT PRIMARY KEY,
+            created_at  TEXT NOT NULL,
+            updated_at  TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS chat_messages (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  TEXT NOT NULL,
+            timestamp   TEXT NOT NULL,
+            role        TEXT NOT NULL,
+            content     TEXT NOT NULL,
+            meta        TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_batches_status   ON batches(status);
         CREATE INDEX IF NOT EXISTS idx_analyses_batch   ON analyses(batch_id);
         CREATE INDEX IF NOT EXISTS idx_analyses_created ON analyses(timestamp DESC);
         CREATE INDEX IF NOT EXISTS idx_policy_created   ON policy_actions(timestamp DESC);
         CREATE INDEX IF NOT EXISTS idx_prompt_type      ON model_prompt_logs(prompt_type, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_human_batch      ON human_explanations(batch_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_alerts_batch     ON network_alerts(batch_id, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_alerts_created   ON network_alerts(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_alerts_sev       ON network_alerts(severity, id DESC);
+        CREATE INDEX IF NOT EXISTS idx_summaries_ts     ON network_summaries(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_reports_ts       ON network_reports(timestamp DESC);
+        CREATE INDEX IF NOT EXISTS idx_chat_session_ts  ON chat_messages(session_id, id DESC);
     """)
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
@@ -205,6 +313,15 @@ def init_db():
         "INSERT OR IGNORE INTO ai_rules (key,value,updated_at) VALUES (?,?,?)",
         (RULE_ACTION_KEY, DEFAULT_ACTION_PROMPT_TEMPLATE, now),
     )
+    conn.execute(
+        "INSERT OR IGNORE INTO ai_rules (key,value,updated_at) VALUES (?,?,?)",
+        (RULE_HUMAN_EXPLAIN_KEY, DEFAULT_HUMAN_EXPLAIN_TEMPLATE, now),
+    )
+    for domain in [d.strip().lower() for d in WHITELIST_DOMAINS_DEFAULT.split(",") if d.strip()]:
+        conn.execute(
+            "INSERT OR IGNORE INTO domain_whitelist (domain,reason,created_at) VALUES (?,?,?)",
+            (domain, "seed_default", now),
+        )
     conn.commit()
     conn.close()
     log.info("SQLite inicializado en %s", DB_PATH)
@@ -427,6 +544,445 @@ def db_get_prompt_logs(limit: int = 50, prompt_type: str | None = None) -> list:
     return items
 
 
+def db_store_human_explanation(batch_id: int, text: str, meta: dict | None = None):
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO human_explanations (batch_id,timestamp,text,meta) VALUES (?,?,?,?)",
+        (
+            batch_id,
+            datetime.now(timezone.utc).isoformat(),
+            text,
+            json.dumps(meta or {}, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_human_explanations(limit: int = 20) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,batch_id,timestamp,text,meta FROM human_explanations ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        out.append({
+            "id": r["id"],
+            "batch_id": r["batch_id"],
+            "timestamp": r["timestamp"],
+            "text": r["text"],
+            "meta": meta,
+        })
+    out.reverse()
+    return out
+
+
+def db_store_alerts(batch_id: int, alerts: list[dict]):
+    if not alerts:
+        return
+    now = datetime.now(timezone.utc).isoformat()
+    conn = db_connect()
+    for a in alerts:
+        conn.execute(
+            "INSERT INTO network_alerts (batch_id,timestamp,severity,alert_type,message,source_ip,domain,meta) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                batch_id,
+                now,
+                str(a.get("severity") or "info").lower(),
+                str(a.get("type") or "generic"),
+                str(a.get("message") or ""),
+                str(a.get("source_ip") or ""),
+                str(a.get("domain") or ""),
+                json.dumps(a.get("meta") or {}, ensure_ascii=False),
+            ),
+        )
+    conn.commit()
+    conn.close()
+
+
+def db_get_alerts(limit: int = 80) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,batch_id,timestamp,severity,alert_type,message,source_ip,domain,meta "
+        "FROM network_alerts ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        out.append({
+            "id": r["id"],
+            "batch_id": r["batch_id"],
+            "timestamp": r["timestamp"],
+            "severity": r["severity"],
+            "alert_type": r["alert_type"],
+            "message": r["message"],
+            "source_ip": r["source_ip"],
+            "domain": r["domain"],
+            "meta": meta,
+        })
+    out.reverse()
+    return out
+
+
+def db_store_summary(text: str, meta: dict | None = None):
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO network_summaries (timestamp,summary,meta) VALUES (?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), text, json.dumps(meta or {}, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_summaries(limit: int = 20) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,timestamp,summary,meta FROM network_summaries ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    items = []
+    for r in rows:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        items.append({
+            "id": r["id"],
+            "timestamp": r["timestamp"],
+            "summary": r["summary"],
+            "meta": meta,
+        })
+    items.reverse()
+    return items
+
+
+def db_store_report(text: str, meta: dict | None = None):
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO network_reports (timestamp,report,meta) VALUES (?,?,?)",
+        (datetime.now(timezone.utc).isoformat(), text, json.dumps(meta or {}, ensure_ascii=False)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_reports(limit: int = 20) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,timestamp,report,meta FROM network_reports ORDER BY id DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    items = []
+    for r in rows:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        items.append({
+            "id": r["id"],
+            "timestamp": r["timestamp"],
+            "report": r["report"],
+            "meta": meta,
+        })
+    items.reverse()
+    return items
+
+
+def db_upsert_device_profile(ip: str, device_type: str, confidence: float, reasons: list[str]):
+    ip = str(ip or "").strip()
+    if not ip:
+        return
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO device_profiles (ip,device_type,confidence,reasons,updated_at) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(ip) DO UPDATE SET "
+        "device_type=excluded.device_type,confidence=excluded.confidence,reasons=excluded.reasons,updated_at=excluded.updated_at",
+        (
+            ip,
+            str(device_type or "desconocido"),
+            max(0.0, min(float(confidence), 1.0)),
+            json.dumps(reasons or [], ensure_ascii=False),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_device_profiles(limit: int = 100) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT ip,device_type,confidence,reasons,updated_at FROM device_profiles ORDER BY updated_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows:
+        try:
+            reasons = json.loads(r["reasons"] or "[]")
+        except Exception:
+            reasons = []
+        out.append({
+            "ip": r["ip"],
+            "device_type": r["device_type"],
+            "confidence": r["confidence"],
+            "reasons": reasons,
+            "updated_at": r["updated_at"],
+        })
+    return out
+
+
+def db_upsert_chat_session(session_id: str):
+    now = datetime.now(timezone.utc).isoformat()
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO chat_sessions (session_id,created_at,updated_at) VALUES (?,?,?) "
+        "ON CONFLICT(session_id) DO UPDATE SET updated_at=excluded.updated_at",
+        (session_id, now, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_store_chat_message(session_id: str, role: str, content: str, meta: dict | None = None):
+    db_upsert_chat_session(session_id)
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO chat_messages (session_id,timestamp,role,content,meta) VALUES (?,?,?,?,?)",
+        (
+            session_id,
+            datetime.now(timezone.utc).isoformat(),
+            role,
+            content,
+            json.dumps(meta or {}, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_get_chat_history(session_id: str, limit: int = 40) -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,session_id,timestamp,role,content,meta FROM chat_messages "
+        "WHERE session_id=? ORDER BY id DESC LIMIT ?",
+        (session_id, limit),
+    ).fetchall()
+    conn.close()
+    out = []
+    for r in rows[::-1]:
+        try:
+            meta = json.loads(r["meta"] or "{}")
+        except Exception:
+            meta = {}
+        out.append({
+            "id": r["id"],
+            "session_id": r["session_id"],
+            "timestamp": r["timestamp"],
+            "role": r["role"],
+            "content": r["content"],
+            "meta": meta,
+        })
+    return out
+
+
+def db_get_domain_category(domain: str) -> dict | None:
+    d = _normalize_domain(domain)
+    if not d:
+        return None
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT domain,category,confidence,source,updated_at FROM domain_categories WHERE domain=?",
+        (d,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def db_set_domain_category(domain: str, category: str, confidence: float, source: str):
+    d = _normalize_domain(domain)
+    c = str(category or "otros").strip().lower()
+    s = str(source or "rule").strip().lower()
+    if not d:
+        return
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO domain_categories (domain,category,confidence,source,updated_at) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(domain) DO UPDATE SET "
+        "category=excluded.category,confidence=excluded.confidence,source=excluded.source,updated_at=excluded.updated_at",
+        (d, c, float(confidence), s, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _normalize_domain(value: str) -> str:
+    d = str(value or "").strip().lower().rstrip(".")
+    return d
+
+
+def _domain_in_roots(domain: str, roots: set[str]) -> bool:
+    d = _normalize_domain(domain)
+    if not d:
+        return False
+    for root in roots:
+        r = _normalize_domain(root)
+        if not r:
+            continue
+        if d == r or d.endswith("." + r):
+            return True
+    return False
+
+
+def db_get_whitelist() -> list[dict]:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT domain,reason,created_at FROM domain_whitelist ORDER BY domain"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def db_get_whitelist_set() -> set[str]:
+    return {_normalize_domain(x["domain"]) for x in db_get_whitelist() if _normalize_domain(x["domain"])}
+
+
+def db_whitelist_add(domain: str, reason: str = ""):
+    d = _normalize_domain(domain)
+    if not d:
+        return
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO domain_whitelist (domain,reason,created_at) VALUES (?,?,?) "
+        "ON CONFLICT(domain) DO UPDATE SET reason=excluded.reason",
+        (d, reason or "manual", datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_whitelist_remove(domain: str):
+    d = _normalize_domain(domain)
+    if not d:
+        return
+    conn = db_connect()
+    conn.execute("DELETE FROM domain_whitelist WHERE domain=?", (d,))
+    conn.commit()
+    conn.close()
+
+
+def db_get_domain_stats(limit_batches: int = 50, top_n: int = 20) -> dict:
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,payload FROM batches ORDER BY id DESC LIMIT ?",
+        (max(1, min(limit_batches, 500)),),
+    ).fetchall()
+    conn.close()
+
+    dns = Counter()
+    sni = Counter()
+    http = Counter()
+    combined = Counter()
+    scanned = 0
+
+    for row in rows:
+        try:
+            payload = json.loads(row["payload"])
+        except Exception:
+            continue
+        scanned += 1
+        for k, counter in (
+            ("dns_query_counts", dns),
+            ("tls_sni_counts", sni),
+            ("http_host_counts", http),
+        ):
+            m = payload.get(k) or {}
+            if not isinstance(m, dict):
+                continue
+            for domain, count in m.items():
+                d = _normalize_domain(domain)
+                if not d:
+                    continue
+                try:
+                    n = int(count)
+                except Exception:
+                    n = 1
+                n = max(1, n)
+                counter[d] += n
+                combined[d] += n
+
+    def top_items(counter: Counter, n: int):
+        return [{"domain": d, "count": c} for d, c in counter.most_common(n)]
+
+    return {
+        "window_batches": scanned,
+        "visibility": {
+            "dns": "completo",
+            "tls_sni": "dominio",
+            "http": "dominio",
+        },
+        "dns": top_items(dns, top_n),
+        "tls_sni": top_items(sni, top_n),
+        "http": top_items(http, top_n),
+        "combined": top_items(combined, top_n),
+    }
+
+
+def db_get_blocked_site_events(limit: int = 80) -> list[dict]:
+    actions = db_get_policy_actions(limit)
+    allowed_actions = {
+        "social_block_on",
+        "social_block_refresh",
+        "porn_enforcement",
+        "porn_ip_block_only",
+    }
+    out = []
+    for a in actions:
+        action = str(a.get("action", ""))
+        if action not in allowed_actions:
+            continue
+        details = a.get("details") or {}
+        domains = []
+        category = "unknown"
+        reason = a.get("reason") or ""
+
+        if "social" in action:
+            category = "social"
+            social = details.get("social") or {}
+            domains = list((social.get("matched_domains") or {}).keys())
+            if not reason:
+                reason = "Tráfico de redes sociales en ventana restringida"
+        elif "porn" in action:
+            category = "porn"
+            domains = list((details.get("trigger_domains") or {}).keys())
+            if not reason:
+                reason = "Detección de tráfico a sitios pornográficos"
+
+        out.append({
+            "id": a.get("id"),
+            "timestamp": a.get("timestamp"),
+            "action": action,
+            "category": category,
+            "reason": reason,
+            "domains": domains[:30],
+        })
+    return out
+
+
 # ─── Prompt builder ───────────────────────────────────────────────────────────
 def _safe_format(template: str, context: dict) -> str:
     text = template
@@ -517,7 +1073,14 @@ def build_action_prompt(policy_context: dict) -> str:
 
 
 # ─── llama.cpp ───────────────────────────────────────────────────────────────
-def call_llama(prompt: str) -> str:
+def call_llama(
+    prompt: str,
+    *,
+    timeout_s: int = 120,
+    n_predict: int | None = None,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+) -> str:
     stats["llama_calls"] += 1
     try:
         t0   = time.time()
@@ -530,13 +1093,13 @@ def call_llama(prompt: str) -> str:
             f"{LLAMA_URL}/completion",
             json={
                 "prompt":      prompt,
-                "n_predict":   N_PREDICT,
-                "temperature": 0.7,
-                "top_p":       0.9,
+                "n_predict":   int(n_predict if n_predict is not None else N_PREDICT),
+                "temperature": float(temperature),
+                "top_p":       float(top_p),
                 "stop":        stop_tokens,
                 "stream":      False,
             },
-            timeout=120,
+            timeout=max(1, int(timeout_s)),
         )
         elapsed = round(time.time() - t0, 1)
         if resp.status_code == 200:
@@ -553,20 +1116,17 @@ def call_llama(prompt: str) -> str:
 
 
 def _social_bucket_for_domain(domain: str) -> str | None:
-    d = domain.lower().strip(".")
+    d = _normalize_domain(domain)
     for bucket, roots in SOCIAL_NETWORK_DOMAINS.items():
         for root in roots:
-            if d == root or d.endswith("." + root):
+            r = _normalize_domain(root)
+            if d == r or d.endswith("." + r):
                 return bucket
     return None
 
 
 def _domain_matches_roots(domain: str, roots: set[str]) -> bool:
-    d = domain.lower().strip(".")
-    for root in roots:
-        if d == root or d.endswith("." + root):
-            return True
-    return False
+    return _domain_in_roots(domain, roots)
 
 
 def _combined_domain_counts(summary: dict) -> dict:
@@ -598,13 +1158,466 @@ def _combined_domain_counts(summary: dict) -> dict:
     return combined_counts
 
 
-def detect_social_traffic(summary: dict) -> dict:
+def _top_domains_text(summary: dict, n: int = 4) -> str:
+    combined = _combined_domain_counts(summary)
+    if not combined:
+        return "-"
+    top = sorted(combined.items(), key=lambda x: -x[1])[:n]
+    return ", ".join(f"{d}({c})" for d, c in top)
+
+
+def _fallback_human_explain(summary: dict, analysis_text: str, risk: str) -> str:
+    talker = "-"
+    top_talkers = summary.get("top_talkers") or []
+    if top_talkers:
+        talker = str(top_talkers[0].get("ip") or "-")
+    pkt = int(summary.get("total_packets") or 0)
+    domains = _top_domains_text(summary, 4)
+    suspicious = int(len(summary.get("suspicious") or []))
+    risk_phrase = "bajo"
+    if risk == "MEDIO":
+        risk_phrase = "moderado"
+    elif risk == "ALTO":
+        risk_phrase = "alto"
+    return (
+        f"En los últimos {summary.get('duration_seconds', 30)} segundos, el dispositivo {talker} "
+        f"concentró la mayor actividad. Se observaron {pkt} paquetes y consultas a: {domains}. "
+        f"Se detectaron {suspicious} señales sospechosas. El riesgo operativo estimado es {risk_phrase}. "
+        f"{analysis_text[:180].strip()}"
+    ).strip()
+
+
+def build_human_explanation(summary: dict, analysis_text: str, risk: str) -> str:
+    if not FEATURE_HUMAN_EXPLAIN:
+        return _fallback_human_explain(summary, analysis_text, risk)
+    tpl = db_get_rule(RULE_HUMAN_EXPLAIN_KEY, DEFAULT_HUMAN_EXPLAIN_TEMPLATE)
+    traffic = (
+        f"packets={summary.get('total_packets', 0)} "
+        f"bytes={summary.get('total_bytes_fmt', '0 B')} "
+        f"pps={summary.get('pps', 0)} "
+        f"top_domains={_top_domains_text(summary, 5)} "
+        f"suspicious={len(summary.get('suspicious') or [])} "
+        f"top_talker={(summary.get('top_talkers') or [{}])[0].get('ip', '-')}"
+    )
+    user_body = _safe_format(tpl, {"traffic": traffic})
+    prompt = _wrap_prompt(
+        user_body=user_body,
+        system_text="Eres analista de red y traductor técnico. Explica para audiencia no técnica.",
+    )
+    response = call_llama(prompt).strip()
+    if not response or response.startswith("[Error"):
+        return _fallback_human_explain(summary, analysis_text, risk)
+    db_log_prompt(
+        prompt_type="human_explain",
+        prompt=prompt,
+        response=response,
+        meta={"risk": risk},
+    )
+    return response
+
+
+def _is_rare_domain(domain: str) -> bool:
+    d = _normalize_domain(domain)
+    if not d or "." not in d:
+        return False
+    tld = d.rsplit(".", 1)[-1]
+    uncommon_tlds = {"xyz", "top", "click", "gq", "work", "cam", "rest", "zip"}
+    left = d.split(".", 1)[0]
+    looks_dga = len(left) >= 12 and sum(ch.isdigit() for ch in left) >= 3
+    return tld in uncommon_tlds or looks_dga
+
+
+def detect_behavior_alerts(summary: dict) -> list[dict]:
+    alerts = []
+    combined = _combined_domain_counts(summary)
+    total_domain_hits = sum(combined.values()) if combined else 0
+    unique_domains = len(combined)
+
+    if unique_domains >= 25:
+        alerts.append({
+            "severity": "medium" if unique_domains < 45 else "high",
+            "type": "many_distinct_domains",
+            "message": f"Se detectaron {unique_domains} dominios distintos en una sola ventana.",
+            "meta": {"unique_domains": unique_domains},
+        })
+
+    if combined:
+        top_domain, top_count = sorted(combined.items(), key=lambda x: -x[1])[0]
+        concentration = (top_count / total_domain_hits) if total_domain_hits else 0
+        if top_count >= 12 and concentration >= 0.45:
+            alerts.append({
+                "severity": "medium",
+                "type": "repeated_domain_queries",
+                "message": f"Dominio repetido anómalamente: {top_domain} ({top_count} consultas).",
+                "domain": top_domain,
+                "meta": {"count": top_count, "ratio": round(concentration, 3)},
+            })
+
+    rare_domains = [d for d in combined.keys() if _is_rare_domain(d)]
+    for d in rare_domains[:8]:
+        alerts.append({
+            "severity": "high",
+            "type": "rare_domain_pattern",
+            "message": f"Dominio con patrón inusual detectado: {d}",
+            "domain": d,
+        })
+
+    for s in (summary.get("suspicious") or []):
+        alerts.append({
+            "severity": "medium",
+            "type": f"sensor_{s.get('type', 'event')}",
+            "message": s.get("detail") or f"Evento sospechoso: {s.get('type', 'event')}",
+            "source_ip": s.get("src") or "",
+            "meta": s,
+        })
+    return alerts
+
+
+def _heuristic_domain_category(domain: str) -> tuple[str, float]:
+    d = _normalize_domain(domain)
+    if not d:
+        return "otros", 0.4
+    rules = [
+        ("redes_sociales", ("facebook.com", "instagram.com", "x.com", "twitter.com", "tiktok.com", "snapchat.com")),
+        ("streaming", ("youtube.com", "googlevideo.com", "netflix.com", "disneyplus.com", "spotify.com", "twitch.tv")),
+        ("desarrollo", ("github.com", "gitlab.com", "pypi.org", "npmjs.com", "docker.com")),
+        ("infraestructura", ("cloudflare.com", "cloudflare-dns.com", "akamai", "fastly", "amazonaws.com", "azure.com", "gstatic.com")),
+        ("mensajeria", ("whatsapp.com", "telegram.org", "messenger.com", "signal.org")),
+        ("productividad", ("office.com", "microsoft.com", "google.com", "notion.so", "slack.com")),
+        ("adulto", tuple(PORN_DOMAIN_ROOTS)),
+    ]
+    for cat, roots in rules:
+        if _domain_in_roots(d, set(roots)):
+            return cat, 0.92
+    return "otros", 0.55
+
+
+def _llm_domain_category(domain: str) -> tuple[str, float]:
+    prompt = _wrap_prompt(
+        user_body=(
+            "Clasifica este dominio en una categoría de red. "
+            "Responde SOLO JSON: {\"category\":\"...\",\"confidence\":0.0}\n"
+            f"dominio: {domain}\n"
+            "categorías válidas: infraestructura, redes_sociales, streaming, desarrollo, mensajeria, productividad, adulto, otros"
+        ),
+        system_text="Clasificador determinista de dominios.",
+    )
+    response = call_llama(
+        prompt,
+        timeout_s=DOMAIN_CLASSIFIER_LLM_TIMEOUT_S,
+        n_predict=DOMAIN_CLASSIFIER_LLM_N_PREDICT,
+        temperature=0.1,
+        top_p=0.5,
+    )
+    m = re.search(r"\{.*\}", response or "", flags=re.S)
+    if not m:
+        return "otros", 0.4
+    try:
+        obj = json.loads(m.group(0))
+    except Exception:
+        return "otros", 0.4
+    cat = str(obj.get("category") or "otros").strip().lower()
+    conf = float(obj.get("confidence") or 0.5)
+    allowed = {"infraestructura", "redes_sociales", "streaming", "desarrollo", "mensajeria", "productividad", "adulto", "otros"}
+    if cat not in allowed:
+        cat = "otros"
+    conf = max(0.0, min(conf, 1.0))
+    return cat, conf
+
+
+def classify_domain(domain: str, *, allow_llm: bool = True, refresh_cached_otros: bool = False) -> dict:
+    cached = db_get_domain_category(domain)
+    if cached:
+        if not (
+            allow_llm
+            and refresh_cached_otros
+            and str(cached.get("category") or "") == "otros"
+            and str(cached.get("source") or "") != "llm"
+        ):
+            return cached
+    cat, conf = _heuristic_domain_category(domain)
+    source = "rule"
+    if FEATURE_DOMAIN_CLASSIFIER and FEATURE_DOMAIN_CLASSIFIER_LLM and allow_llm and cat == "otros":
+        cat, conf = _llm_domain_category(domain)
+        source = "llm"
+    db_set_domain_category(domain, cat, conf, source)
+    return db_get_domain_category(domain) or {
+        "domain": _normalize_domain(domain), "category": cat, "confidence": conf, "source": source, "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+
+def domain_category_breakdown(limit_batches: int = 50, top_n: int = 25) -> dict:
+    stats_map = db_get_domain_stats(limit_batches=limit_batches, top_n=max(60, top_n))
+    cat_counter = Counter()
+    detail = []
+    queue_now = work_queue.qsize()
+    llm_safe_mode = (
+        FEATURE_DOMAIN_CLASSIFIER
+        and FEATURE_DOMAIN_CLASSIFIER_LLM
+        and queue_now <= DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE
+    )
+    llm_budget = max(0, DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST if llm_safe_mode else 0)
+
+    for item in stats_map.get("combined", []):
+        domain = item.get("domain")
+        count = int(item.get("count") or 0)
+        if not domain or count <= 0:
+            continue
+        cached = db_get_domain_category(domain)
+        allow_llm = llm_budget > 0
+        refresh_cached_otros = bool(
+            cached
+            and str(cached.get("category") or "") == "otros"
+            and str(cached.get("source") or "") != "llm"
+        )
+
+        cat_info = classify_domain(
+            domain,
+            allow_llm=allow_llm,
+            refresh_cached_otros=allow_llm and refresh_cached_otros,
+        )
+        if allow_llm and str(cat_info.get("source") or "") == "llm":
+            llm_budget = max(0, llm_budget - 1)
+
+        cat = cat_info.get("category") or "otros"
+        cat_counter[cat] += count
+        detail.append({
+            "domain": domain,
+            "count": count,
+            "category": cat,
+            "confidence": cat_info.get("confidence", 0.5),
+            "source": cat_info.get("source", "rule"),
+        })
+    total = sum(cat_counter.values()) or 1
+    categories = [
+        {"category": c, "count": n, "pct": round((n / total) * 100.0, 2)}
+        for c, n in cat_counter.most_common(top_n)
+    ]
+    return {
+        "window_batches": stats_map.get("window_batches", 0),
+        "llm_classifier": {
+            "enabled": FEATURE_DOMAIN_CLASSIFIER_LLM,
+            "safe_mode": llm_safe_mode,
+            "queue_size": queue_now,
+            "max_queue_size": DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE,
+            "max_new_per_request": DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST,
+            "used_budget": max(0, DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST - llm_budget) if llm_safe_mode else 0,
+            "timeout_s": DOMAIN_CLASSIFIER_LLM_TIMEOUT_S,
+            "n_predict": DOMAIN_CLASSIFIER_LLM_N_PREDICT,
+        },
+        "categories": categories,
+        "domains": detail[:top_n],
+    }
+
+
+def _infer_device_type_from_domains(domains: set[str]) -> tuple[str, float, list[str]]:
+    dset = {_normalize_domain(d) for d in domains if _normalize_domain(d)}
+    reasons = []
+    scores = {
+        "iphone_ios": 0.0,
+        "android_phone": 0.0,
+        "smart_tv": 0.0,
+        "laptop_dev": 0.0,
+        "iot": 0.0,
+    }
+    for d in dset:
+        if _domain_in_roots(d, {"icloud.com", "apple.com", "mzstatic.com"}):
+            scores["iphone_ios"] += 1.3
+            reasons.append(f"consulta {d} (ecosistema Apple)")
+        if _domain_in_roots(d, {"googleapis.com", "gvt1.com", "play.googleapis.com"}):
+            scores["android_phone"] += 1.1
+            reasons.append(f"consulta {d} (servicios Android)")
+        if _domain_in_roots(d, {"netflix.com", "nflxvideo.net", "disneyplus.com", "roku.com", "smarttv"}):
+            scores["smart_tv"] += 1.4
+            reasons.append(f"consulta {d} (consumo OTT/TV)")
+        if _domain_in_roots(d, {"github.com", "gitlab.com", "pypi.org", "npmjs.com"}):
+            scores["laptop_dev"] += 1.5
+            reasons.append(f"consulta {d} (entorno desarrollo)")
+        if _domain_in_roots(d, {"tuya", "iot", "ring.com", "blinkforhome.com"}):
+            scores["iot"] += 1.1
+            reasons.append(f"consulta {d} (patrón IoT)")
+
+    best = max(scores.items(), key=lambda x: x[1])
+    label_map = {
+        "iphone_ios": "telefono_ios",
+        "android_phone": "telefono_android",
+        "smart_tv": "smart_tv",
+        "laptop_dev": "laptop",
+        "iot": "iot",
+    }
+    if best[1] <= 0:
+        return "desconocido", 0.4, ["sin huellas suficientes de dominio"]
+    confidence = min(0.97, 0.55 + (best[1] / 6.0))
+    return label_map.get(best[0], "desconocido"), confidence, reasons[:4]
+
+
+def infer_and_store_device_profiles(summary: dict):
+    if not FEATURE_DEVICE_PROFILING:
+        return
+    cdc = summary.get("client_domain_counts") or {}
+    if not isinstance(cdc, dict):
+        return
+    for client_ip, dom_map in cdc.items():
+        if not isinstance(dom_map, dict):
+            continue
+        domains = set(dom_map.keys())
+        if not domains:
+            continue
+        dtype, conf, reasons = _infer_device_type_from_domains(domains)
+        db_upsert_device_profile(client_ip, dtype, conf, reasons)
+
+
+def _generate_summary_text(limit_batches: int = 6) -> tuple[str, dict]:
+    history = db_get_history(limit_batches)
+    if not history:
+        return "Sin datos recientes de red para resumir.", {"window_batches": 0}
+
+    packets = sum(int(x.get("packets") or 0) for x in history)
+    suspicious_events = sum(int(x.get("suspicious_count") or 0) for x in history)
+    devices = set()
+    for item in history:
+        s = item.get("summary") or {}
+        for ip in (s.get("lan_devices") or []):
+            devices.add(ip)
+
+    domain_stats = db_get_domain_stats(limit_batches=limit_batches, top_n=6)
+    top_domains = ", ".join([d["domain"] for d in domain_stats.get("combined", [])[:4]]) or "sin dominios destacados"
+    cats = domain_category_breakdown(limit_batches=limit_batches, top_n=4).get("categories", [])
+    cat_text = ", ".join([f"{c['category']} {c['pct']}%" for c in cats[:3]]) if cats else "sin categoría dominante"
+    level = "baja"
+    if packets > 2000:
+        level = "alta"
+    elif packets > 800:
+        level = "moderada"
+    summary_txt = (
+        f"Resumen de red: {len(devices)} dispositivos activos, {packets} paquetes capturados "
+        f"y {suspicious_events} eventos sospechosos en la ventana reciente. "
+        f"Actividad {level}. Dominios dominantes: {top_domains}. "
+        f"Categorías principales: {cat_text}."
+    )
+    meta = {
+        "window_batches": len(history),
+        "packets": packets,
+        "devices": len(devices),
+        "suspicious_events": suspicious_events,
+        "top_domains": domain_stats.get("combined", [])[:6],
+        "categories": cats,
+    }
+    return summary_txt, meta
+
+
+def generate_and_store_summary():
+    text, meta = _generate_summary_text(limit_batches=6)
+    db_store_summary(text, meta=meta)
+    return {"summary": text, "meta": meta}
+
+
+def _generate_report_text() -> tuple[str, dict]:
+    history = db_get_history(limit=120)
+    alerts = db_get_alerts(limit=200)
+    devices = db_get_device_profiles(limit=120)
+    domain_stats = db_get_domain_stats(limit_batches=120, top_n=20)
+    categories = domain_category_breakdown(limit_batches=120, top_n=8)
+    total_packets = sum(int(x.get("packets") or 0) for x in history)
+    suspicious = sum(int(x.get("suspicious_count") or 0) for x in history)
+    top_domains = ", ".join(d["domain"] for d in domain_stats.get("combined", [])[:8]) or "N/D"
+    cat_text = ", ".join(f"{c['category']} {c['pct']}%" for c in categories.get("categories", [])[:5]) or "N/D"
+
+    report = (
+        "Reporte de red\n"
+        f"Dispositivos detectados: {len(devices)}\n"
+        f"Dominios consultados (top): {top_domains}\n"
+        f"Paquetes observados: {total_packets}\n"
+        f"Eventos sospechosos: {suspicious}\n"
+        f"Alertas automáticas: {len(alerts)}\n"
+        f"Categorías de tráfico: {cat_text}\n"
+        "Conclusión: no se confirma ataque activo sostenido, pero existen patrones que requieren monitoreo continuo."
+    )
+    meta = {
+        "history_items": len(history),
+        "alerts": len(alerts),
+        "devices": len(devices),
+        "total_packets": total_packets,
+        "suspicious": suspicious,
+        "categories": categories.get("categories", []),
+    }
+    return report, meta
+
+
+def generate_and_store_report():
+    text, meta = _generate_report_text()
+    db_store_report(text, meta=meta)
+    return {"report": text, "meta": meta}
+
+
+def _latest_context_for_chat() -> dict:
+    summaries = db_get_summaries(limit=1)
+    alerts = db_get_alerts(limit=12)
+    categories = domain_category_breakdown(limit_batches=30, top_n=6)
+    devices = db_get_device_profiles(limit=20)
+    return {
+        "summary": summaries[-1]["summary"] if summaries else "",
+        "alerts": alerts[-8:],
+        "categories": categories.get("categories", []),
+        "devices": devices[:10],
+    }
+
+
+def _chat_answer(question: str, session_id: str) -> str:
+    if not FEATURE_CHAT:
+        return "El chat está deshabilitado por configuración."
+    ctx = _latest_context_for_chat()
+    history = db_get_chat_history(session_id, limit=12)
+    hist_txt = "\n".join([f"{m['role']}: {m['content']}" for m in history[-8:]])
+    prompt = _wrap_prompt(
+        user_body=(
+            "Responde en español claro y breve como analista de red.\n"
+            f"Contexto de red:\n{json.dumps(ctx, ensure_ascii=False, indent=2)}\n\n"
+            f"Conversación reciente:\n{hist_txt}\n\n"
+            f"Pregunta del usuario: {question}\n"
+        ),
+        system_text="Asistente SOC para PoC WiFi. No inventes datos fuera del contexto provisto.",
+    )
+    ans = call_llama(prompt).strip()
+    if not ans or ans.startswith("[Error"):
+        alerts = ctx.get("alerts") or []
+        if alerts:
+            a = alerts[-1]
+            return f"Sí, hay una señal reciente: {a.get('message', 'evento sospechoso')}."
+        return "No observo alertas críticas recientes; la red parece estable en esta ventana."
+    return ans
+
+
+def build_portal_risk_message(client_ip: str) -> dict:
+    if not FEATURE_PORTAL_RISK_MESSAGE:
+        return {"enabled": False, "message": ""}
+    alerts = db_get_alerts(limit=120)
+    client_alerts = [a for a in alerts if a.get("source_ip") == client_ip]
+    target = client_alerts[-1] if client_alerts else (alerts[-1] if alerts else None)
+    if not target:
+        return {
+            "enabled": True,
+            "message": "Estás conectado a una red pública. Usa HTTPS y evita iniciar sesión en servicios sensibles.",
+            "severity": "info",
+        }
+    return {
+        "enabled": True,
+        "message": f"Aviso de seguridad: {target.get('message', 'actividad inusual detectada')}.",
+        "severity": target.get("severity", "medium"),
+        "alert_type": target.get("alert_type", "event"),
+    }
+
+
+def detect_social_traffic(summary: dict, whitelist: set[str] | None = None) -> dict:
     combined_counts = _combined_domain_counts(summary)
+    whitelist = whitelist or set()
 
     per_network = {}
     matched_domains = {}
     total_hits = 0
     for domain, count in combined_counts.items():
+        if _domain_in_roots(domain, whitelist):
+            continue
         bucket = _social_bucket_for_domain(domain)
         if not bucket:
             continue
@@ -619,11 +1632,14 @@ def detect_social_traffic(summary: dict) -> dict:
     }
 
 
-def detect_porn_traffic(summary: dict) -> dict:
+def detect_porn_traffic(summary: dict, whitelist: set[str] | None = None) -> dict:
     combined_counts = _combined_domain_counts(summary)
+    whitelist = whitelist or set()
     matched_domains = {}
     total_hits = 0
     for domain, count in combined_counts.items():
+        if _domain_in_roots(domain, whitelist):
+            continue
         if not _domain_matches_roots(domain, PORN_DOMAIN_ROOTS):
             continue
         matched_domains[domain] = matched_domains.get(domain, 0) + count
@@ -638,6 +1654,8 @@ def detect_porn_traffic(summary: dict) -> dict:
                 continue
             for domain, count in dom_map.items():
                 d = str(domain).lower().strip()
+                if _domain_in_roots(d, whitelist):
+                    continue
                 if not _domain_matches_roots(d, PORN_DOMAIN_ROOTS):
                     continue
                 try:
@@ -707,7 +1725,8 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
     except Exception:
         local_hour = datetime.now().hour
     in_window = SOCIAL_POLICY_START_HOUR <= local_hour < SOCIAL_POLICY_END_HOUR
-    social = detect_social_traffic(summary)
+    whitelist = db_get_whitelist_set()
+    social = detect_social_traffic(summary, whitelist=whitelist)
     hits = social["total_hits"]
     should_block = in_window and hits >= SOCIAL_MIN_HITS
     base_action = "block" if should_block else ("unblock" if policy_state.get("social_block_active", False) else "none")
@@ -720,6 +1739,7 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
         "social_min_hits": SOCIAL_MIN_HITS,
         "social_per_network": social["per_network"],
         "social_domains": social["matched_domains"],
+        "whitelist_domains": sorted(whitelist),
         "base_action": base_action,
         "block_active": policy_state.get("social_block_active", False),
     }
@@ -800,7 +1820,8 @@ def evaluate_and_apply_porn_policy(batch_id: int, summary: dict) -> dict:
         result["reason"] = "router_mcp_unavailable"
         return result
 
-    porn = detect_porn_traffic(summary)
+    whitelist = db_get_whitelist_set()
+    porn = detect_porn_traffic(summary, whitelist=whitelist)
     result["porn_hits"] = porn["total_hits"]
     result["domains"] = porn["matched_domains"]
     result["offenders"] = porn["offenders"]
@@ -822,6 +1843,8 @@ def evaluate_and_apply_porn_policy(batch_id: int, summary: dict) -> dict:
         action = {
             "client_ip": client_ip,
             "dest_ips": ip_candidates,
+            "category": "porn",
+            "trigger_domains": porn["matched_domains"],
             "block_ok": block_ok,
             "block_msg": block_msg,
             "kick_ok": kick_ok,
@@ -837,6 +1860,8 @@ def evaluate_and_apply_porn_policy(batch_id: int, summary: dict) -> dict:
         action = {
             "client_ip": None,
             "dest_ips": global_ips,
+            "category": "porn",
+            "trigger_domains": porn["matched_domains"],
             "block_ok": block_ok,
             "block_msg": block_msg,
             "kick_ok": False,
@@ -877,6 +1902,15 @@ def analyze_and_store(batch_id: int, summary: dict):
         risk = "MEDIO" if risk == "BAJO" else risk
     policy_social = evaluate_and_apply_social_policy(batch_id, summary)
     policy_porn = evaluate_and_apply_porn_policy(batch_id, summary)
+    human_explanation = build_human_explanation(summary, analysis, risk)
+    behavior_alerts = detect_behavior_alerts(summary)
+    infer_and_store_device_profiles(summary)
+    db_store_human_explanation(
+        batch_id=batch_id,
+        text=human_explanation,
+        meta={"risk": risk, "packets": summary.get("total_packets", 0)},
+    )
+    db_store_alerts(batch_id=batch_id, alerts=behavior_alerts)
 
     result = {
         "id":               stats["analyses_ok"] + 1,
@@ -892,6 +1926,8 @@ def analyze_and_store(batch_id: int, summary: dict):
         "suspicious":       summary.get("suspicious", []),
         "lan_devices":      summary.get("lan_devices", []),
         "dns_queries":      summary.get("dns_queries", [])[:20],
+        "human_explanation": human_explanation,
+        "alerts": behavior_alerts,
         "policy": {
             "social": policy_social,
             "porn": policy_porn,
@@ -937,6 +1973,20 @@ def worker_thread():
             stats["analyses_error"] += 1
         finally:
             work_queue.task_done()
+
+
+def summary_worker_thread():
+    if not FEATURE_AUTO_REPORTS:
+        log.info("Summary worker deshabilitado")
+        return
+    log.info("Summary worker iniciado (intervalo=%ss)", SUMMARY_INTERVAL_S)
+    while True:
+        try:
+            out = generate_and_store_summary()
+            log.info("Resumen generado: %s", out.get("summary", "")[:120])
+        except Exception as e:
+            log.warning("Summary worker error: %s", e)
+        time.sleep(max(20, SUMMARY_INTERVAL_S))
 
 
 def enqueue_batch(summary: dict) -> int:
@@ -1059,6 +2109,12 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
         if path in ("/rulez", "/rulez/"):
             self._serve_html("rulez.html"); return
 
+        if path in ("/chat", "/chat/"):
+            self._serve_html("chat.html"); return
+
+        if path in ("/reports", "/reports/"):
+            self._serve_html("reports.html"); return
+
         if path == "/health":
             llama_ok = False
             try:
@@ -1088,6 +2144,19 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                     },
                     "min_hits": SOCIAL_MIN_HITS,
                 },
+                "features": {
+                    "human_explain": FEATURE_HUMAN_EXPLAIN,
+                    "domain_classifier": FEATURE_DOMAIN_CLASSIFIER,
+                    "domain_classifier_llm": FEATURE_DOMAIN_CLASSIFIER_LLM,
+                    "domain_classifier_llm_max_new_per_request": DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST,
+                    "domain_classifier_llm_timeout_s": DOMAIN_CLASSIFIER_LLM_TIMEOUT_S,
+                    "domain_classifier_llm_n_predict": DOMAIN_CLASSIFIER_LLM_N_PREDICT,
+                    "domain_classifier_llm_max_queue_size": DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE,
+                    "portal_risk_message": FEATURE_PORTAL_RISK_MESSAGE,
+                    "chat": FEATURE_CHAT,
+                    "device_profiling": FEATURE_DEVICE_PROFILING,
+                    "auto_reports": FEATURE_AUTO_REPORTS,
+                },
             })
 
         elif path == "/api/history":
@@ -1100,6 +2169,49 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
 
         elif path == "/api/stats":
             self.send_json({**stats, "queue": db_queue_stats()})
+
+        elif path == "/api/explanations/latest":
+            limit = int(params.get("limit", ["20"])[0])
+            items = db_get_human_explanations(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/alerts":
+            limit = int(params.get("limit", ["80"])[0])
+            items = db_get_alerts(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/domain-categories/top":
+            limit_batches = int(params.get("limit_batches", ["50"])[0])
+            top = int(params.get("top", ["25"])[0])
+            self.send_json(domain_category_breakdown(limit_batches=limit_batches, top_n=top))
+
+        elif path == "/api/devices/profile":
+            limit = int(params.get("limit", ["100"])[0])
+            items = db_get_device_profiles(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/summaries/latest":
+            limit = int(params.get("limit", ["20"])[0])
+            items = db_get_summaries(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/reports/latest":
+            limit = int(params.get("limit", ["10"])[0])
+            items = db_get_reports(limit=limit)
+            self.send_json({"count": len(items), "items": items})
+
+        elif path == "/api/portal/risk-message":
+            ip = str(params.get("ip", [""])[0]).strip()
+            self.send_json(build_portal_risk_message(ip))
+
+        elif path == "/api/chat/history":
+            session_id = str(params.get("session_id", [""])[0]).strip()
+            if not session_id:
+                self.send_error_json(400, "session_id requerido")
+                return
+            limit = int(params.get("limit", ["40"])[0])
+            items = db_get_chat_history(session_id, limit=limit)
+            self.send_json({"session_id": session_id, "count": len(items), "items": items})
 
         elif path == "/api/policy":
             limit = int(params.get("limit", ["50"])[0])
@@ -1116,8 +2228,38 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 "actions": db_get_policy_actions(limit),
             })
 
+        elif path == "/api/policy/blocked-sites":
+            limit = int(params.get("limit", ["80"])[0])
+            self.send_json({
+                "count": limit,
+                "items": db_get_blocked_site_events(limit=limit),
+            })
+
+        elif path == "/api/domain-stats":
+            limit_batches = int(params.get("limit_batches", ["50"])[0])
+            top_n = int(params.get("top", ["20"])[0])
+            self.send_json(db_get_domain_stats(limit_batches=limit_batches, top_n=top_n))
+
         elif path == "/api/rulez":
             self.send_json({"rules": db_get_rules()})
+
+        elif path == "/api/mcp/whitelist":
+            items = db_get_whitelist()
+            self.send_json({"items": items, "count": len(items)})
+
+        elif path == "/api/mcp/capabilities":
+            if router_mcp is None:
+                self.send_json({"error": "router_mcp_unavailable"}, status=503)
+            else:
+                self.send_json(router_mcp.mcp_capabilities())
+
+        elif path == "/api/mcp/resources":
+            if router_mcp is None:
+                self.send_json({"error": "router_mcp_unavailable"}, status=503)
+            else:
+                resources = router_mcp.mcp_resources()
+                resources["whitelist"] = db_get_whitelist()
+                self.send_json(resources)
 
         elif path == "/api/prompt-logs":
             limit = int(params.get("limit", ["50"])[0])
@@ -1184,12 +2326,66 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
 
             key = str(payload.get("key", "")).strip()
             value = str(payload.get("value", "")).strip()
-            if key not in {RULE_ANALYSIS_KEY, RULE_ACTION_KEY}:
+            if key not in {RULE_ANALYSIS_KEY, RULE_ACTION_KEY, RULE_HUMAN_EXPLAIN_KEY}:
                 self.send_error_json(400, "key inválida"); return
             if not value:
                 self.send_error_json(400, "value vacío"); return
             db_set_rule(key, value)
             self.send_json({"ok": True, "rules": db_get_rules()})
+            return
+
+        if path == "/api/mcp/whitelist":
+            length = int(self.headers.get("Content-Length", 0))
+            if length == 0:
+                self.send_error_json(400, "Body vacío"); return
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"JSON inválido: {e}"); return
+            op = str(payload.get("op", "")).strip().lower()
+            domain = str(payload.get("domain", "")).strip()
+            reason = str(payload.get("reason", "")).strip()
+            if op not in {"add", "remove"}:
+                self.send_error_json(400, "op inválido (add|remove)"); return
+            if not domain:
+                self.send_error_json(400, "domain requerido"); return
+            if op == "add":
+                db_whitelist_add(domain, reason=reason or "manual")
+            else:
+                db_whitelist_remove(domain)
+            items = db_get_whitelist()
+            self.send_json({"ok": True, "count": len(items), "items": items})
+            return
+
+        if path == "/api/reports/generate":
+            out = generate_and_store_report()
+            self.send_json({"ok": True, **out})
+            return
+
+        if path == "/api/chat":
+            if not FEATURE_CHAT:
+                self.send_error_json(503, "chat deshabilitado")
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            if length == 0:
+                self.send_error_json(400, "Body vacío"); return
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except json.JSONDecodeError as e:
+                self.send_error_json(400, f"JSON inválido: {e}"); return
+            question = str(payload.get("question", "")).strip()
+            session_id = str(payload.get("session_id", "")).strip() or f"chat-{uuid4().hex[:12]}"
+            if not question:
+                self.send_error_json(400, "question requerida"); return
+            db_store_chat_message(session_id, "user", question)
+            answer = _chat_answer(question, session_id)
+            db_store_chat_message(session_id, "assistant", answer)
+            self.send_json({
+                "ok": True,
+                "session_id": session_id,
+                "answer": answer,
+                "history": db_get_chat_history(session_id, limit=20),
+            })
             return
 
         if path == "/api/ingest":
@@ -1239,6 +2435,7 @@ def main():
             router_user=ROUTER_USER,
             ssh_key=SSH_KEY,
             portal_ip=PORTAL_IP,
+            bypass_ips=[ADMIN_IP, RASPI4B_IP, RASPI3B_IP, PORTAL_NODE_IP, AP_EXTENDER_IP],
             logger=log,
         )
         ok, msg = router_mcp.ensure_policy_objects()
@@ -1275,6 +2472,10 @@ def main():
     # Iniciar worker (un solo hilo — procesa de uno en uno)
     t = threading.Thread(target=worker_thread, daemon=True, name="worker")
     t.start()
+
+    # Worker de resúmenes automáticos (cada 60s por defecto)
+    ts = threading.Thread(target=summary_worker_thread, daemon=True, name="summary-worker")
+    ts.start()
 
     # Iniciar MQTT subscriber
     init_mqtt()

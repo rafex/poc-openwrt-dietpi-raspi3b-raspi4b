@@ -1,6 +1,205 @@
-# Release v0.2.0
+# Release v0.3.0
 
-**22 de Abril de 2026**
+**24 de Abril de 2026**
+
+## Resumen
+
+Release enfocanda en herramientas de diagnóstico, control inteligente de llamadas LLM y mejoras de portabilidad. Se agregan scripts de monitoreo integral para debugging en tiempo real de la pila MQTT + AI. Nuevo soporte para modelos GGUF personalizados y stack IA modular.
+
+## 🎯 Características Principales
+
+### 1. Herramientas de Diagnóstico Avanzadas
+
+#### `llm-status.sh`
+Inspecciona a fondo el estado de `llama-server`:
+- Estado del servicio init.d
+- PID en ejecución con verificación de proceso
+- Health check HTTP en puerto 8081 (`/health`)
+- Modelo actualmente cargado (desde `/proc/<pid>/cmdline`)
+- Modelo configurado en el servicio (fallback)
+- Línea de comandos completa del proceso
+
+**Uso:**
+```bash
+bash scripts/llm-status.sh
+```
+
+#### `mqtt-queue-status.sh`
+Diagnóstico integral de broker Mosquitto y cola del analyzer:
+- Estado del servicio y PID
+- Puerto 1883 en LISTEN
+- Métricas `$SYS` del broker (clientes, subscripciones, bytes)
+- Estado de cola (pending/processing/done/error)
+- Estadísticas de procesamiento (batches_ok/error, llama_calls)
+- Estado del pod ai-analyzer en k3s
+- Resumen de SQLite (batches por status)
+
+**Modo watch:**
+```bash
+bash scripts/mqtt-queue-status.sh --watch --interval 5
+```
+
+### 2. Control Inteligente de LLM en Clasificador de Dominios
+
+Sistema de **budgeting** adaptativo que evita saturación del LLM:
+
+**Safe Mode (adaptativo):**
+- Se activa cuando `queue_size ≤ DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE`
+- Presupuesto máximo: `DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST` llamadas por request
+- Se desactiva cuando cola crece (evita overhead en períodos altos)
+
+**Parámetros Configurables:**
+```bash
+# En k8s deployment o env vars:
+DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST=2    # Max llamadas por request
+DOMAIN_CLASSIFIER_LLM_TIMEOUT_S=8               # Timeout en segundos
+DOMAIN_CLASSIFIER_LLM_N_PREDICT=48              # Tokens de respuesta
+DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE=4          # Umbral para safe_mode
+```
+
+**Métricas expuestas** en `/api/stats`:
+```json
+{
+  "llm_classifier": {
+    "enabled": true,
+    "safe_mode": true,
+    "queue_size": 2,
+    "max_queue_size": 4,
+    "max_new_per_request": 2,
+    "used_budget": 1,
+    "timeout_s": 8,
+    "n_predict": 48
+  }
+}
+```
+
+### 3. Setup Modular - Bundle AI Stack
+
+Nuevo `setup-raspi4b-ai-stack.sh`:
+```bash
+# Instala solo stack IA (sin portales)
+bash scripts/setup-raspi4b-ai-stack.sh
+
+# Con controladores:
+bash scripts/setup-raspi4b-ai-stack.sh --skip-mosquitto
+bash scripts/setup-raspi4b-ai-stack.sh --skip-llm
+bash scripts/setup-raspi4b-ai-stack.sh --skip-analyzer
+```
+
+Ejecuta internamente:
+- `setup-raspi4b-mosquitto.sh`
+- `setup-raspi4b-llm.sh`
+- `setup-raspi4b-ai-analyzer.sh`
+
+### 4. Soporte Modelos Personalizados
+
+Flag `--model-path` en `setup-raspi4b-llm.sh`:
+```bash
+# Usar modelo en ubicación personalizada
+bash scripts/setup-raspi4b-llm.sh --model-path=/opt/custom/qwen2.5-0.5b.gguf
+
+# Búsqueda mejorada:
+# - Patrones más flexibles para Qwen2.5 y TinyLlama
+# - Cachés de Hugging Face (~/.cache/huggingface/hub/)
+# - Fallback robusto con find() si los patrones fallan
+```
+
+## 🔧 Cambios Técnicos
+
+### OpenWrt - Persistencia de nftables
+
+**Antes:**
+```
+/etc/nftables.d/captive-portal.nft  ← parseado automáticamente por fw4
+```
+
+**Después:**
+```
+/etc/captive-portal.nft  ← incluido explícitamente vía script
+/etc/captive-portal-fw4-include.sh  ← wrapper registrado en UCI firewall
+```
+
+Beneficio: Evita errores sintácticos de fw4 al intentar parsear archivo
+que contiene tabla `ip` a nivel top-level.
+
+### LLM - Parámetros Configurables
+
+Función `call_llama()` ahora soporta:
+```python
+def call_llama(
+    prompt: str,
+    *,
+    timeout_s: int = 120,
+    n_predict: int | None = None,
+    temperature: float = 0.7,
+    top_p: float = 0.9,
+) -> str:
+```
+
+Usada desde clasificador de dominios:
+```python
+response = call_llama(
+    prompt,
+    timeout_s=DOMAIN_CLASSIFIER_LLM_TIMEOUT_S,  # 8s
+    n_predict=DOMAIN_CLASSIFIER_LLM_N_PREDICT,  # 48 tokens
+    temperature=0.1,                             # Más determinista
+    top_p=0.5,
+)
+```
+
+### Portabilidad Mejorada
+
+- **mqtt-queue-status.sh**: Migración de here-string (`<<<"$json"`) a variable de entorno
+- **setup-raspi4b-llm.sh**: Búsqueda de modelos con fallback robusto
+- **Python3**: Compatibilidad mejorada con sintaxis de heredoc alternativa
+
+## 📊 Estadísticas
+
+| Métrica | Valor |
+|---------|-------|
+| Commits nuevos | 8 |
+| Scripts nuevos | 3 |
+| Funciones LLM mejoradas | 2 |
+| Variables de entorno | 4 |
+| Herramientas de diagnóstico | 2 |
+
+## 🚀 Upgrade desde v0.2.0
+
+1. **Pull cambios:**
+   ```bash
+   git fetch origin && git checkout v0.3.0
+   ```
+
+2. **Redeployed (si usa split_portal):**
+   ```bash
+   bash scripts/setup-topology.sh
+   ```
+
+3. **Verificación:**
+   ```bash
+   bash scripts/llm-status.sh
+   bash scripts/mqtt-queue-status.sh
+   ```
+
+4. **Configurar dominio classifier (opcional):**
+   ```bash
+   # Actualizar env vars en k8s deployment
+   kubectl set env deployment/ai-analyzer \
+     DOMAIN_CLASSIFIER_LLM_MAX_NEW_PER_REQUEST=2 \
+     DOMAIN_CLASSIFIER_LLM_TIMEOUT_S=8 \
+     DOMAIN_CLASSIFIER_LLM_N_PREDICT=48 \
+     DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE=4
+   ```
+
+## 📝 Notas
+
+- Todos los scripts heredados continúan funcionando sin cambios
+- nftables migration es automatizada en `setup-openwrt.sh` y reparable con `openwrt-core-access-repair.sh`
+- Budget system es **no destructivo**: si se alcanza presupuesto simplemente se deja de llamar al LLM
+
+---
+
+# Release v0.2.0
 
 ## Resumen
 

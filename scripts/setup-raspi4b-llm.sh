@@ -10,8 +10,24 @@ LLAMA_PORT=8081
 LLAMA_SERVICE="/etc/init.d/llama-server"
 LLAMA_PIDFILE="/var/run/llama-server.pid"
 LLAMA_LOGFILE="/var/log/llama-server.log"
+CUSTOM_MODEL_PATH=""
 
 parse_common_flags "$@"
+ARGS=("${REM_ARGS[@]}")
+REM_ARGS=()
+for a in "${ARGS[@]}"; do
+  case "$a" in
+    --model-path=*)
+      CUSTOM_MODEL_PATH="${a#--model-path=}"
+      ;;
+    --model-path)
+      die "Usa --model-path=/ruta/al/modelo.gguf"
+      ;;
+    *)
+      REM_ARGS+=("$a")
+      ;;
+  esac
+done
 init_log_dir "llm"
 need_root
 
@@ -34,24 +50,45 @@ find_llama_bin() {
 }
 
 find_model() {
+  if [ -n "$CUSTOM_MODEL_PATH" ]; then
+    if [ -f "$CUSTOM_MODEL_PATH" ]; then
+      realpath "$CUSTOM_MODEL_PATH" 2>/dev/null || readlink -f "$CUSTOM_MODEL_PATH" || echo "$CUSTOM_MODEL_PATH"
+      return 0
+    fi
+    die "Modelo no encontrado en --model-path: $CUSTOM_MODEL_PATH"
+  fi
+
   local f
   for f in \
     /opt/models/qwen2.5-0.5b*.gguf \
     /opt/models/Qwen2.5-0.5B*.gguf \
+    /opt/models/*qwen*0.5*.gguf \
     /opt/llama.cpp/models/qwen2.5-0.5b*.gguf \
+    /opt/llama.cpp/models/*qwen*0.5*.gguf \
     /opt/models/tinyllama*.gguf \
     /opt/llama.cpp/models/tinyllama*.gguf \
     /root/.cache/llama.cpp/*/*.gguf \
-    /home/dietpi/.cache/llama.cpp/*/*.gguf; do
+    /home/dietpi/.cache/llama.cpp/*/*.gguf \
+    /home/*/.cache/llama.cpp/*/*.gguf \
+    /home/*/.cache/llama.cpp/*/*/*.gguf \
+    /root/.cache/huggingface/hub/models--*/snapshots/*/*.gguf \
+    /home/*/.cache/huggingface/hub/models--*/snapshots/*/*.gguf; do
     [ -f "$f" ] && { realpath "$f" 2>/dev/null || readlink -f "$f" || echo "$f"; return 0; }
   done
+
+  # Fallback robusto: busca Qwen/TinyLlama en rutas típicas de /home, /root y /opt.
+  if command -v find >/dev/null 2>&1; then
+    f="$(find /home /root /opt -maxdepth 12 -type f \( -iname '*qwen*0.5*.gguf' -o -iname '*tinyllama*.gguf' \) 2>/dev/null | head -1)"
+    [ -n "$f" ] && { realpath "$f" 2>/dev/null || readlink -f "$f" || echo "$f"; return 0; }
+  fi
   return 1
 }
 
 LLAMA_BIN="$(find_llama_bin || true)"
 [ -n "$LLAMA_BIN" ] || die "No se encontró binario llama-server"
 MODEL_PATH="$(find_model || true)"
-[ -n "$MODEL_PATH" ] || die "No se encontró modelo .gguf (Qwen2.5-0.5B o TinyLlama)"
+[ -n "$MODEL_PATH" ] || die "No se encontró modelo .gguf (Qwen2.5-0.5B o TinyLlama).
+Sugerencia: usa --model-path=/ruta/al/modelo.gguf"
 
 log_ok "Binario: $LLAMA_BIN"
 log_ok "Modelo : $MODEL_PATH"

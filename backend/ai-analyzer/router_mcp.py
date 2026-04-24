@@ -13,6 +13,20 @@ class RouterMCP:
     NFT_PORN_SET = "blocked_porn_ips"
     NFT_WARN_SET = "warned_clients"
     LAN_SUBNET = "192.168.1.0/24"
+    MCP_PROMPTS = {
+        "social_block": (
+            "Evalúa dominios de redes sociales detectados y decide si aplicar bloqueo por IP destino. "
+            "Responde JSON con action=block|none y reason breve."
+        ),
+        "porn_enforcement": (
+            "Evalúa señales de sitios pornográficos y decide enforcement inmediato. "
+            "Responde JSON con action=block_and_kick|none y reason breve."
+        ),
+        "social_unblock": (
+            "Evalúa si terminó la ventana de restricción o bajó el consumo; decide retiro de bloqueo social. "
+            "Responde JSON con action=unblock|none y reason breve."
+        ),
+    }
 
     def __init__(
         self,
@@ -20,6 +34,7 @@ class RouterMCP:
         router_user: str,
         ssh_key: str,
         portal_ip: str = "192.168.1.167",
+        bypass_ips: Iterable[str] | None = None,
         timeout_s: int = 12,
         logger: logging.Logger | None = None,
     ):
@@ -27,6 +42,10 @@ class RouterMCP:
         self.router_user = router_user
         self.ssh_key = ssh_key
         self.portal_ip = portal_ip
+        self.bypass_ips = self._normalize_ips(
+            list(bypass_ips) if bypass_ips is not None else
+            ["192.168.1.113", "192.168.1.167", "192.168.1.181", "192.168.1.182", "192.168.1.183"]
+        )
         self.timeout_s = timeout_s
         self.log = logger or logging.getLogger("router-mcp")
 
@@ -51,6 +70,14 @@ class RouterMCP:
         )
         return res.returncode, res.stdout.strip(), res.stderr.strip()
 
+    def _obfuscated_login(self) -> str:
+        ip_parts = (self.router_ip or "").split(".")
+        if len(ip_parts) == 4:
+            ip_masked = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.xxx"
+        else:
+            ip_masked = "x.x.x.x"
+        return f"{self.router_user}@{ip_masked} (ssh key redacted)"
+
     @staticmethod
     def _normalize_ips(ips: Iterable[str]) -> list[str]:
         out = []
@@ -69,6 +96,9 @@ class RouterMCP:
 
     def ensure_policy_objects(self) -> tuple[bool, str]:
         """Crea sets/reglas de política si no existen."""
+        bypass_expr = ""
+        if self.bypass_ips:
+            bypass_expr = " ip saddr != { " + ", ".join(self.bypass_ips) + " }"
         script = f"""
 set -eu
 nft list table {self.NFT_TABLE} >/dev/null 2>&1
@@ -82,17 +112,17 @@ nft list set {self.NFT_TABLE} {self.NFT_PORN_SET} >/dev/null 2>&1 || \
 nft list set {self.NFT_TABLE} {self.NFT_WARN_SET} >/dev/null 2>&1 || \
   nft add set {self.NFT_TABLE} {self.NFT_WARN_SET} {{ type ipv4_addr; flags dynamic,timeout; timeout 20m; }}
 
-nft list chain {self.NFT_TABLE} forward_captive | grep -q 'ip saddr {self.LAN_SUBNET} ip daddr @{self.NFT_SOCIAL_SET} drop' || \
-  nft insert rule {self.NFT_TABLE} forward_captive ip saddr {self.LAN_SUBNET} ip daddr @{self.NFT_SOCIAL_SET} drop
+nft list chain {self.NFT_TABLE} forward_captive | grep -q 'ip saddr {self.LAN_SUBNET}{bypass_expr} ip daddr @{self.NFT_SOCIAL_SET} drop' || \
+  nft insert rule {self.NFT_TABLE} forward_captive ip saddr {self.LAN_SUBNET}{bypass_expr} ip daddr @{self.NFT_SOCIAL_SET} drop
 
-nft list chain {self.NFT_TABLE} forward_captive | grep -q 'ip saddr {self.LAN_SUBNET} ip daddr @{self.NFT_PORN_SET} drop' || \
-  nft insert rule {self.NFT_TABLE} forward_captive ip saddr {self.LAN_SUBNET} ip daddr @{self.NFT_PORN_SET} drop
+nft list chain {self.NFT_TABLE} forward_captive | grep -q 'ip saddr {self.LAN_SUBNET}{bypass_expr} ip daddr @{self.NFT_PORN_SET} drop' || \
+  nft insert rule {self.NFT_TABLE} forward_captive ip saddr {self.LAN_SUBNET}{bypass_expr} ip daddr @{self.NFT_PORN_SET} drop
 
-nft list chain {self.NFT_TABLE} prerouting | grep -q 'ip saddr {self.LAN_SUBNET} ip daddr @{self.NFT_SOCIAL_SET} add @warned_clients' || \
-  nft insert rule {self.NFT_TABLE} prerouting ip saddr {self.LAN_SUBNET} ip daddr @{self.NFT_SOCIAL_SET} add @{self.NFT_WARN_SET} {{ ip saddr timeout 15m }} tcp dport 80 dnat to {self.portal_ip}:80
+nft list chain {self.NFT_TABLE} prerouting | grep -q 'ip saddr {self.LAN_SUBNET}{bypass_expr} ip daddr @{self.NFT_SOCIAL_SET} add @warned_clients' || \
+  nft insert rule {self.NFT_TABLE} prerouting ip saddr {self.LAN_SUBNET}{bypass_expr} ip daddr @{self.NFT_SOCIAL_SET} add @{self.NFT_WARN_SET} {{ ip saddr timeout 15m }} tcp dport 80 dnat to {self.portal_ip}:80
 
-nft list chain {self.NFT_TABLE} prerouting | grep -q 'ip saddr {self.LAN_SUBNET} ip daddr @{self.NFT_PORN_SET} add @warned_clients' || \
-  nft insert rule {self.NFT_TABLE} prerouting ip saddr {self.LAN_SUBNET} ip daddr @{self.NFT_PORN_SET} add @{self.NFT_WARN_SET} {{ ip saddr timeout 30m }} tcp dport 80 dnat to {self.portal_ip}:80
+nft list chain {self.NFT_TABLE} prerouting | grep -q 'ip saddr {self.LAN_SUBNET}{bypass_expr} ip daddr @{self.NFT_PORN_SET} add @warned_clients' || \
+  nft insert rule {self.NFT_TABLE} prerouting ip saddr {self.LAN_SUBNET}{bypass_expr} ip daddr @{self.NFT_PORN_SET} add @{self.NFT_WARN_SET} {{ ip saddr timeout 30m }} tcp dport 80 dnat to {self.portal_ip}:80
 
 printf 'OK\\n'
 """
@@ -232,3 +262,64 @@ printf 'OK\\n'
             f"nft get element {self.NFT_TABLE} {self.NFT_WARN_SET} {{ {client_ip} }} >/dev/null 2>&1"
         )
         return rc == 0
+
+    def mcp_capabilities(self) -> dict:
+        return {
+            "name": "openwrt-router-mcp",
+            "version": "1.0",
+            "tool": {
+                "name": "apply_router_policy",
+                "description": (
+                    "Abstrae operaciones de bloqueo/desbloqueo en OpenWrt usando nftables, "
+                    "sin exponer credenciales SSH en el frontend."
+                ),
+                "operations": [
+                    "ensure_policy_objects",
+                    "apply_social_block",
+                    "remove_social_block",
+                    "block_porn_ips",
+                    "kick_client_from_allowed",
+                    "mark_client_warning",
+                    "clear_client_warning",
+                    "resolve_domains_to_ips",
+                ],
+                "ssh_target_obfuscated": self._obfuscated_login(),
+            },
+            "prompts": self.MCP_PROMPTS,
+            "resources": [
+                "markdown/policy-output-example",
+                "json/action-schema-example",
+            ],
+        }
+
+    def mcp_resources(self) -> dict:
+        md = (
+            "# Ejemplo esperado (Markdown)\n\n"
+            "- policy: `social_block`\n"
+            "- trigger: tráfico detectado dentro de la ventana 09:00-17:00\n"
+            "- decision: bloquear IPs destino de dominios sociales\n"
+            "- output: JSON estricto\n"
+        )
+        json_example = {
+            "action": "block",
+            "reason": "Consumo de red social en horario restringido",
+            "category": "social",
+            "domains": ["facebook.com", "instagram.com"],
+            "ips": ["157.240.0.0", "31.13.64.0"],
+        }
+        md_json = (
+            "```json\n"
+            "{\n"
+            '  "action": "block",\n'
+            '  "reason": "Consumo de red social en horario restringido",\n'
+            '  "category": "social",\n'
+            '  "domains": ["facebook.com", "instagram.com"],\n'
+            '  "ips": ["157.240.0.0", "31.13.64.0"]\n'
+            "}\n"
+            "```"
+        )
+        return {
+            "markdown_policy_output_example": md,
+            "json_action_schema_example": json_example,
+            "markdown_json_highlight_example": md_json,
+        }

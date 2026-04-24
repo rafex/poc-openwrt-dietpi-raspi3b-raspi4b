@@ -14,3 +14,13 @@ __pycache__/
 # Output de diagnósticos — solo conservar los .md (reportes de estado)
 output/*
 !output/*.md
+
+# opencode (local, no versionar)
+.opencode/sessions.db
+.opencode/sessions.db-shm
+.opencode/sessions.db-wal
+.opencode/worktrees/
+.opencode/worktrees.db
+.opencode/worktrees.log
+.opencode/node_modules/
+session-ses_*.md

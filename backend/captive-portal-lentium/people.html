@@ -3,105 +3,243 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>people · Portal Node</title>
+  <title>people · Lentium</title>
   <style>
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: #0b1220; color: #e5e7eb; }
-    .wrap { max-width: 1000px; margin: 0 auto; padding: 20px; }
-    h1 { margin: 0 0 12px; font-size: 26px; }
-    .muted { color: #9ca3af; font-size: 14px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 16px 0; }
-    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 14px; }
-    .k { color: #9ca3af; font-size: 13px; }
-    .v { font-size: 22px; font-weight: 700; margin-top: 6px; }
-    table { width: 100%; border-collapse: collapse; background: #111827; border: 1px solid #1f2937; border-radius: 12px; overflow: hidden; }
-    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #1f2937; font-size: 14px; }
-    th { color: #9ca3af; font-weight: 600; }
-    tr:last-child td { border-bottom: none; }
+    .wrap { max-width: 1200px; margin: 0 auto; padding: 18px; }
+    h1 { margin: 0 0 6px; font-size: 1.4rem; }
+    .sub { color: #9ca3af; margin-bottom: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .card { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; }
+    .k { color: #9ca3af; font-size: 12px; }
+    .v { margin-top: 6px; font-size: 22px; font-weight: 700; }
     .ok { color: #34d399; }
     .warn { color: #fbbf24; }
     .bad { color: #f87171; }
+
+    .panel { background: #111827; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+    .panel h3 { margin: 0 0 8px; }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 9px; border-bottom: 1px solid #1f2937; font-size: 13px; text-align: left; vertical-align: top; }
+    th { color: #9ca3af; position: sticky; top: 0; background: #111827; }
+    tr:last-child td { border-bottom: none; }
+
+    .pager { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 10px; }
+    .btn { border: 1px solid #374151; background: #0f172a; color: #e5e7eb; border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+    .btn:disabled { opacity: .45; cursor: default; }
+    .meta { color: #9ca3af; font-size: 12px; }
+
+    .sensitive { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .toggle-eye {
+      border: 1px solid #374151; background: #0b1220; color: #e5e7eb;
+      border-radius: 7px; padding: 2px 8px; margin-left: 8px; cursor: pointer; font-size: 12px;
+    }
+    .tag { display:inline-block; padding:2px 8px; border-radius:999px; background:#1f2937; color:#cbd5e1; font-size:12px; }
   </style>
 </head>
 <body>
   <div class="wrap">
     <h1>people</h1>
-    <div class="muted">Vista local en Raspi3BPortal. Fuente de datos: API de AI node.</div>
+    <div class="sub">Registros de portal cautivo con paginación y ocultación de datos sensibles.</div>
 
     <div class="grid">
-      <div class="card"><div class="k">Estado AI</div><div class="v" id="aiState">--</div></div>
-      <div class="card"><div class="k">Análisis totales</div><div class="v" id="totalAnalyses">--</div></div>
-      <div class="card"><div class="k">En cola</div><div class="v" id="queuePending">--</div></div>
-      <div class="card"><div class="k">Último riesgo</div><div class="v" id="lastRisk">--</div></div>
+      <div class="card"><div class="k">Registrados totales</div><div class="v" id="nTotal">0</div></div>
+      <div class="card"><div class="k">Clientes</div><div class="v" id="nClientes">0</div></div>
+      <div class="card"><div class="k">Invitados</div><div class="v" id="nInvitados">0</div></div>
+      <div class="card"><div class="k">Conectados</div><div class="v" id="nConectados">0</div></div>
+      <div class="card"><div class="k">Entrada (MiB)</div><div class="v" id="mibIn">0</div></div>
+      <div class="card"><div class="k">Salida (MiB)</div><div class="v" id="mibOut">0</div></div>
     </div>
 
-    <table>
-      <thead>
-        <tr>
-          <th>Timestamp</th>
-          <th>Riesgo</th>
-          <th>Paquetes sospechosos</th>
-          <th>Duración (s)</th>
-        </tr>
-      </thead>
-      <tbody id="rows">
-        <tr><td colspan="4" class="muted">Cargando...</td></tr>
-      </tbody>
-    </table>
+    <div class="panel">
+      <h3>Clientes registrados</h3>
+      <div class="table-wrap"><table id="tblClientes"></table></div>
+      <div class="pager" id="pagerClientes"></div>
+    </div>
+
+    <div class="panel">
+      <h3>Invitados registrados</h3>
+      <div class="table-wrap"><table id="tblInvitados"></table></div>
+      <div class="pager" id="pagerInvitados"></div>
+    </div>
   </div>
 
   <script>
-    function clsRisk(risk) {
-      const r = (risk || '').toUpperCase();
-      if (r.includes('ALTO')) return 'bad';
-      if (r.includes('MEDIO')) return 'warn';
-      return 'ok';
+    const state = {
+      clientes: [],
+      invitados: [],
+      pageClientes: 1,
+      pageInvitados: 1,
+      pageSize: 10,
+    };
+
+    function esc(v) {
+      return (v === null || v === undefined) ? '' : String(v)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
     }
 
-    async function loadData() {
-      const [health, stats, history] = await Promise.all([
-        fetch('/health', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-        fetch('/api/stats', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-        fetch('/api/history?limit=25', { cache: 'no-store' }).then(r => r.json()).catch(() => null),
-      ]);
-
-      const aiOk = !!(health && health.status === 'ok');
-      const aiLabel = aiOk ? 'ONLINE' : 'OFFLINE';
-      document.getElementById('aiState').textContent = aiLabel;
-      document.getElementById('aiState').className = 'v ' + (aiOk ? 'ok' : 'bad');
-
-      const items = (history && history.items) ? history.items : [];
-      const queue = (stats && stats.queue && typeof stats.queue.pending !== 'undefined') ? stats.queue.pending : '--';
-      const total = items.length;
-      const last = items[0] || {};
-      const lastRisk = last.risk || '--';
-
-      document.getElementById('totalAnalyses').textContent = String(total);
-      document.getElementById('queuePending').textContent = String(queue);
-      document.getElementById('lastRisk').textContent = lastRisk;
-      document.getElementById('lastRisk').className = 'v ' + clsRisk(lastRisk);
-
-      const tbody = document.getElementById('rows');
-      if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="4" class="muted">Sin datos todavía</td></tr>';
-        return;
-      }
-
-      tbody.innerHTML = items.map(it => {
-        const ts = it.timestamp || it.created_at || '-';
-        const risk = (it.risk || '-').toString();
-        const sus = (typeof it.suspicious_count !== 'undefined') ? it.suspicious_count : '-';
-        const elapsed = (typeof it.elapsed_s !== 'undefined') ? it.elapsed_s : '-';
-        return `<tr>
-          <td>${ts}</td>
-          <td class="${clsRisk(risk)}">${risk}</td>
-          <td>${sus}</td>
-          <td>${elapsed}</td>
-        </tr>`;
-      }).join('');
+    function mask(v) {
+      const s = String(v || '');
+      if (!s) return '';
+      return '*'.repeat(Math.min(10, Math.max(6, s.length)));
     }
 
-    loadData();
-    setInterval(loadData, 5000);
+    function sensitiveCell(raw) {
+      const safeRaw = esc(raw || '');
+      const safeMask = esc(mask(raw || ''));
+      return `<span class="sensitive" data-visible="0" data-raw="${safeRaw}" data-mask="${safeMask}">${safeMask}</span>
+              <button class="toggle-eye" type="button">👁</button>`;
+    }
+
+    function bindEyes(root) {
+      root.querySelectorAll('.toggle-eye').forEach(btn => {
+        btn.onclick = () => {
+          const span = btn.parentElement.querySelector('.sensitive');
+          const vis = span.getAttribute('data-visible') === '1';
+          if (vis) {
+            span.textContent = span.getAttribute('data-mask');
+            span.setAttribute('data-visible', '0');
+            btn.textContent = '👁';
+          } else {
+            span.textContent = span.getAttribute('data-raw');
+            span.setAttribute('data-visible', '1');
+            btn.textContent = '🙈';
+          }
+        };
+      });
+    }
+
+    function paginate(items, page, size) {
+      const totalPages = Math.max(1, Math.ceil(items.length / size));
+      const p = Math.min(totalPages, Math.max(1, page));
+      const start = (p - 1) * size;
+      return {
+        page: p,
+        totalPages,
+        total: items.length,
+        rows: items.slice(start, start + size),
+      };
+    }
+
+    function renderPager(el, page, totalPages, total, onPrev, onNext) {
+      el.innerHTML = `
+        <span class="meta">${total} registros</span>
+        <button class="btn" ${page <= 1 ? 'disabled' : ''} id="${el.id}-prev">Anterior</button>
+        <span class="meta">Página ${page}/${totalPages}</span>
+        <button class="btn" ${page >= totalPages ? 'disabled' : ''} id="${el.id}-next">Siguiente</button>
+      `;
+      const prev = document.getElementById(`${el.id}-prev`);
+      const next = document.getElementById(`${el.id}-next`);
+      if (prev) prev.onclick = onPrev;
+      if (next) next.onclick = onNext;
+    }
+
+    function renderClientes() {
+      const table = document.getElementById('tblClientes');
+      const pager = document.getElementById('pagerClientes');
+      const p = paginate(state.clientes, state.pageClientes, state.pageSize);
+      state.pageClientes = p.page;
+
+      table.innerHTML = `
+        <thead><tr>
+          <th>ID</th><th>Teléfono</th><th>IP</th><th>Última sesión</th><th>Pwd (claro)</th><th>Pwd (hash)</th>
+        </tr></thead>
+        <tbody>
+          ${p.rows.map(r => `
+            <tr>
+              <td>${esc(r.id)}</td>
+              <td>${esc(r.telefono)}</td>
+              <td>${esc(r.ip || '')}</td>
+              <td>${esc(r.ultima_sesion || '')}</td>
+              <td>${sensitiveCell(r.pwd_plano || '')}</td>
+              <td>${sensitiveCell(r.pwd_hash || '')}</td>
+            </tr>
+          `).join('') || '<tr><td colspan="6" class="meta">Sin registros</td></tr>'}
+        </tbody>
+      `;
+      bindEyes(table);
+
+      renderPager(
+        pager,
+        p.page,
+        p.totalPages,
+        p.total,
+        () => { state.pageClientes = Math.max(1, state.pageClientes - 1); renderClientes(); },
+        () => { state.pageClientes = Math.min(p.totalPages, state.pageClientes + 1); renderClientes(); },
+      );
+    }
+
+    function renderInvitados() {
+      const table = document.getElementById('tblInvitados');
+      const pager = document.getElementById('pagerInvitados');
+      const p = paginate(state.invitados, state.pageInvitados, state.pageSize);
+      state.pageInvitados = p.page;
+
+      table.innerHTML = `
+        <thead><tr>
+          <th>ID</th><th>Nombre</th><th>Teléfono</th><th>IP</th><th>Última sesión</th><th>Dirección</th><th>Redes</th><th>Pwd (claro)</th><th>Pwd (hash)</th>
+        </tr></thead>
+        <tbody>
+          ${p.rows.map(r => {
+            const nombre = [r.nombre, r.apellido_paterno, r.apellido_materno].filter(Boolean).join(' ');
+            const redes = Array.isArray(r.redes_sociales)
+              ? r.redes_sociales.map(x => `${x.red || ''}:${x.usuario || ''}`).join(', ')
+              : '';
+            return `
+              <tr>
+                <td>${esc(r.id)}</td>
+                <td>${esc(nombre)}</td>
+                <td>${esc(r.telefono)}</td>
+                <td>${esc(r.ip || '')}</td>
+                <td>${esc(r.ultima_sesion || '')}</td>
+                <td>${sensitiveCell(r.direccion_texto || '')}</td>
+                <td>${sensitiveCell(redes)}</td>
+                <td>${sensitiveCell(r.pwd_plano || '')}</td>
+                <td>${sensitiveCell(r.pwd_hash || '')}</td>
+              </tr>
+            `;
+          }).join('') || '<tr><td colspan="9" class="meta">Sin registros</td></tr>'}
+        </tbody>
+      `;
+      bindEyes(table);
+
+      renderPager(
+        pager,
+        p.page,
+        p.totalPages,
+        p.total,
+        () => { state.pageInvitados = Math.max(1, state.pageInvitados - 1); renderInvitados(); },
+        () => { state.pageInvitados = Math.min(p.totalPages, state.pageInvitados + 1); renderInvitados(); },
+      );
+    }
+
+    async function refresh() {
+      const resp = await fetch('/api/people/dashboard', { cache: 'no-store' });
+      const data = await resp.json();
+
+      state.clientes = Array.isArray(data.clientes) ? data.clientes : [];
+      state.invitados = Array.isArray(data.invitados) ? data.invitados : [];
+
+      const s = data.stats || {};
+      const total = (s.clientes_registrados || 0) + (s.invitados_registrados || 0);
+      document.getElementById('nTotal').textContent = String(total);
+      document.getElementById('nClientes').textContent = String(s.clientes_registrados || 0);
+      document.getElementById('nInvitados').textContent = String(s.invitados_registrados || 0);
+      document.getElementById('nConectados').textContent = String(s.conectados || 0);
+      document.getElementById('mibIn').textContent = String(s.trafico_entrada_mib || 0);
+      document.getElementById('mibOut').textContent = String(s.trafico_salida_mib || 0);
+
+      renderClientes();
+      renderInvitados();
+    }
+
+    refresh().catch(() => {});
+    setInterval(() => refresh().catch(() => {}), 5000);
   </script>
 </body>
 </html>

@@ -49,6 +49,7 @@ R3_HOST     = os.environ.get("SERVICE_RASPI3_HOST", "192.168.1.181")
 R3_USER     = os.environ.get("SERVICE_RASPI3_USER", "root")
 R3_KEY      = os.environ.get("SERVICE_RASPI3_SSH_KEY", "/opt/keys/sensor")
 REPO_PATH   = os.environ.get("REPO_PATH", "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b")
+AI_ANALYZER_URL = os.environ.get("AI_ANALYZER_URL", f"http://{R4_HOST}:5000")
 
 log.info("=== Lentium Portal Backend iniciando ===")
 log.info(f"ROUTER_IP={ROUTER_IP}  PORTAL_IP={PORTAL_IP}  DB_PATH={DB_PATH}  PORT={PORT}")
@@ -104,6 +105,10 @@ def _hash_pwd(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+def _phone_key(telefono: str) -> str:
+    return "".join(ch for ch in (telefono or "") if ch.isdigit())
+
+
 def save_client(telefono: str, password: str, ip: str) -> int:
     h = _hash_pwd(password)
     with _db_connect() as conn:
@@ -156,6 +161,59 @@ def save_guest(data: dict, ip: str) -> int:
         )
         log.info(f"Nuevo invitado registrado: telefono={data['telefono']} ip={ip} id={cur2.lastrowid}")
         return cur2.lastrowid
+
+
+def authenticate_registered_client(telefono: str, password: str, ip: str) -> tuple[bool, str, str]:
+    """
+    Valida acceso de "Soy Cliente" contra registros existentes.
+    - Primero busca en clientes
+    - Luego en invitados
+    Retorna (ok, tipo, reason)
+    """
+    tel_raw = (telefono or "").strip()
+    tel_key = _phone_key(tel_raw)
+    pwd_hash = _hash_pwd(password)
+    if not tel_raw or not tel_key:
+        return False, "", "telefono_invalido"
+
+    with _db_connect() as conn:
+        row = conn.execute(
+            "SELECT id,telefono,pwd_hash FROM clientes WHERE telefono=?",
+            (tel_raw,),
+        ).fetchone()
+        if row and row["pwd_hash"] == pwd_hash:
+            conn.execute(
+                "UPDATE clientes SET ip=?, ultima_sesion=datetime('now') WHERE id=?",
+                (ip, row["id"]),
+            )
+            return True, "cliente", "ok"
+
+        row = conn.execute(
+            "SELECT id,telefono,pwd_hash FROM invitados WHERE telefono=?",
+            (tel_raw,),
+        ).fetchone()
+        if row and row["pwd_hash"] == pwd_hash:
+            conn.execute(
+                "UPDATE invitados SET ip=?, ultima_sesion=datetime('now') WHERE id=?",
+                (ip, row["id"]),
+            )
+            return True, "invitado", "ok"
+
+        # Fallback por normalización de teléfono (ej. "55 1234 5678" vs "5512345678")
+        for table in ("clientes", "invitados"):
+            rows = conn.execute(
+                f"SELECT id,telefono,pwd_hash FROM {table}"
+            ).fetchall()
+            for r in rows:
+                if _phone_key(r["telefono"]) == tel_key and r["pwd_hash"] == pwd_hash:
+                    conn.execute(
+                        f"UPDATE {table} SET ip=?, ultima_sesion=datetime('now') WHERE id=?",
+                        (ip, r["id"]),
+                    )
+                    tipo = "cliente" if table == "clientes" else "invitado"
+                    return True, tipo, "ok"
+
+    return False, "", "credenciales_invalidas"
 
 # =============================================================================
 # SSH helper
@@ -441,6 +499,22 @@ def _safe_json_loads(raw: str, fallback):
         return fallback
 
 
+def _fetch_ai_risk_message(client_ip: str) -> dict:
+    if not client_ip:
+        return {"enabled": False, "message": ""}
+    try:
+        url = f"{AI_ANALYZER_URL}/api/portal/risk-message?ip={client_ip}"
+        with urllib.request.urlopen(url, timeout=2.5) as resp:
+            if resp.getcode() != 200:
+                return {"enabled": False, "message": ""}
+            payload = json.loads(resp.read().decode("utf-8"))
+            if isinstance(payload, dict):
+                return payload
+    except Exception:
+        return {"enabled": False, "message": ""}
+    return {"enabled": False, "message": ""}
+
+
 def _get_connected_clients() -> list[dict]:
     # IPs autorizadas actualmente en nftables.
     rc_set, set_stdout, _ = _router_ssh(
@@ -452,7 +526,7 @@ def _get_connected_clients() -> list[dict]:
         return []
 
     ips = [line.strip() for line in set_stdout.splitlines() if line.strip()]
-    reserved = {ADMIN_IP, PORTAL_IP, SENSOR_IP}
+    reserved = {ADMIN_IP, PORTAL_IP, SENSOR_IP, R4_HOST, R3_HOST}
     ips = [ip for ip in ips if ip not in reserved]
     if not ips:
         return []
@@ -483,6 +557,35 @@ def _get_connected_clients() -> list[dict]:
     return connected
 
 
+def _get_router_traffic_mib() -> dict:
+    """
+    Obtiene tráfico agregado de la LAN desde /proc/net/dev del router.
+    rx_mib: entrada al router desde LAN (download usuarios desde perspectiva LAN)
+    tx_mib: salida del router hacia LAN (upload usuarios desde perspectiva LAN)
+    """
+    rc, out, _ = _router_ssh(
+        "router-traffic-lan",
+        (
+            "awk '/br-lan:/{print $2\" \"$10; found=1} "
+            "END{if(!found) print \"0 0\"}' /proc/net/dev 2>/dev/null"
+        ),
+    )
+    if rc != 0 or not out:
+        return {"rx_bytes": 0, "tx_bytes": 0, "rx_mib": 0.0, "tx_mib": 0.0}
+    try:
+        parts = out.strip().split()
+        rx_b = int(parts[0]) if len(parts) > 0 else 0
+        tx_b = int(parts[1]) if len(parts) > 1 else 0
+    except Exception:
+        rx_b, tx_b = 0, 0
+    return {
+        "rx_bytes": rx_b,
+        "tx_bytes": tx_b,
+        "rx_mib": round(rx_b / (1024 * 1024), 2),
+        "tx_mib": round(tx_b / (1024 * 1024), 2),
+    }
+
+
 def _build_demo_dashboard_payload() -> dict:
     with _db_connect() as conn:
         clientes_rows = conn.execute(
@@ -503,6 +606,7 @@ def _build_demo_dashboard_payload() -> dict:
         invitados.append(d)
 
     connected = _get_connected_clients()
+    traffic = _get_router_traffic_mib()
     connected_ips = {c["ip"] for c in connected}
     for c in clientes:
         c["conectado"] = bool(c.get("ip") and c["ip"] in connected_ips)
@@ -518,6 +622,10 @@ def _build_demo_dashboard_payload() -> dict:
             "clientes_registrados": len(clientes),
             "invitados_registrados": len(invitados),
             "conectados": len(connected),
+            "trafico_entrada_mib": traffic["rx_mib"],
+            "trafico_salida_mib": traffic["tx_mib"],
+            "trafico_entrada_bytes": traffic["rx_bytes"],
+            "trafico_salida_bytes": traffic["tx_bytes"],
         },
         "conectados": connected,
         "clientes": clientes,
@@ -701,12 +809,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         if self.path in ("/people", "/people/", "/demoDashboard", "/demoDashboard/"):
-            html = _demo_dashboard_html()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(html)))
-            self.end_headers()
-            self.wfile.write(html)
+            self._serve_static_html("people.html")
             return
 
         if self.path == "/health":
@@ -773,10 +876,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path == "/api/portal/context":
             client_ip = get_client_ip(self)
             warned = _is_warned_ip(client_ip)
+            ai_risk = _fetch_ai_risk_message(client_ip)
             self._respond(200, {
                 "ip": client_ip,
                 "warning": warned,
                 "warning_message": "NO NO NO es sitio no" if warned else "",
+                "risk_message": ai_risk.get("message", ""),
+                "risk_severity": ai_risk.get("severity", "info"),
             })
             return
 
@@ -796,9 +902,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self._respond(400, {"ok": False, "error": "Contraseña mínimo 8 caracteres"}); return
 
             client_ip = get_client_ip(self)
-            save_client(data["telefono"].strip(), data["password"], client_ip)
+            auth_ok, auth_type, auth_reason = authenticate_registered_client(
+                data["telefono"].strip(),
+                data["password"],
+                client_ip,
+            )
+            if not auth_ok:
+                self._respond(401, {
+                    "ok": False,
+                    "error": "Teléfono o contraseña incorrectos",
+                    "reason": auth_reason,
+                })
+                return
             ok = authorize_client(client_ip)
-            self._respond(200 if ok else 500, {"ok": ok, "ip": client_ip})
+            self._respond(200 if ok else 500, {
+                "ok": ok,
+                "ip": client_ip,
+                "auth_type": auth_type,
+            })
             return
 
         # ── Registro de invitado ─────────────────────────────────────────────

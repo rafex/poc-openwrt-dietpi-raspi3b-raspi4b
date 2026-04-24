@@ -41,6 +41,14 @@
     </div>
   </div>
 
+  <div class="card" style="margin-top:12px;">
+    <h3>Prompt de explicación humana</h3>
+    <div class="small">Placeholder: <code>{traffic}</code></div>
+    <textarea id="human"></textarea>
+    <button onclick="saveRule('human_explain_template','human')">Guardar explicación humana</button>
+    <div class="msg" id="msg-human"></div>
+  </div>
+
   <div class="card logs">
     <h3>Prompts enviados recientemente</h3>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
@@ -64,6 +72,7 @@ async function loadRules(){
   const rules = j.rules || {};
   document.getElementById('analysis').value = (rules.analysis_prompt_template||{}).value || '';
   document.getElementById('action').value = (rules.action_prompt_template||{}).value || '';
+  document.getElementById('human').value = (rules.human_explain_template||{}).value || '';
 }
 
 async function saveRule(key, id){

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Network Chat</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#0b1220;color:#e5e7eb}
+.wrap{max-width:920px;margin:0 auto;padding:16px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px}
+.title{font-weight:700}
+.card{background:#111827;border:1px solid #1f2937;border-radius:14px;overflow:hidden}
+.chat{height:60vh;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:78%;padding:10px 12px;border-radius:12px;line-height:1.45;font-size:14px;white-space:pre-wrap}
+.user{align-self:flex-end;background:#2563eb;color:#fff}
+.bot{align-self:flex-start;background:#1f2937;color:#e5e7eb}
+.meta{font-size:11px;color:#9ca3af;margin-top:3px}
+.input{display:flex;gap:8px;padding:10px;border-top:1px solid #1f2937;background:#0f172a}
+.input input{flex:1;height:42px;border-radius:10px;border:1px solid #374151;background:#0b1220;color:#e5e7eb;padding:0 12px}
+.input button{height:42px;border:none;border-radius:10px;padding:0 14px;background:#2563eb;color:#fff;cursor:pointer;font-weight:600}
+.badge{font-size:12px;color:#93c5fd;border:1px solid #334155;border-radius:999px;padding:4px 8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="title">TARS Chat · Red WiFi</div>
+    <div class="badge" id="session">session: nueva</div>
+  </div>
+  <div class="card">
+    <div id="chat" class="chat"></div>
+    <div class="input">
+      <input id="q" type="text" placeholder="Pregunta algo sobre la red (ej. ¿hay algo raro?)">
+      <button id="send">Enviar</button>
+    </div>
+  </div>
+</div>
+<script>
+let sessionId = localStorage.getItem('ai_chat_session_id') || '';
+const chatEl = document.getElementById('chat');
+const qEl = document.getElementById('q');
+const sendBtn = document.getElementById('send');
+const sessEl = document.getElementById('session');
+
+function fmtTime(ts){ try { return new Date(ts).toLocaleTimeString('es-MX'); } catch(e){ return ''; } }
+function scrollBottom(){ chatEl.scrollTop = chatEl.scrollHeight; }
+function push(role, text, ts){
+  const row = document.createElement('div');
+  row.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+  row.textContent = text || '';
+  const meta = document.createElement('div');
+  meta.className = 'meta';
+  meta.textContent = fmtTime(ts || new Date().toISOString());
+  row.appendChild(meta);
+  chatEl.appendChild(row);
+  scrollBottom();
+}
+function setSession(id){
+  sessionId = id || '';
+  if (sessionId) localStorage.setItem('ai_chat_session_id', sessionId);
+  sessEl.textContent = 'session: ' + (sessionId || 'nueva');
+}
+async function loadHistory(){
+  if (!sessionId) return;
+  try {
+    const r = await fetch('/api/chat/history?session_id=' + encodeURIComponent(sessionId) + '&limit=40');
+    if (!r.ok) return;
+    const j = await r.json();
+    chatEl.innerHTML = '';
+    (j.items || []).forEach(m => push(m.role, m.content, m.timestamp));
+  } catch (e) {}
+}
+async function send(){
+  const q = qEl.value.trim();
+  if (!q) return;
+  qEl.value = '';
+  push('user', q, new Date().toISOString());
+  sendBtn.disabled = true;
+  try {
+    const r = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ question: q, session_id: sessionId })
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      push('assistant', (j && j.error) ? j.error : 'No se pudo obtener respuesta.');
+    } else {
+      setSession(j.session_id);
+      push('assistant', j.answer, new Date().toISOString());
+    }
+  } catch (e) {
+    push('assistant', 'Error de conexión con el chat de IA.');
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+sendBtn.addEventListener('click', send);
+qEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+setSession(sessionId);
+loadHistory();
+if (!sessionId) {
+  push('assistant', 'Hola. Puedo responder preguntas sobre tráfico, alertas, dominios y dispositivos detectados.');
+}
+</script>
+</body>
+</html>
