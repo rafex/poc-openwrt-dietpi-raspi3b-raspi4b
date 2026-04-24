@@ -62,6 +62,19 @@ RASPI3B_IP    = os.environ.get("RASPI3B_IP", "192.168.1.181")
 PORTAL_NODE_IP = os.environ.get("PORTAL_NODE_IP", "192.168.1.182")
 AP_EXTENDER_IP = os.environ.get("AP_EXTENDER_IP", "192.168.1.183")
 
+# IPs que NUNCA deben bloquearse ni expulsarse del portal.
+# Incluye toda la infraestructura: router, Raspis, máquina admin.
+# Esta constante se usa tanto en Python como se inyecta en el prompt del LLM.
+PROTECTED_IPS: frozenset[str] = frozenset(filter(None, [
+    ROUTER_IP,
+    PORTAL_IP,
+    RASPI4B_IP,
+    RASPI3B_IP,
+    PORTAL_NODE_IP,
+    AP_EXTENDER_IP,
+    ADMIN_IP,
+]))
+
 SOCIAL_BLOCK_ENABLED = os.environ.get("SOCIAL_BLOCK_ENABLED", "true").lower() == "true"
 SOCIAL_POLICY_START_HOUR = int(os.environ.get("SOCIAL_POLICY_START_HOUR", "9"))
 SOCIAL_POLICY_END_HOUR = int(os.environ.get("SOCIAL_POLICY_END_HOUR", "17"))
@@ -115,6 +128,7 @@ RULE_ACTION_KEY = "action_prompt_template"
 
 DEFAULT_ANALYSIS_PROMPT_TEMPLATE = (
     "Eres analista SOC para red WiFi pública.\n"
+    "IPs de infraestructura que NUNCA debes recomendar bloquear: {protected_ips}.\n"
     "Analiza este resumen de tráfico:\n"
     "{traffic}\n\n"
     "Responde en español con:\n"
@@ -127,6 +141,9 @@ DEFAULT_ACTION_PROMPT_TEMPLATE = (
     "Eres motor de decisiones de seguridad. Tu salida debe ser JSON estricto.\n"
     "Contexto:\n"
     "{policy_context}\n\n"
+    "REGLA ABSOLUTA: Las siguientes IPs son infraestructura del sistema y NUNCA deben bloquearse "
+    "ni aparecer como objetivo de ninguna acción: {protected_ips}.\n"
+    "Si detectas actividad en esas IPs, ignóralas completamente.\n\n"
     "Regla base: de {start_hour}:00 a {end_hour}:00 no debe haber tráfico de redes sociales.\n"
     "Si hay evidencia suficiente, decide 'block'. Si no hay evidencia o fuera de horario, decide 'unblock' o 'none'.\n"
     "Salida JSON exacta:\n"
@@ -1123,7 +1140,10 @@ def _prompt_body(summary: dict) -> str:
 def build_analysis_prompt(summary: dict) -> str:
     traffic = _prompt_body(summary)
     tpl = db_get_rule(RULE_ANALYSIS_KEY, DEFAULT_ANALYSIS_PROMPT_TEMPLATE)
-    user_body = _safe_format(tpl, {"traffic": traffic})
+    user_body = _safe_format(tpl, {
+        "traffic": traffic,
+        "protected_ips": ", ".join(sorted(PROTECTED_IPS)),
+    })
     return _wrap_prompt(
         user_body=user_body,
         system_text="Analista SOC de seguridad WiFi. Responde en español claro.",
@@ -1136,6 +1156,7 @@ def build_action_prompt(policy_context: dict) -> str:
         "policy_context": json.dumps(policy_context, ensure_ascii=False, indent=2),
         "start_hour": SOCIAL_POLICY_START_HOUR,
         "end_hour": SOCIAL_POLICY_END_HOUR,
+        "protected_ips": ", ".join(sorted(PROTECTED_IPS)),
     }
     user_body = _safe_format(tpl, ctx)
     return _wrap_prompt(
@@ -2053,6 +2074,15 @@ def evaluate_and_apply_porn_policy(batch_id: int, summary: dict) -> dict:
 
     global_ips = router_mcp.resolve_domains_to_ips(porn["matched_domains"].keys())
     for client_ip, info in porn["offenders"].items():
+        # ── Protección de IPs de infraestructura (capa Python) ────────────────
+        if client_ip in PROTECTED_IPS:
+            log.warning(
+                "porn_policy: IP protegida %s detectada como offender — "
+                "se omite kick/warn para evitar auto-bloqueo de infraestructura.",
+                client_ip,
+            )
+            continue
+        # ─────────────────────────────────────────────────────────────────────
         ip_candidates = set(global_ips)
         for ip in info.get("dest_ips", []):
             ip_candidates.add(ip)
