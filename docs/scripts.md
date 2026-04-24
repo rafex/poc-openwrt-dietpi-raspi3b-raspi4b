@@ -157,6 +157,24 @@ Aplica:
 - `kubectl apply` deployment/svc/ingress de analyzer
 - `rollout restart` + verificación de endpoints (`/health`, `/dashboard`, `/terminal`, `/rulez`)
 
+### setup-raspi4b-ai-stack.sh
+
+**Propósito:** bundle mínimo de IA en Raspi4B (solo `mosquitto` + `llama.cpp` + `ai-analyzer`).
+
+```bash
+sudo bash scripts/setup-raspi4b-ai-stack.sh
+sudo bash scripts/setup-raspi4b-ai-stack.sh --no-build
+sudo bash scripts/setup-raspi4b-ai-stack.sh --skip-llm
+```
+
+Aplica:
+- `setup-raspi4b-mosquitto.sh`
+- `setup-raspi4b-llm.sh`
+- `setup-raspi4b-ai-analyzer.sh`
+- verificación final de pantallas clave: `/dashboard` y `/rulez`
+
+No despliega portales.
+
 ### setup-raspi4b-portals.sh
 
 **Propósito:** desplegar solo portales (clásico + lentium) en k3s.

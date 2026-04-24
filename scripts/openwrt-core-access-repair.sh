@@ -69,7 +69,19 @@ EOS
 log_ok "Include de firewall saneado"
 
 log_info "Reiniciando firewall y recargando dnsmasq..."
-router_ssh "/etc/init.d/firewall restart" || die "No se pudo reiniciar firewall"
+FW_OUT="$(router_ssh "/etc/init.d/firewall restart 2>&1" || true)"
+if printf '%s' "$FW_OUT" | grep -q "delete table inet fw4"; then
+    log_warn "fw4 reportó tabla inet fw4 ausente durante restart (warning no fatal)"
+fi
+if printf '%s' "$FW_OUT" | grep -qi "syntax error"; then
+    log_warn "firewall restart reportó syntax error; intentando fallback start+reload..."
+    FW_FALLBACK_OUT="$(router_ssh "/etc/init.d/firewall start 2>&1; /etc/init.d/firewall reload 2>&1" || true)"
+    if printf '%s' "$FW_FALLBACK_OUT" | grep -qi "syntax error"; then
+        printf '%s\n' "$FW_OUT"
+        printf '%s\n' "$FW_FALLBACK_OUT"
+        die "No se pudo levantar firewall sin errores de sintaxis"
+    fi
+fi
 router_ssh "/etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart" || true
 log_ok "Servicios recargados"
 
