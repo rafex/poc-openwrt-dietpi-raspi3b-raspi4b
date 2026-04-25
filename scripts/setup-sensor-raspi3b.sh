@@ -301,7 +301,87 @@ if ! $DRY_RUN; then
 fi
 ok "Permisos de captura configurados"
 
-# ─── B) Directorio y sensor.py ────────────────────────────────────────────────
+# ─── A.1) Modo promiscuo en eth0 ───────────────────────────────���──────────────
+# El sensor usa tshark para capturar TODO el tráfico de la LAN, no solo el suyo.
+# Sin modo promiscuo la NIC descarta tramas con MAC destino diferente → el sensor
+# solo vería su propio tráfico y perdería el tráfico de los clientes WiFi.
+step "A.1) Activando modo promiscuo en $INTERFACE"
+
+if ! $DRY_RUN; then
+    # Activar ahora (efecto inmediato)
+    if ip link set "$INTERFACE" promisc on 2>/dev/null; then
+        ok "Modo promiscuo activado: $INTERFACE"
+    else
+        warn "No se pudo activar modo promiscuo con ip link set — intentando con ifconfig..."
+        if command -v ifconfig &>/dev/null && ifconfig "$INTERFACE" promisc 2>/dev/null; then
+            ok "Modo promiscuo activado vía ifconfig: $INTERFACE"
+        else
+            warn "No se pudo activar modo promiscuo — verifica permisos root"
+        fi
+    fi
+
+    # Verificar que quedó activo
+    if ip link show "$INTERFACE" 2>/dev/null | grep -q PROMISC; then
+        ok "$INTERFACE está en modo PROMISC"
+    else
+        warn "$INTERFACE NO muestra flag PROMISC — tshark puede perder paquetes de otros hosts"
+    fi
+
+    # ── Persistencia: activar en cada boot ───────────────���────────────────────
+    # Método 1: stanza "up" en /etc/network/interfaces (DietPi / Debian clásico)
+    # Método 2: systemd-networkd .network file (si systemd-networkd está activo)
+    # Método 3: script rc.local como fallback universal
+    #
+    # DietPi usa ifupdown + /etc/network/interfaces, que es el método más fiable aquí.
+
+    IFACES_FILE="/etc/network/interfaces"
+    PROMISC_MARKER="# promisc-sensor-$INTERFACE"
+
+    if [ -f "$IFACES_FILE" ]; then
+        if grep -q "$PROMISC_MARKER" "$IFACES_FILE" 2>/dev/null; then
+            ok "Persistencia promiscuo ya configurada en $IFACES_FILE"
+        else
+            # Agregar "post-up ip link set eth0 promisc on" a la stanza de $INTERFACE
+            # Si la stanza existe, insertar después de la línea "iface $INTERFACE".
+            # Si no existe, agregar al final.
+            if grep -q "iface $INTERFACE" "$IFACES_FILE" 2>/dev/null; then
+                # Insertar línea post-up justo después de "iface ethX ..."
+                sed -i "/iface $INTERFACE/a\\    post-up ip link set $INTERFACE promisc on  $PROMISC_MARKER" \
+                    "$IFACES_FILE"
+                ok "Añadido post-up promisc a stanza $INTERFACE en $IFACES_FILE"
+            else
+                # La interfaz no tiene stanza explícita — agregar bloque al final
+                printf '\n# Modo promiscuo para sensor de red tshark\niface %s inet manual\n    post-up ip link set %s promisc on  %s\n' \
+                    "$INTERFACE" "$INTERFACE" "$PROMISC_MARKER" >> "$IFACES_FILE"
+                ok "Añadida stanza $INTERFACE con promisc al final de $IFACES_FILE"
+            fi
+        fi
+    else
+        warn "$IFACES_FILE no encontrado — usando rc.local como fallback"
+    fi
+
+    # Fallback: /etc/rc.local (funciona en cualquier sistema con SysV init o systemd compat)
+    RC_LOCAL="/etc/rc.local"
+    RC_MARKER="# promisc-$INTERFACE-sensor"
+    if ! grep -q "$RC_MARKER" "$RC_LOCAL" 2>/dev/null; then
+        if [ -f "$RC_LOCAL" ]; then
+            # Insertar antes del "exit 0" final
+            sed -i "s|^exit 0|ip link set $INTERFACE promisc on  $RC_MARKER\nexit 0|" "$RC_LOCAL"
+        else
+            printf '#!/bin/sh\nip link set %s promisc on  %s\nexit 0\n' \
+                "$INTERFACE" "$RC_MARKER" > "$RC_LOCAL"
+            chmod +x "$RC_LOCAL"
+        fi
+        ok "Persistencia promiscuo agregada en $RC_LOCAL (fallback)"
+    else
+        ok "Persistencia promiscuo ya presente en $RC_LOCAL"
+    fi
+else
+    echo -e "${YELLOW}[DRY-RUN]${NC} ip link set $INTERFACE promisc on"
+    echo -e "${YELLOW}[DRY-RUN]${NC} Configuraría persistencia promisc en /etc/network/interfaces y /etc/rc.local"
+fi
+
+# ─── B) Directorio y sensor.py ─────────────────────────────────���──────────────
 step "B) Instalando sensor.py en $SENSOR_DIR"
 
 run mkdir -p "$SENSOR_DIR"
@@ -636,6 +716,15 @@ if ! $DRY_RUN; then
     else
         warn "Servicio no parece estar corriendo — revisa el log:"
         warn "  tail -50 /var/log/network-sensor.log"
+    fi
+
+    # Verificar modo promiscuo
+    if ip link show "$INTERFACE" 2>/dev/null | grep -q PROMISC; then
+        ok "$INTERFACE — modo PROMISC activo"
+    else
+        warn "$INTERFACE — NO está en modo PROMISC"
+        warn "  Forzando ahora: ip link set $INTERFACE promisc on"
+        ip link set "$INTERFACE" promisc on 2>/dev/null || true
     fi
 
     info "Probando captura de 5 segundos en $INTERFACE..."
