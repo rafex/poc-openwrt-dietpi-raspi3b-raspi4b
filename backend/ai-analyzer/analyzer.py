@@ -98,6 +98,14 @@ FEATURE_DEVICE_PROFILING = os.environ.get("FEATURE_DEVICE_PROFILING", "true").lo
 FEATURE_AUTO_REPORTS = os.environ.get("FEATURE_AUTO_REPORTS", "true").lower() == "true"
 SUMMARY_INTERVAL_S = int(os.environ.get("SUMMARY_INTERVAL_S", "60"))
 
+# ─── Groq API (chat de alta capacidad) ───────────────────────────────────────
+GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "")
+GROQ_MODEL        = os.environ.get("GROQ_MODEL",   "qwen/qwen3-32b")
+GROQ_CHAT_ENABLED = bool(GROQ_API_KEY)
+GROQ_API_URL      = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MAX_TOKENS   = int(os.environ.get("GROQ_MAX_TOKENS", "1024"))
+GROQ_TIMEOUT_S    = int(os.environ.get("GROQ_TIMEOUT_S",  "30"))
+
 RULE_HUMAN_EXPLAIN_KEY = "human_explain_template"
 DEFAULT_HUMAN_EXPLAIN_TEMPLATE = (
     "Resume en español para humanos la actividad de red en máximo 4 líneas.\\n"
@@ -837,12 +845,13 @@ def db_get_chat_history(session_id: str, limit: int = 40) -> list[dict]:
         except Exception:
             meta = {}
         out.append({
-            "id": r["id"],
+            "id":         r["id"],
             "session_id": r["session_id"],
-            "timestamp": r["timestamp"],
-            "role": r["role"],
-            "content": r["content"],
-            "meta": meta,
+            "timestamp":  r["timestamp"],
+            "role":       r["role"],
+            "content":    r["content"],
+            "provider":   meta.get("provider", ""),  # campo directo para el frontend
+            "meta":       meta,
         })
     return out
 
@@ -1206,6 +1215,59 @@ def call_llama(
         log.error("llama.cpp error: %s", e)
         stats["llama_errors"] += 1
         return f"[Error: {e}]"
+
+
+def call_groq_chat(
+    messages: list[dict],
+    *,
+    temperature: float = 0.7,
+    max_tokens: int | None = None,
+) -> str:
+    """Llama a la API de Groq (compatible OpenAI) con el modelo configurado.
+
+    Args:
+        messages: Lista de dicts {"role": "system|user|assistant", "content": "..."}
+        temperature: Temperatura de muestreo (0-1).
+        max_tokens: Límite de tokens en la respuesta (default: GROQ_MAX_TOKENS).
+
+    Returns:
+        Texto de respuesta del modelo, o cadena "[Error ...]" si falla.
+    """
+    if not GROQ_CHAT_ENABLED:
+        return "[Error: GROQ_API_KEY no configurado]"
+    t0 = time.time()
+    try:
+        resp = requests.post(
+            GROQ_API_URL,
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "model":       GROQ_MODEL,
+                "messages":    messages,
+                "temperature": float(temperature),
+                "max_tokens":  int(max_tokens if max_tokens is not None else GROQ_MAX_TOKENS),
+                "stream":      False,
+            },
+            timeout=GROQ_TIMEOUT_S,
+        )
+        elapsed = round(time.time() - t0, 1)
+        if resp.status_code == 200:
+            text = (
+                resp.json()
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            log.info("Groq (%s) respondió en %ss (%d chars)", GROQ_MODEL, elapsed, len(text))
+            return text
+        log.warning("Groq HTTP %d: %s", resp.status_code, resp.text[:200])
+        return f"[Error Groq: HTTP {resp.status_code}]"
+    except Exception as e:
+        log.error("Groq error: %s", e)
+        return f"[Error Groq: {e}]"
 
 
 def _social_bucket_for_domain(domain: str) -> str | None:
@@ -1755,11 +1817,57 @@ def _latest_context_for_chat() -> dict:
     return ctx
 
 
-def _chat_answer(question: str, session_id: str) -> str:
+def _chat_answer(question: str, session_id: str) -> tuple[str, str]:
+    """Responde la pregunta del usuario usando Groq (si está habilitado) o llama.cpp.
+
+    Returns:
+        (answer_text, provider)  donde provider es "groq" o "llama".
+    """
     if not FEATURE_CHAT:
-        return "El chat está deshabilitado por configuración."
+        return "El chat está deshabilitado por configuración.", "llama"
+
     ctx = _latest_context_for_chat()
     history = db_get_chat_history(session_id, limit=12)
+
+    # ── Ruta Groq (Qwen) ──────────────────────────────────────────────────────
+    if GROQ_CHAT_ENABLED:
+        system_msg = (
+            "Eres TARS, un asistente SOC especializado en análisis de redes WiFi públicas. "
+            "Respondes siempre en español claro y conciso. "
+            "Solo usas datos del contexto provisto; nunca inventas información. "
+            "Si se te pide un análisis, identifica riesgos, dispositivos sospechosos o "
+            "dominios inusuales basándote únicamente en los datos de la red."
+        )
+        ctx_json = json.dumps(ctx, ensure_ascii=False, indent=2)
+        messages: list[dict] = [{"role": "system", "content": system_msg}]
+
+        # Inyectar contexto de red como primer mensaje de usuario oculto
+        messages.append({
+            "role": "user",
+            "content": (
+                f"[Contexto de red en tiempo real]\n{ctx_json}\n\n"
+                "Usa estos datos para responder las preguntas que siguen."
+            ),
+        })
+        messages.append({
+            "role": "assistant",
+            "content": "Entendido. Tengo el contexto de red cargado. ¿En qué puedo ayudarte?",
+        })
+
+        # Historial de conversación (últimos 8 turnos)
+        for m in history[-8:]:
+            role = m["role"] if m["role"] in ("user", "assistant") else "user"
+            messages.append({"role": role, "content": m["content"]})
+
+        # Pregunta actual
+        messages.append({"role": "user", "content": question})
+
+        ans = call_groq_chat(messages, temperature=0.7).strip()
+        if ans and not ans.startswith("[Error"):
+            return ans, "groq"
+        log.warning("Groq falló, usando llama.cpp como fallback")
+
+    # ── Ruta llama.cpp (fallback o único disponible) ──────────────────────────
     hist_txt = "\n".join([f"{m['role']}: {m['content']}" for m in history[-8:]])
     prompt = _wrap_prompt(
         user_body=(
@@ -1770,18 +1878,14 @@ def _chat_answer(question: str, session_id: str) -> str:
         ),
         system_text="Asistente SOC para PoC WiFi. No inventes datos fuera del contexto provisto.",
     )
-    ans = call_llama(
-        prompt,
-        temperature=0.75,
-        top_p=0.95,
-    ).strip()
+    ans = call_llama(prompt, temperature=0.75, top_p=0.95).strip()
     if not ans or ans.startswith("[Error"):
         alerts = ctx.get("alerts") or []
         if alerts:
             a = alerts[-1]
-            return f"Sí, hay una señal reciente: {a.get('message', 'evento sospechoso')}."
-        return "No observo alertas críticas recientes; la red parece estable en esta ventana."
-    return ans
+            return f"Sí, hay una señal reciente: {a.get('message', 'evento sospechoso')}.", "llama"
+        return "No observo alertas críticas recientes; la red parece estable en esta ventana.", "llama"
+    return ans, "llama"
 
 
 def build_portal_risk_message(client_ip: str) -> dict:
@@ -2402,6 +2506,7 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 llama_ok = r.status_code == 200
             except Exception:
                 pass
+            chat_provider = "groq" if GROQ_CHAT_ENABLED else "llama"
             self.send_json({
                 "status":        "ok",
                 "llama_url":     LLAMA_URL,
@@ -2413,6 +2518,9 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 "db_path":       DB_PATH,
                 "queue":         db_queue_stats(),
                 "stats":         stats,
+                "groq_enabled":  GROQ_CHAT_ENABLED,
+                "groq_model":    GROQ_MODEL if GROQ_CHAT_ENABLED else None,
+                "chat_provider": chat_provider,
                 "policy": {
                     "social_block_enabled": SOCIAL_BLOCK_ENABLED,
                     "social_block_active": policy_state.get("social_block_active", False),
@@ -2658,13 +2766,15 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
             if not question:
                 self.send_error_json(400, "question requerida"); return
             db_store_chat_message(session_id, "user", question)
-            answer = _chat_answer(question, session_id)
-            db_store_chat_message(session_id, "assistant", answer)
+            answer, chat_provider = _chat_answer(question, session_id)
+            db_store_chat_message(session_id, "assistant", answer,
+                                  meta={"provider": chat_provider})
             self.send_json({
-                "ok": True,
+                "ok":        True,
                 "session_id": session_id,
-                "answer": answer,
-                "history": db_get_chat_history(session_id, limit=20),
+                "answer":    answer,
+                "provider":  chat_provider,
+                "history":   db_get_chat_history(session_id, limit=20),
             })
             return
 
