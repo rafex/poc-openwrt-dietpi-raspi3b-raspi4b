@@ -18,8 +18,9 @@
 #       nft delete table ip captive
 #
 # Variables opcionales:
-#   CAPTIVE_DOMAIN=captive.localhost.com   # dominio local de fallback para abrir portal manualmente
-#   PEOPLE_DOMAIN=people.localhost.com     # subdominio para dashboard de registros/conectados
+#   CAPTIVE_DOMAIN=captive.rafex.dev    # dominio principal del portal (DHCP opt114 + dnsmasq)
+#   CAPTIVE_DOMAIN2=captive.localhost   # dominio secundario (fallback offline)
+#   PEOPLE_DOMAIN=people.localhost.com  # subdominio para dashboard de registros/conectados
 #   TOPOLOGY_FILE=/etc/demo-openwrt/topology.env
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -119,7 +120,8 @@ AI_IP="${AI_IP:-$RASPI4B_IP}"
 validate_ip "$PORTAL_IP" || die "IP de portal inválida: $PORTAL_IP"
 validate_ip "$AI_IP" || die "IP de AI inválida: $AI_IP"
 
-CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.localhost.com}"
+CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex.dev}"
+CAPTIVE_DOMAIN2="${CAPTIVE_DOMAIN2:-captive.localhost}"
 PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.localhost.com}"
 
 # =============================================================================
@@ -183,37 +185,58 @@ log_info "--- FASE B: Configurando dnsmasq para captive portal ---"
 # dominios de demo de DNS poisoning (suplantacion educativa)
 DNSMASQ_CONTENT="# captive-portal.conf — Generado por setup-openwrt.sh
 # Redirige dominios de deteccion de captive portal a la Pi ($PORTAL_IP)
+# Orden: primero las marcas con mayor presencia en la demo.
 
-# Android / Google
+# ── Android AOSP / Google (Pixel, la mayoria de marcas Android) ─────────────
 address=/connectivitycheck.gstatic.com/$PORTAL_IP
 address=/connectivitycheck.android.com/$PORTAL_IP
 address=/clients1.google.com/$PORTAL_IP
 address=/clients3.google.com/$PORTAL_IP
 
-# iOS / macOS (Apple)
+# ── Huawei EMUI / HarmonyOS ──────────────────────────────────────────────────
+# Estos dominios son los que usan los Huawei para su deteccion propia de portal.
+# Sin estas entradas dnsmasq no intercepta el check y la notificacion no aparece
+# aunque el DNAT de nftables redirige el trafico HTTP igualmente.
+address=/connectivitycheck.platform.hicloud.com/$PORTAL_IP
+address=/connectivitycheck.hicloud.com/$PORTAL_IP
+address=/connectivitycheck.dbankcloud.cn/$PORTAL_IP
+
+# ── Xiaomi MIUI / HyperOS ────────────────────────────────────────────────────
+address=/connect.rom.miui.com/$PORTAL_IP
+address=/connectivitycheck.platform.miui.com/$PORTAL_IP
+address=/wifi.vivo.com.cn/$PORTAL_IP
+
+# ── Samsung OneUI ────────────────────────────────────────────────────────────
+address=/connectivitycheck.samsung.com/$PORTAL_IP
+address=/google.com/$PORTAL_IP
+
+# ── Apple iOS / macOS (CaptiveNetworkSupport) ────────────────────────────────
 address=/captive.apple.com/$PORTAL_IP
 address=/appleiphonecell.com/$PORTAL_IP
 address=/iphone-otu.apple.com/$PORTAL_IP
 address=/www.apple.com/$PORTAL_IP
 
-# Windows / Microsoft (NCA)
+# ── Microsoft Windows (NCSI / NCA) ───────────────────────────────────────────
 address=/www.msftconnecttest.com/$PORTAL_IP
 address=/msftconnecttest.com/$PORTAL_IP
 address=/www.msftncsi.com/$PORTAL_IP
 address=/msftncsi.com/$PORTAL_IP
 
-# Firefox / Mozilla
+# ── Mozilla Firefox ──────────────────────────────────────────────────────────
 address=/detectportal.firefox.com/$PORTAL_IP
 
-# Ubuntu / Canonical
+# ── Ubuntu / Canonical ───────────────────────────────────────────────────────
 address=/connectivity-check.ubuntu.com/$PORTAL_IP
 
-# Linux / GNOME / Debian
+# ── Linux / GNOME / Debian ───────────────────────────────────────────────────
 address=/network-test.debian.org/$PORTAL_IP
 address=/nmcheck.gnome.org/$PORTAL_IP
 
-# Dominio local de fallback (manual)
+# ── Dominios propios del portal (acceso manual y DHCP option 114) ────────────
+# captive.rafex.dev  — URL pública de la demo (fácil de comunicar a asistentes)
+# captive.localhost  — fallback sin dominio externo (funciona offline)
 address=/$CAPTIVE_DOMAIN/$PORTAL_IP
+address=/$CAPTIVE_DOMAIN2/$PORTAL_IP
 address=/$PEOPLE_DOMAIN/$PORTAL_IP
 
 "
@@ -242,7 +265,10 @@ router_ssh "
     # Option 114 = Captive Portal URL (RFC 7710/8910)
     uci del dhcp.lan.dhcp_option 2>/dev/null || true
     uci add_list dhcp.lan.dhcp_option='6,$ROUTER_IP'
-    uci add_list dhcp.lan.dhcp_option='114,http://$PORTAL_IP/portal'
+    # Option 114 (RFC 8910): URL del captive portal que el OS usa directamente.
+    # Se usa el dominio propio (captive.rafex.dev) en lugar de la IP para que
+    # la URL sea legible y coincida con lo que dnsmasq resuelve a $PORTAL_IP.
+    uci add_list dhcp.lan.dhcp_option='114,http://$CAPTIVE_DOMAIN/portal'
     uci commit dhcp
 " && log_ok "DHCP lease time = 120m configurado" || \
     log_warn "No se pudo configurar DHCP lease time via UCI (puede que la interfaz no se llame 'lan')"
@@ -533,38 +559,44 @@ else
     router_add_ip "$ADMIN_IP"
 fi
 
-# Verificar dnsmasq
-log_info "Verificando dnsmasq (resolucion de dominio de deteccion)..."
-RESOLVED_IP=$(router_ssh "nslookup connectivitycheck.gstatic.com 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
-if [ "$RESOLVED_IP" = "$PORTAL_IP" ]; then
-    log_ok "dnsmasq resuelve correctamente: connectivitycheck.gstatic.com -> $PORTAL_IP"
-else
-    log_warn "No se pudo verificar dnsmasq (puede estar OK si el dominio tarda en propagarse)"
-fi
+# Verificar dnsmasq — función helper para no repetir el nslookup
+check_dns_redirect() {
+    local domain="$1"
+    local expected="$2"
+    local resolved
+    resolved=$(router_ssh "nslookup $domain 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
+    if [ "$resolved" = "$expected" ]; then
+        log_ok "dnsmasq: $domain -> $resolved"
+    else
+        log_warn "dnsmasq: $domain -> ${resolved:-sin respuesta} (esperado: $expected)"
+    fi
+}
 
-log_info "Verificando dominio fallback del portal..."
-FALLBACK_IP=$(router_ssh "nslookup $CAPTIVE_DOMAIN 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
-if [ "$FALLBACK_IP" = "$PORTAL_IP" ]; then
-    log_ok "dnsmasq resuelve correctamente: $CAPTIVE_DOMAIN -> $PORTAL_IP"
-else
-    log_warn "No se pudo verificar $CAPTIVE_DOMAIN en dnsmasq"
-fi
+log_info "Verificando dnsmasq (dominios de deteccion captive)..."
+# Android / Google
+check_dns_redirect "connectivitycheck.gstatic.com"          "$PORTAL_IP"
+# Huawei EMUI / HarmonyOS
+check_dns_redirect "connectivitycheck.platform.hicloud.com" "$PORTAL_IP"
+check_dns_redirect "connectivitycheck.hicloud.com"          "$PORTAL_IP"
+# Apple
+check_dns_redirect "captive.apple.com"                      "$PORTAL_IP"
+# Windows
+check_dns_redirect "www.msftconnecttest.com"                "$PORTAL_IP"
+# Firefox
+check_dns_redirect "detectportal.firefox.com"              "$PORTAL_IP"
 
-log_info "Verificando dominio people..."
-PEOPLE_IP=$(router_ssh "nslookup $PEOPLE_DOMAIN 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
-if [ "$PEOPLE_IP" = "$PORTAL_IP" ]; then
-    log_ok "dnsmasq resuelve correctamente: $PEOPLE_DOMAIN -> $PORTAL_IP"
-else
-    log_warn "No se pudo verificar $PEOPLE_DOMAIN en dnsmasq"
-fi
+log_info "Verificando dominios propios del portal..."
+check_dns_redirect "$CAPTIVE_DOMAIN"  "$PORTAL_IP"
+check_dns_redirect "$CAPTIVE_DOMAIN2" "$PORTAL_IP"
+check_dns_redirect "$PEOPLE_DOMAIN"   "$PORTAL_IP"
 
 # Verificar DHCP option 114 (URL del portal)
 log_info "Verificando DHCP option 114..."
 OPT114="$(router_ssh "uci -q get dhcp.lan.dhcp_option 2>/dev/null | tr ' ' '\n' | grep '^114,' | tail -1" 2>/dev/null || echo "")"
-if printf '%s' "$OPT114" | grep -q "114,http://$PORTAL_IP/portal"; then
+if printf '%s' "$OPT114" | grep -q "114,http://$CAPTIVE_DOMAIN/portal"; then
     log_ok "DHCP option 114 correcta: $OPT114"
 else
-    log_warn "DHCP option 114 no coincide (actual: ${OPT114:-<vacía>}, esperado: 114,http://$PORTAL_IP/portal)"
+    log_warn "DHCP option 114 no coincide (actual: ${OPT114:-<vacía>}, esperado: 114,http://$CAPTIVE_DOMAIN/portal)"
 fi
 
 # Verificar regla DNAT hacia portal
@@ -600,7 +632,8 @@ printf '  Admin (libre): %s — permanente\n' "$ADMIN_IP"
 printf '  AP interface:  %s\n' "$AP_IFACE"
 printf '  Portal timeout: %s (acceso WiFi invitados)\n' "$PORTAL_TIMEOUT"
 printf '  DHCP leasetime: 120m\n'
-printf '  Fallback portal: http://%s/portal\n' "$CAPTIVE_DOMAIN"
+printf '  Portal (demo):    http://%s/portal\n' "$CAPTIVE_DOMAIN"
+printf '  Portal (local):   http://%s/portal\n' "$CAPTIVE_DOMAIN2"
 printf '  Dashboard people: http://%s/people\n' "$PEOPLE_DOMAIN"
 printf '\n'
 log_info "Comandos utiles:"
