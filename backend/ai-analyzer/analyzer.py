@@ -62,6 +62,19 @@ RASPI3B_IP    = os.environ.get("RASPI3B_IP", "192.168.1.181")
 PORTAL_NODE_IP = os.environ.get("PORTAL_NODE_IP", "192.168.1.182")
 AP_EXTENDER_IP = os.environ.get("AP_EXTENDER_IP", "192.168.1.183")
 
+# IPs que NUNCA deben bloquearse ni expulsarse del portal.
+# Incluye toda la infraestructura: router, Raspis, máquina admin.
+# Esta constante se usa tanto en Python como se inyecta en el prompt del LLM.
+PROTECTED_IPS: frozenset[str] = frozenset(filter(None, [
+    ROUTER_IP,
+    PORTAL_IP,
+    RASPI4B_IP,
+    RASPI3B_IP,
+    PORTAL_NODE_IP,
+    AP_EXTENDER_IP,
+    ADMIN_IP,
+]))
+
 SOCIAL_BLOCK_ENABLED = os.environ.get("SOCIAL_BLOCK_ENABLED", "true").lower() == "true"
 SOCIAL_POLICY_START_HOUR = int(os.environ.get("SOCIAL_POLICY_START_HOUR", "9"))
 SOCIAL_POLICY_END_HOUR = int(os.environ.get("SOCIAL_POLICY_END_HOUR", "17"))
@@ -84,6 +97,14 @@ FEATURE_CHAT = os.environ.get("FEATURE_CHAT", "true").lower() == "true"
 FEATURE_DEVICE_PROFILING = os.environ.get("FEATURE_DEVICE_PROFILING", "true").lower() == "true"
 FEATURE_AUTO_REPORTS = os.environ.get("FEATURE_AUTO_REPORTS", "true").lower() == "true"
 SUMMARY_INTERVAL_S = int(os.environ.get("SUMMARY_INTERVAL_S", "60"))
+
+# ─── Groq API (chat de alta capacidad) ───────────────────────────────────────
+GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "")
+GROQ_MODEL        = os.environ.get("GROQ_MODEL",   "qwen/qwen3-32b")
+GROQ_CHAT_ENABLED = bool(GROQ_API_KEY)
+GROQ_API_URL      = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_MAX_TOKENS   = int(os.environ.get("GROQ_MAX_TOKENS", "1024"))
+GROQ_TIMEOUT_S    = int(os.environ.get("GROQ_TIMEOUT_S",  "30"))
 
 RULE_HUMAN_EXPLAIN_KEY = "human_explain_template"
 DEFAULT_HUMAN_EXPLAIN_TEMPLATE = (
@@ -115,6 +136,7 @@ RULE_ACTION_KEY = "action_prompt_template"
 
 DEFAULT_ANALYSIS_PROMPT_TEMPLATE = (
     "Eres analista SOC para red WiFi pública.\n"
+    "IPs de infraestructura que NUNCA debes recomendar bloquear: {protected_ips}.\n"
     "Analiza este resumen de tráfico:\n"
     "{traffic}\n\n"
     "Responde en español con:\n"
@@ -127,6 +149,9 @@ DEFAULT_ACTION_PROMPT_TEMPLATE = (
     "Eres motor de decisiones de seguridad. Tu salida debe ser JSON estricto.\n"
     "Contexto:\n"
     "{policy_context}\n\n"
+    "REGLA ABSOLUTA: Las siguientes IPs son infraestructura del sistema y NUNCA deben bloquearse "
+    "ni aparecer como objetivo de ninguna acción: {protected_ips}.\n"
+    "Si detectas actividad en esas IPs, ignóralas completamente.\n\n"
     "Regla base: de {start_hour}:00 a {end_hour}:00 no debe haber tráfico de redes sociales.\n"
     "Si hay evidencia suficiente, decide 'block'. Si no hay evidencia o fuera de horario, decide 'unblock' o 'none'.\n"
     "Salida JSON exacta:\n"
@@ -162,6 +187,11 @@ stats = {
 
 router_mcp = None
 policy_state = {"social_block_active": False, "porn_block_enabled": PORN_BLOCK_ENABLED}
+
+# ─── Caché en memoria para clasificación de dominios (TTL 300 s) ──────────────
+_DOMAIN_CACHE_TTL_S = 300
+_domain_cache: dict[str, tuple[dict, float]] = {}   # domain → (result, expires_at)
+_domain_cache_lock = threading.Lock()
 
 
 # ─── SQLite ───────────────────────────────────────────────────────────────────
@@ -304,6 +334,16 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_reports_ts       ON network_reports(timestamp DESC);
         CREATE INDEX IF NOT EXISTS idx_chat_session_ts  ON chat_messages(session_id, id DESC);
     """)
+    # Migración: añadir columnas nuevas a tablas existentes (idempotente)
+    for migration_sql in [
+        "ALTER TABLE device_profiles ADD COLUMN hostname TEXT",
+        "ALTER TABLE device_profiles ADD COLUMN mac      TEXT",
+    ]:
+        try:
+            conn.execute(migration_sql)
+            conn.commit()
+        except Exception:
+            pass   # La columna ya existe — ignorar
     now = datetime.now(timezone.utc).isoformat()
     conn.execute(
         "INSERT OR IGNORE INTO ai_rules (key,value,updated_at) VALUES (?,?,?)",
@@ -702,20 +742,32 @@ def db_get_reports(limit: int = 20) -> list[dict]:
     return items
 
 
-def db_upsert_device_profile(ip: str, device_type: str, confidence: float, reasons: list[str]):
+def db_upsert_device_profile(
+    ip: str,
+    device_type: str,
+    confidence: float,
+    reasons: list[str],
+    hostname: str | None = None,
+    mac: str | None = None,
+):
     ip = str(ip or "").strip()
     if not ip:
         return
     conn = db_connect()
     conn.execute(
-        "INSERT INTO device_profiles (ip,device_type,confidence,reasons,updated_at) VALUES (?,?,?,?,?) "
+        "INSERT INTO device_profiles (ip,device_type,confidence,reasons,hostname,mac,updated_at) VALUES (?,?,?,?,?,?,?) "
         "ON CONFLICT(ip) DO UPDATE SET "
-        "device_type=excluded.device_type,confidence=excluded.confidence,reasons=excluded.reasons,updated_at=excluded.updated_at",
+        "device_type=excluded.device_type,confidence=excluded.confidence,reasons=excluded.reasons,"
+        "hostname=COALESCE(excluded.hostname,device_profiles.hostname),"
+        "mac=COALESCE(excluded.mac,device_profiles.mac),"
+        "updated_at=excluded.updated_at",
         (
             ip,
             str(device_type or "desconocido"),
             max(0.0, min(float(confidence), 1.0)),
             json.dumps(reasons or [], ensure_ascii=False),
+            str(hostname).strip() if hostname else None,
+            str(mac).strip().lower() if mac else None,
             datetime.now(timezone.utc).isoformat(),
         ),
     )
@@ -726,7 +778,8 @@ def db_upsert_device_profile(ip: str, device_type: str, confidence: float, reaso
 def db_get_device_profiles(limit: int = 100) -> list[dict]:
     conn = db_connect()
     rows = conn.execute(
-        "SELECT ip,device_type,confidence,reasons,updated_at FROM device_profiles ORDER BY updated_at DESC LIMIT ?",
+        "SELECT ip,device_type,confidence,reasons,hostname,mac,updated_at "
+        "FROM device_profiles ORDER BY updated_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
     conn.close()
@@ -737,11 +790,13 @@ def db_get_device_profiles(limit: int = 100) -> list[dict]:
         except Exception:
             reasons = []
         out.append({
-            "ip": r["ip"],
+            "ip":          r["ip"],
             "device_type": r["device_type"],
-            "confidence": r["confidence"],
-            "reasons": reasons,
-            "updated_at": r["updated_at"],
+            "confidence":  r["confidence"],
+            "reasons":     reasons,
+            "hostname":    r["hostname"],
+            "mac":         r["mac"],
+            "updated_at":  r["updated_at"],
         })
     return out
 
@@ -790,12 +845,13 @@ def db_get_chat_history(session_id: str, limit: int = 40) -> list[dict]:
         except Exception:
             meta = {}
         out.append({
-            "id": r["id"],
+            "id":         r["id"],
             "session_id": r["session_id"],
-            "timestamp": r["timestamp"],
-            "role": r["role"],
-            "content": r["content"],
-            "meta": meta,
+            "timestamp":  r["timestamp"],
+            "role":       r["role"],
+            "content":    r["content"],
+            "provider":   meta.get("provider", ""),  # campo directo para el frontend
+            "meta":       meta,
         })
     return out
 
@@ -1010,7 +1066,7 @@ def _wrap_prompt(user_body: str, system_text: str) -> str:
 
 
 def _prompt_body(summary: dict) -> str:
-    """Cuerpo del prompt — formato compacto ~120 tokens, válido para cualquier modelo."""
+    """Cuerpo del prompt — formato compacto ~180 tokens, válido para cualquier modelo."""
     duration = summary.get("duration_seconds", 30)
     packets  = summary.get("total_packets", 0)
     bfmt     = summary.get("total_bytes_fmt", "0B")
@@ -1022,9 +1078,20 @@ def _prompt_body(summary: dict) -> str:
         )[:3]
     ) or "-"
 
-    talkers_str = ",".join(
-        t["ip"] for t in summary.get("top_talkers", [])[:3]
-    ) or "-"
+    # Construir mapa ip→hostname desde dhcp_devices para enriquecer top_talkers
+    dhcp_map: dict[str, str] = {}
+    for dev in (summary.get("dhcp_devices") or []):
+        ip  = dev.get("ip", "")
+        hn  = dev.get("hostname", "")
+        if ip and hn and hn != "desconocido":
+            dhcp_map[ip] = hn
+
+    talkers_parts = []
+    for t in summary.get("top_talkers", [])[:3]:
+        ip = t["ip"]
+        hn = dhcp_map.get(ip)
+        talkers_parts.append(f"{ip}({hn})" if hn else ip)
+    talkers_str = ",".join(talkers_parts) or "-"
 
     ports_str = ",".join(
         str(p["port"]) for p in summary.get("top_dst_ports", [])[:4]
@@ -1038,6 +1105,34 @@ def _prompt_body(summary: dict) -> str:
         for s in suspicious
     ) if suspicious else "-"
 
+    # Top 2 clientes más activos con sus top 3 dominios
+    cdc: dict = summary.get("client_domain_counts") or {}
+    client_lines = []
+    if isinstance(cdc, dict):
+        # Ordenar clientes por total de peticiones de dominio
+        sorted_clients = sorted(
+            cdc.items(),
+            key=lambda kv: sum(kv[1].values()) if isinstance(kv[1], dict) else 0,
+            reverse=True,
+        )[:2]
+        for client_ip, dom_map in sorted_clients:
+            if not isinstance(dom_map, dict):
+                continue
+            top_doms = sorted(dom_map.items(), key=lambda x: -x[1])[:3]
+            doms_str = ",".join(f"{d}×{c}" for d, c in top_doms)
+            hn = dhcp_map.get(client_ip, "")
+            label = f"{client_ip}({hn})" if hn else client_ip
+            client_lines.append(f"{label}→{doms_str}")
+    clients_str = "; ".join(client_lines) if client_lines else "-"
+
+    # Clientes autorizados en portal cautivo
+    captive_allowed = summary.get("captive_allowed") or []
+    captive_str = str(len(captive_allowed)) if isinstance(captive_allowed, list) else "-"
+
+    # Top 2 peticiones HTTP (rutas sospechosas de alto valor)
+    http_reqs = (summary.get("http_requests") or [])[:2]
+    http_str = "; ".join(http_reqs) if http_reqs else "-"
+
     return (
         f"WiFi {duration}s: pkt={packets} pps={pps} bytes={bfmt}\n"
         f"Proto:{proto_str}\n"
@@ -1045,13 +1140,19 @@ def _prompt_body(summary: dict) -> str:
         f"Ports:{ports_str}\n"
         f"DNS:{dns_str}\n"
         f"Alertas:{susp_str}\n"
+        f"Clientes_top:{clients_str}\n"
+        f"Portal_autorizados:{captive_str}\n"
+        f"HTTP_req:{http_str}\n"
     )
 
 
 def build_analysis_prompt(summary: dict) -> str:
     traffic = _prompt_body(summary)
     tpl = db_get_rule(RULE_ANALYSIS_KEY, DEFAULT_ANALYSIS_PROMPT_TEMPLATE)
-    user_body = _safe_format(tpl, {"traffic": traffic})
+    user_body = _safe_format(tpl, {
+        "traffic": traffic,
+        "protected_ips": ", ".join(sorted(PROTECTED_IPS)),
+    })
     return _wrap_prompt(
         user_body=user_body,
         system_text="Analista SOC de seguridad WiFi. Responde en español claro.",
@@ -1064,6 +1165,7 @@ def build_action_prompt(policy_context: dict) -> str:
         "policy_context": json.dumps(policy_context, ensure_ascii=False, indent=2),
         "start_hour": SOCIAL_POLICY_START_HOUR,
         "end_hour": SOCIAL_POLICY_END_HOUR,
+        "protected_ips": ", ".join(sorted(PROTECTED_IPS)),
     }
     user_body = _safe_format(tpl, ctx)
     return _wrap_prompt(
@@ -1113,6 +1215,59 @@ def call_llama(
         log.error("llama.cpp error: %s", e)
         stats["llama_errors"] += 1
         return f"[Error: {e}]"
+
+
+def call_groq_chat(
+    messages: list[dict],
+    *,
+    temperature: float = 0.7,
+    max_tokens: int | None = None,
+) -> str:
+    """Llama a la API de Groq (compatible OpenAI) con el modelo configurado.
+
+    Args:
+        messages: Lista de dicts {"role": "system|user|assistant", "content": "..."}
+        temperature: Temperatura de muestreo (0-1).
+        max_tokens: Límite de tokens en la respuesta (default: GROQ_MAX_TOKENS).
+
+    Returns:
+        Texto de respuesta del modelo, o cadena "[Error ...]" si falla.
+    """
+    if not GROQ_CHAT_ENABLED:
+        return "[Error: GROQ_API_KEY no configurado]"
+    t0 = time.time()
+    try:
+        resp = requests.post(
+            GROQ_API_URL,
+            headers={
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type":  "application/json",
+            },
+            json={
+                "model":       GROQ_MODEL,
+                "messages":    messages,
+                "temperature": float(temperature),
+                "max_tokens":  int(max_tokens if max_tokens is not None else GROQ_MAX_TOKENS),
+                "stream":      False,
+            },
+            timeout=GROQ_TIMEOUT_S,
+        )
+        elapsed = round(time.time() - t0, 1)
+        if resp.status_code == 200:
+            text = (
+                resp.json()
+                .get("choices", [{}])[0]
+                .get("message", {})
+                .get("content", "")
+                .strip()
+            )
+            log.info("Groq (%s) respondió en %ss (%d chars)", GROQ_MODEL, elapsed, len(text))
+            return text
+        log.warning("Groq HTTP %d: %s", resp.status_code, resp.text[:200])
+        return f"[Error Groq: HTTP {resp.status_code}]"
+    except Exception as e:
+        log.error("Groq error: %s", e)
+        return f"[Error Groq: {e}]"
 
 
 def _social_bucket_for_domain(domain: str) -> str | None:
@@ -1204,7 +1359,11 @@ def build_human_explanation(summary: dict, analysis_text: str, risk: str) -> str
         user_body=user_body,
         system_text="Eres analista de red y traductor técnico. Explica para audiencia no técnica.",
     )
-    response = call_llama(prompt).strip()
+    response = call_llama(
+        prompt,
+        temperature=0.6,
+        top_p=0.9,
+    ).strip()
     if not response or response.startswith("[Error"):
         return _fallback_human_explain(summary, analysis_text, risk)
     db_log_prompt(
@@ -1270,6 +1429,46 @@ def detect_behavior_alerts(summary: dict) -> list[dict]:
             "source_ip": s.get("src") or "",
             "meta": s,
         })
+
+    # Fase 4.3 — Alerta correlacionada: dominio DGA desde IP no autorizada en portal
+    captive_allowed: list = summary.get("captive_allowed") or []
+    if rare_domains and isinstance(captive_allowed, list):
+        authorized_set = set(captive_allowed)
+        cdc: dict = summary.get("client_domain_counts") or {}
+        for client_ip, dom_map in (cdc.items() if isinstance(cdc, dict) else []):
+            if not isinstance(dom_map, dict):
+                continue
+            client_rare = [d for d in dom_map if _is_rare_domain(d) and d in rare_domains]
+            if not client_rare:
+                continue
+            is_unauthorized = client_ip not in authorized_set
+            severity = "critical" if is_unauthorized else "high"
+            alerts.append({
+                "severity": severity,
+                "type": "dga_suspicious_client",
+                "message": (
+                    f"{'IP no autorizada' if is_unauthorized else 'IP autorizada'} {client_ip} "
+                    f"genera consultas DGA: {', '.join(client_rare[:3])}"
+                ),
+                "source_ip": client_ip,
+                "domain": client_rare[0],
+                "meta": {
+                    "rare_domains": client_rare[:5],
+                    "captive_authorized": not is_unauthorized,
+                    "captive_allowed_count": len(authorized_set),
+                },
+            })
+
+    # Alertas por peticiones HTTP sospechosas (Fase 3.2)
+    for req in (summary.get("suspicious_http_requests") or [])[:5]:
+        alerts.append({
+            "severity": "high",
+            "type": "suspicious_http_request",
+            "message": f"Petición HTTP con patrón malicioso: {req.get('request', req.get('uri', '?'))}",
+            "source_ip": req.get("src", ""),
+            "meta": req,
+        })
+
     return alerts
 
 
@@ -1326,6 +1525,20 @@ def _llm_domain_category(domain: str) -> tuple[str, float]:
 
 
 def classify_domain(domain: str, *, allow_llm: bool = True, refresh_cached_otros: bool = False) -> dict:
+    # 1) Caché en memoria (evita round-trips a SQLite y llamadas LLM redundantes)
+    _now = time.time()
+    with _domain_cache_lock:
+        mem_entry = _domain_cache.get(domain)
+        if mem_entry is not None:
+            mem_result, expires_at = mem_entry
+            if _now < expires_at:
+                # Solo usar si no es "otros" candidato a reclasificación
+                if not (allow_llm and refresh_cached_otros
+                        and str(mem_result.get("category") or "") == "otros"
+                        and str(mem_result.get("source") or "") != "llm"):
+                    return mem_result
+
+    # 2) Caché en SQLite (persistente entre reinicios)
     cached = db_get_domain_category(domain)
     if cached:
         if not (
@@ -1334,16 +1547,26 @@ def classify_domain(domain: str, *, allow_llm: bool = True, refresh_cached_otros
             and str(cached.get("category") or "") == "otros"
             and str(cached.get("source") or "") != "llm"
         ):
+            # Actualizar caché en memoria con el resultado de SQLite
+            with _domain_cache_lock:
+                _domain_cache[domain] = (cached, _now + _DOMAIN_CACHE_TTL_S)
             return cached
+
+    # 3) Clasificación por heurística (y opcionalmente LLM)
     cat, conf = _heuristic_domain_category(domain)
     source = "rule"
     if FEATURE_DOMAIN_CLASSIFIER and FEATURE_DOMAIN_CLASSIFIER_LLM and allow_llm and cat == "otros":
         cat, conf = _llm_domain_category(domain)
         source = "llm"
     db_set_domain_category(domain, cat, conf, source)
-    return db_get_domain_category(domain) or {
-        "domain": _normalize_domain(domain), "category": cat, "confidence": conf, "source": source, "updated_at": datetime.now(timezone.utc).isoformat()
+    result = db_get_domain_category(domain) or {
+        "domain": _normalize_domain(domain), "category": cat, "confidence": conf,
+        "source": source, "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    # Guardar en caché en memoria
+    with _domain_cache_lock:
+        _domain_cache[domain] = (result, _now + _DOMAIN_CACHE_TTL_S)
+    return result
 
 
 def domain_category_breakdown(limit_batches: int = 50, top_n: int = 25) -> dict:
@@ -1457,6 +1680,16 @@ def infer_and_store_device_profiles(summary: dict):
     cdc = summary.get("client_domain_counts") or {}
     if not isinstance(cdc, dict):
         return
+
+    # Fase 4.1 — construir mapa ip→hostname y ip→mac desde dhcp_devices e ip_to_mac
+    dhcp_hostname_map: dict[str, str] = {}
+    for dev in (summary.get("dhcp_devices") or []):
+        ip = dev.get("ip", "")
+        hn = dev.get("hostname", "")
+        if ip and hn and hn != "desconocido":
+            dhcp_hostname_map[ip] = hn
+    ip_to_mac: dict[str, str] = summary.get("ip_to_mac") or {}
+
     for client_ip, dom_map in cdc.items():
         if not isinstance(dom_map, dict):
             continue
@@ -1464,7 +1697,11 @@ def infer_and_store_device_profiles(summary: dict):
         if not domains:
             continue
         dtype, conf, reasons = _infer_device_type_from_domains(domains)
-        db_upsert_device_profile(client_ip, dtype, conf, reasons)
+        hostname = dhcp_hostname_map.get(client_ip)
+        mac = ip_to_mac.get(client_ip)
+        if hostname:
+            reasons = [f"hostname:{hostname}"] + reasons
+        db_upsert_device_profile(client_ip, dtype, conf, reasons, hostname=hostname, mac=mac)
 
 
 def _generate_summary_text(limit_batches: int = 6) -> tuple[str, dict]:
@@ -1550,24 +1787,87 @@ def generate_and_store_report():
     return {"report": text, "meta": meta}
 
 
+# Fase 4.2 — Caché de contexto para chat (TTL 30 s, evita N round-trips a SQLite por sesión)
+_CHAT_CONTEXT_TTL_S = 30
+_chat_context_cache: dict | None = None
+_chat_context_cache_ts: float = 0.0
+_chat_context_cache_lock = threading.Lock()
+
+
 def _latest_context_for_chat() -> dict:
+    global _chat_context_cache, _chat_context_cache_ts
+    now = time.time()
+    with _chat_context_cache_lock:
+        if _chat_context_cache is not None and (now - _chat_context_cache_ts) < _CHAT_CONTEXT_TTL_S:
+            return _chat_context_cache
+
     summaries = db_get_summaries(limit=1)
     alerts = db_get_alerts(limit=12)
     categories = domain_category_breakdown(limit_batches=30, top_n=6)
     devices = db_get_device_profiles(limit=20)
-    return {
+    ctx = {
         "summary": summaries[-1]["summary"] if summaries else "",
         "alerts": alerts[-8:],
         "categories": categories.get("categories", []),
         "devices": devices[:10],
     }
+    with _chat_context_cache_lock:
+        _chat_context_cache = ctx
+        _chat_context_cache_ts = now
+    return ctx
 
 
-def _chat_answer(question: str, session_id: str) -> str:
+def _chat_answer(question: str, session_id: str) -> tuple[str, str]:
+    """Responde la pregunta del usuario usando Groq (si está habilitado) o llama.cpp.
+
+    Returns:
+        (answer_text, provider)  donde provider es "groq" o "llama".
+    """
     if not FEATURE_CHAT:
-        return "El chat está deshabilitado por configuración."
+        return "El chat está deshabilitado por configuración.", "llama"
+
     ctx = _latest_context_for_chat()
     history = db_get_chat_history(session_id, limit=12)
+
+    # ── Ruta Groq (Qwen) ──────────────────────────────────────────────────────
+    if GROQ_CHAT_ENABLED:
+        system_msg = (
+            "Eres TARS, un asistente SOC especializado en análisis de redes WiFi públicas. "
+            "Respondes siempre en español claro y conciso. "
+            "Solo usas datos del contexto provisto; nunca inventas información. "
+            "Si se te pide un análisis, identifica riesgos, dispositivos sospechosos o "
+            "dominios inusuales basándote únicamente en los datos de la red."
+        )
+        ctx_json = json.dumps(ctx, ensure_ascii=False, indent=2)
+        messages: list[dict] = [{"role": "system", "content": system_msg}]
+
+        # Inyectar contexto de red como primer mensaje de usuario oculto
+        messages.append({
+            "role": "user",
+            "content": (
+                f"[Contexto de red en tiempo real]\n{ctx_json}\n\n"
+                "Usa estos datos para responder las preguntas que siguen."
+            ),
+        })
+        messages.append({
+            "role": "assistant",
+            "content": "Entendido. Tengo el contexto de red cargado. ¿En qué puedo ayudarte?",
+        })
+
+        # Historial de conversación (últimos 8 turnos)
+        for m in history[-8:]:
+            role = m["role"] if m["role"] in ("user", "assistant") else "user"
+            messages.append({"role": role, "content": m["content"]})
+
+        # Pregunta actual
+        messages.append({"role": "user", "content": question})
+
+        ans = call_groq_chat(messages, temperature=0.7).strip()
+        if ans and not ans.startswith("[Error"):
+            return ans, "groq"
+        log.warning("Groq falló, usando llama.cpp como fallback")
+
+    # ── Ruta llama.cpp (fallback o único disponible) ──────────────────────────
     hist_txt = "\n".join([f"{m['role']}: {m['content']}" for m in history[-8:]])
     prompt = _wrap_prompt(
         user_body=(
@@ -1578,14 +1878,14 @@ def _chat_answer(question: str, session_id: str) -> str:
         ),
         system_text="Asistente SOC para PoC WiFi. No inventes datos fuera del contexto provisto.",
     )
-    ans = call_llama(prompt).strip()
+    ans = call_llama(prompt, temperature=0.75, top_p=0.95).strip()
     if not ans or ans.startswith("[Error"):
         alerts = ctx.get("alerts") or []
         if alerts:
             a = alerts[-1]
-            return f"Sí, hay una señal reciente: {a.get('message', 'evento sospechoso')}."
-        return "No observo alertas críticas recientes; la red parece estable en esta ventana."
-    return ans
+            return f"Sí, hay una señal reciente: {a.get('message', 'evento sospechoso')}.", "llama"
+        return "No observo alertas críticas recientes; la red parece estable en esta ventana.", "llama"
+    return ans, "llama"
 
 
 def build_portal_risk_message(client_ip: str) -> dict:
@@ -1731,6 +2031,41 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
     should_block = in_window and hits >= SOCIAL_MIN_HITS
     base_action = "block" if should_block else ("unblock" if policy_state.get("social_block_active", False) else "none")
 
+    # ── Short-circuit: fuera de ventana horaria la decisión es trivial ──────────
+    # Si estamos fuera del horario de política Y el bloqueo no está activo →
+    # nada que hacer, no vale la pena gastar tokens del LLM.
+    # Si estamos fuera del horario Y el bloqueo SÍ está activo → desbloquear
+    # inmediatamente sin consultar al LLM (la regla de horario es determinista).
+    active_now = policy_state.get("social_block_active", False)
+    if not in_window:
+        result.update({
+            "in_window": False,
+            "should_block": False,
+            "social_hits": hits,
+            "social": social,
+            "base_action": base_action,
+            "llm_action": "skip",
+            "llm_reason": "outside_time_window_short_circuit",
+        })
+        if active_now:
+            ok, msg = router_mcp.remove_social_block()
+            result["action"] = "block_off"
+            result["reason"] = "outside_window_auto_unblock"
+            result["router_ok"] = ok
+            result["router_msg"] = msg
+            if ok:
+                policy_state["social_block_active"] = False
+                db_store_policy_action("social_block_off", result["reason"], result)
+            else:
+                db_store_policy_action("social_block_off_error", result["reason"], result)
+        else:
+            result["action"] = "noop"
+            result["reason"] = "outside_window_nothing_to_do"
+        log.debug("social_policy short-circuit: fuera de ventana %d:00-%d:00, hora=%d",
+                  SOCIAL_POLICY_START_HOUR, SOCIAL_POLICY_END_HOUR, local_hour)
+        return result
+    # ────────────────────────────────────────────────────────────────────────────
+
     policy_context = {
         "local_hour": local_hour,
         "timezone": SOCIAL_POLICY_TZ,
@@ -1741,11 +2076,15 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
         "social_domains": social["matched_domains"],
         "whitelist_domains": sorted(whitelist),
         "base_action": base_action,
-        "block_active": policy_state.get("social_block_active", False),
+        "block_active": active_now,
     }
 
     action_prompt = build_action_prompt(policy_context)
-    action_response = call_llama(action_prompt)
+    action_response = call_llama(
+        action_prompt,
+        temperature=0.1,
+        top_p=0.5,
+    )
     db_log_prompt(
         prompt_type="action",
         prompt=action_prompt,
@@ -1771,21 +2110,28 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
         "llm_reason": llm_reason,
     })
 
-    active = policy_state.get("social_block_active", False)
+    # Refrescar estado tras la llamada al LLM (pudo cambiar en otro hilo)
+    active_now = policy_state.get("social_block_active", False)
     if llm_action == "block":
         ok, msg = router_mcp.apply_social_block(SOCIAL_DOMAIN_SET)
-        result["action"] = "block_refresh" if active else "block_on"
+        result["action"] = "block_refresh" if active_now else "block_on"
         result["reason"] = f"hits={hits} in_window={in_window} llm={llm_reason}"
         result["router_ok"] = ok
         result["router_msg"] = msg
         if ok:
             policy_state["social_block_active"] = True
-            db_store_policy_action("social_block_on" if not active else "social_block_refresh", result["reason"], result)
+            db_store_policy_action(
+                "social_block_on" if not active_now else "social_block_refresh",
+                result["reason"], result,
+            )
         else:
-            db_store_policy_action("social_block_on_error" if not active else "social_block_refresh_error", result["reason"], result)
+            db_store_policy_action(
+                "social_block_on_error" if not active_now else "social_block_refresh_error",
+                result["reason"], result,
+            )
         return result
 
-    if llm_action == "unblock" and active:
+    if llm_action == "unblock" and active_now:
         ok, msg = router_mcp.remove_social_block()
         result["action"] = "block_off"
         result["reason"] = f"hits={hits} in_window={in_window} llm={llm_reason}"
@@ -1799,7 +2145,7 @@ def evaluate_and_apply_social_policy(batch_id: int, summary: dict) -> dict:
         return result
 
     result["action"] = "noop"
-    result["reason"] = f"active={active} hits={hits} in_window={in_window}"
+    result["reason"] = f"active={active_now} hits={hits} in_window={in_window}"
     return result
 
 
@@ -1832,6 +2178,15 @@ def evaluate_and_apply_porn_policy(batch_id: int, summary: dict) -> dict:
 
     global_ips = router_mcp.resolve_domains_to_ips(porn["matched_domains"].keys())
     for client_ip, info in porn["offenders"].items():
+        # ── Protección de IPs de infraestructura (capa Python) ────────────────
+        if client_ip in PROTECTED_IPS:
+            log.warning(
+                "porn_policy: IP protegida %s detectada como offender — "
+                "se omite kick/warn para evitar auto-bloqueo de infraestructura.",
+                client_ip,
+            )
+            continue
+        # ─────────────────────────────────────────────────────────────────────
         ip_candidates = set(global_ips)
         for ip in info.get("dest_ips", []):
             ip_candidates.add(ip)
@@ -1882,7 +2237,11 @@ def analyze_and_store(batch_id: int, summary: dict):
     """Ejecuta prompt → llama → guarda en SQLite → broadcast SSE."""
     t0       = time.time()
     prompt   = build_analysis_prompt(summary)
-    analysis = call_llama(prompt)
+    analysis = call_llama(
+        prompt,
+        temperature=0.4,
+        top_p=0.85,
+    )
     db_log_prompt(
         prompt_type="analysis",
         prompt=prompt,
@@ -1975,18 +2334,43 @@ def worker_thread():
             work_queue.task_done()
 
 
+def _adaptive_batch_limit() -> int:
+    """Fase 4.4 — Calcula cuántos batches usar en el resumen según la cola de trabajo.
+
+    Si la cola está vacía (sistema idle) tomamos una ventana más amplia para
+    que el resumen capture tendencias de mayor duración.  Si hay backlog
+    (sistema ocupado) reducimos la ventana para no duplicar trabajo ya resumido.
+    """
+    q_size = work_queue.qsize()
+    if q_size == 0:
+        return 10   # idle → ventana amplia (≈ 5 min a 30 s/batch)
+    elif q_size <= 3:
+        return 6    # carga normal → ventana media
+    elif q_size <= 8:
+        return 4    # carga alta → ventana corta
+    else:
+        return 2    # backlog severo → solo últimos batches
+
+
 def summary_worker_thread():
     if not FEATURE_AUTO_REPORTS:
         log.info("Summary worker deshabilitado")
         return
-    log.info("Summary worker iniciado (intervalo=%ss)", SUMMARY_INTERVAL_S)
+    log.info("Summary worker iniciado (intervalo_base=%ss, ventana adaptativa)", SUMMARY_INTERVAL_S)
     while True:
         try:
+            limit = _adaptive_batch_limit()
             out = generate_and_store_summary()
-            log.info("Resumen generado: %s", out.get("summary", "")[:120])
+            log.info(
+                "Resumen generado (ventana=%d batches, cola=%d): %s",
+                limit, work_queue.qsize(), out.get("summary", "")[:120],
+            )
         except Exception as e:
             log.warning("Summary worker error: %s", e)
-        time.sleep(max(20, SUMMARY_INTERVAL_S))
+        # Intervalo también adaptativo: más frecuente con backlog, más lento en idle
+        q_now = work_queue.qsize()
+        sleep_s = max(20, SUMMARY_INTERVAL_S // 2) if q_now > 5 else max(20, SUMMARY_INTERVAL_S)
+        time.sleep(sleep_s)
 
 
 def enqueue_batch(summary: dict) -> int:
@@ -2122,6 +2506,7 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 llama_ok = r.status_code == 200
             except Exception:
                 pass
+            chat_provider = "groq" if GROQ_CHAT_ENABLED else "llama"
             self.send_json({
                 "status":        "ok",
                 "llama_url":     LLAMA_URL,
@@ -2133,6 +2518,9 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
                 "db_path":       DB_PATH,
                 "queue":         db_queue_stats(),
                 "stats":         stats,
+                "groq_enabled":  GROQ_CHAT_ENABLED,
+                "groq_model":    GROQ_MODEL if GROQ_CHAT_ENABLED else None,
+                "chat_provider": chat_provider,
                 "policy": {
                     "social_block_enabled": SOCIAL_BLOCK_ENABLED,
                     "social_block_active": policy_state.get("social_block_active", False),
@@ -2378,13 +2766,15 @@ class AnalyzerHandler(BaseHTTPRequestHandler):
             if not question:
                 self.send_error_json(400, "question requerida"); return
             db_store_chat_message(session_id, "user", question)
-            answer = _chat_answer(question, session_id)
-            db_store_chat_message(session_id, "assistant", answer)
+            answer, chat_provider = _chat_answer(question, session_id)
+            db_store_chat_message(session_id, "assistant", answer,
+                                  meta={"provider": chat_provider})
             self.send_json({
-                "ok": True,
+                "ok":        True,
                 "session_id": session_id,
-                "answer": answer,
-                "history": db_get_chat_history(session_id, limit=20),
+                "answer":    answer,
+                "provider":  chat_provider,
+                "history":   db_get_chat_history(session_id, limit=20),
             })
             return
 

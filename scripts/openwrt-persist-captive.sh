@@ -46,9 +46,29 @@ router_ssh "
 
     cat > /etc/captive-portal-fw4-include.sh <<'EOS'
 #!/bin/sh
+# Script include de fw4 para el captive portal.
+# Se ejecuta cada vez que el firewall arranca o se reinicia.
+
+# 1) Recargar tabla captive desde el archivo persistente
 nft delete table ip captive 2>/dev/null || true
 nft -f /etc/captive-portal.nft
-exit \$?
+NFT_RC=$?
+
+# 2) Restaurar bypass permanente de IPs de infraestructura.
+#    Los sets con "flags dynamic" no conservan los elements del archivo .nft,
+#    por lo que es necesario re-agregarlos explícitamente tras cada carga.
+#    Si el servicio captive-bypass-restore está instalado, lo llamamos;
+#    si no, aplicamos el fallback inline desde captive-portal-bypass.conf.
+if [ -x /etc/init.d/captive-bypass-restore ]; then
+    /etc/init.d/captive-bypass-restore start
+elif [ -f /etc/captive-portal-bypass.conf ]; then
+    while IFS= read -r ip; do
+        case "$ip" in '#'*|'') continue ;; esac
+        nft add element ip captive allowed_clients { "$ip" timeout 0s } 2>/dev/null || true
+    done < /etc/captive-portal-bypass.conf
+fi
+
+exit $NFT_RC
 EOS
     chmod 755 /etc/captive-portal-fw4-include.sh
 

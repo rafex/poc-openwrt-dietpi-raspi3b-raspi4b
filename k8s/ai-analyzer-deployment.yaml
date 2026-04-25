@@ -66,6 +66,19 @@ spec:
               value: "48"
             - name: DOMAIN_CLASSIFIER_LLM_MAX_QUEUE_SIZE
               value: "4"
+            # ── Groq API — clave leída del Secret (opcional) ───────────────────
+            # Si el Secret "groq-credentials" no existe o está vacío,
+            # GROQ_API_KEY queda en "" y Groq se deshabilita automáticamente.
+            - name: GROQ_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: groq-credentials
+                  key: GROQ_API_KEY
+                  optional: true
+            - name: GROQ_MODEL
+              value: "qwen/qwen3-32b"
+            - name: GROQ_MAX_TOKENS
+              value: "1024"
           volumeMounts:
             - name: analyzer-data
               mountPath: /data

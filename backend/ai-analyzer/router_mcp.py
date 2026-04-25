@@ -1,7 +1,21 @@
 import logging
+import os
 import re
 import subprocess
 from typing import Iterable
+
+# IPs de infraestructura que NUNCA deben bloquearse ni expulsarse del portal.
+# Son una red de seguridad a nivel de módulo: incluso si analyzer.py falla en
+# su propia validación, router_mcp jamás ejecutará el comando SSH dañino.
+_ROUTER_MCP_PROTECTED_IPS: frozenset[str] = frozenset(filter(None, [
+    os.environ.get("ROUTER_IP",      "192.168.1.1"),
+    os.environ.get("PORTAL_IP",      "192.168.1.167"),
+    os.environ.get("RASPI4B_IP",     "192.168.1.167"),
+    os.environ.get("RASPI3B_IP",     "192.168.1.181"),
+    os.environ.get("PORTAL_NODE_IP", "192.168.1.182"),
+    os.environ.get("AP_EXTENDER_IP", "192.168.1.183"),
+    os.environ.get("ADMIN_IP",       "192.168.1.113"),
+]))
 
 
 class RouterMCP:
@@ -213,6 +227,15 @@ printf 'OK\\n'
         client_ip = str(client_ip or "").strip()
         if not client_ip:
             return False, "missing client_ip"
+        # ── Protección de IPs de infraestructura ──────────────────────────────
+        if client_ip in _ROUTER_MCP_PROTECTED_IPS:
+            self.log.warning(
+                "kick_client_from_allowed BLOQUEADO: %s es IP protegida del sistema — "
+                "se ignora la operación para evitar auto-bloqueo de infraestructura.",
+                client_ip,
+            )
+            return False, f"ip_protegida:{client_ip}"
+        # ─────────────────────────────────────────────────────────────────────
         ok, msg = self.ensure_policy_objects()
         if not ok:
             return False, msg
@@ -231,6 +254,15 @@ printf 'OK\\n'
         client_ip = str(client_ip or "").strip()
         if not client_ip:
             return False, "missing client_ip"
+        # ── Protección de IPs de infraestructura ──────────────────────────────
+        if client_ip in _ROUTER_MCP_PROTECTED_IPS:
+            self.log.warning(
+                "mark_client_warning BLOQUEADO: %s es IP protegida del sistema — "
+                "no se añade al set warned_clients.",
+                client_ip,
+            )
+            return False, f"ip_protegida:{client_ip}"
+        # ─────────────────────────────────────────────────────────────────────
         ok, msg = self.ensure_policy_objects()
         if not ok:
             return False, msg

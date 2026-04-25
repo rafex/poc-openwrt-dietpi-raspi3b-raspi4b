@@ -50,17 +50,48 @@ server {
     root /usr/share/nginx/html;
 
     location = / {
-        return 302 /portal;
+        return 302 http://\$server_addr/portal;
     }
 
-    # Rutas típicas de detección captive en SO móviles/escritorio
-    location = /generate_204 { return 302 /portal; }
-    location = /hotspot-detect.html { return 302 /portal; }
-    location = /connecttest.txt { return 302 /portal; }
-    location = /ncsi.txt { return 302 /portal; }
-    location = /canonical.html { return 302 /portal; }
-    location = /success.txt { return 302 /portal; }
+    # ── Detección de portal cautivo por fabricante / SO ──────────────────────
+    # IMPORTANTE: se usa URL absoluta con la IP real del servidor (\$server_addr)
+    # en lugar de una ruta relativa.  Con un redirect relativo (/portal) el OS
+    # construye "http://connectivitycheck.plataforma-del-fabricante.com/portal"
+    # (mismo host) y muchos equipos —especialmente Huawei EMUI / HarmonyOS—
+    # NO muestran la notificación de portal cautivo porque interpretan el mismo
+    # host como "sin redirección real".  Con la IP del portal en la Location el
+    # OS detecta inequívocamente que está siendo redirigido a otro servidor.
 
+    # Android AOSP / Pixel / la mayoría de marcas
+    location = /generate_204            { return 302 http://\$server_addr/portal; }
+
+    # Apple iOS / macOS (CaptiveNetworkSupport)
+    location = /hotspot-detect.html     { return 302 http://\$server_addr/portal; }
+    location = /library/test/success.html { return 302 http://\$server_addr/portal; }
+    location = /success.html            { return 302 http://\$server_addr/portal; }
+
+    # Microsoft Windows (NCSI)
+    location = /connecttest.txt         { return 302 http://\$server_addr/portal; }
+    location = /ncsi.txt                { return 302 http://\$server_addr/portal; }
+    location = /redirect                { return 302 http://\$server_addr/portal; }
+
+    # Mozilla Firefox
+    location = /canonical.html          { return 302 http://\$server_addr/portal; }
+    location = /success.txt             { return 302 http://\$server_addr/portal; }
+
+    # Huawei EMUI / HarmonyOS
+    # Usan /generate_204 (ya cubierto arriba) con host connectivitycheck.platform.hicloud.com
+    # Algunas versiones EMUI también intentan estas rutas adicionales:
+    location = /phone/phone.html        { return 302 http://\$server_addr/portal; }
+    location = /generate_204.do        { return 302 http://\$server_addr/portal; }
+
+    # Xiaomi MIUI
+    location = /miui/check             { return 302 http://\$server_addr/portal; }
+
+    # Samsung (algunos modelos OneUI)
+    location = /wifiAuth.do            { return 302 http://\$server_addr/portal; }
+
+    # ── Páginas reales del portal (mayor prioridad por ser exact match = ) ────
     location = /portal { try_files /portal.html =404; }
     location = /services { try_files /services.html =404; }
     location = /blocked { try_files /blocked.html =404; }
@@ -95,6 +126,17 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
+    }
+
+    # ── Catch-all: cualquier ruta no reconocida → portal ─────────────────────
+    # Este bloque atrapa las peticiones de detección captive de fabricantes con
+    # paths propios que no estén listados arriba (Honor, Oppo, Vivo, OnePlus…).
+    # Prioridad nginx: location = (exact) > location ^~ > location ~ (regex) >
+    # location /prefix (longest wins).  Las rutas del portal (=/portal,
+    # =/services, =/blocked, =/people, /blocked-art/, /api/) son más específicas
+    # que "location /" y no se ven afectadas por este fallback.
+    location / {
+        return 302 http://\$server_addr/portal;
     }
 }
 EOF
@@ -199,6 +241,47 @@ wait_backend_ready() {
   die "Backend de registro no disponible"
 }
 
+install_autostart_service() {
+  # Crea un servicio systemd que arranca los contenedores del portal en cada boot.
+  # --restart unless-stopped de podman NO sobrevive reinicios del sistema;
+  # solo un servicio de systemd garantiza el arranque automático.
+  local SERVICE_FILE="/etc/systemd/system/captive-portal-node.service"
+
+  log_info "Instalando servicio systemd de autoarranque: captive-portal-node"
+
+  run_cmd bash -c "cat > '$SERVICE_FILE'" <<EOF
+[Unit]
+Description=Captive Portal Node — frontend (nginx) + backend (lentium)
+Documentation=https://github.com/rafex/presentaciones-cursos-talleres
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Arranca primero el backend (el frontend hace proxy hacia él)
+ExecStart=/usr/bin/podman start ${CONTAINER_NAME_BACKEND}
+ExecStart=/usr/bin/podman start ${CONTAINER_NAME_FRONTEND}
+
+# Para en orden inverso
+ExecStop=/usr/bin/podman stop -t 10 ${CONTAINER_NAME_FRONTEND}
+ExecStop=/usr/bin/podman stop -t 10 ${CONTAINER_NAME_BACKEND}
+
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  run_cmd systemctl daemon-reload
+  run_cmd systemctl enable captive-portal-node.service
+  log_ok "Servicio habilitado: captive-portal-node.service"
+  log_info "Los contenedores arrancarán automáticamente en el próximo reboot"
+}
+
 verify_local() {
   local ep code
   for ep in /portal /services /blocked /people /api/history /api/portal/context; do
@@ -231,6 +314,7 @@ if ! $ONLY_VERIFY; then
   wait_backend_ready
   deploy_frontend_container
   check_container_running
+  install_autostart_service
 fi
 
 if ! $DRY_RUN; then

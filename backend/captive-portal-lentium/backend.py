@@ -165,10 +165,17 @@ def save_guest(data: dict, ip: str) -> int:
 
 def authenticate_registered_client(telefono: str, password: str, ip: str) -> tuple[bool, str, str]:
     """
-    Valida acceso de "Soy Cliente" contra registros existentes.
-    - Primero busca en clientes
-    - Luego en invitados
-    Retorna (ok, tipo, reason)
+    Valida acceso de "Soy Cliente / Regreso" contra registros existentes.
+    - Primero busca en clientes, luego en invitados.
+    - Distingue entre teléfono inexistente y contraseña incorrecta para dar
+      mensajes de error útiles al usuario.
+
+    Retorna (ok, tipo, reason) donde reason puede ser:
+        "ok"                  — autenticado correctamente
+        "telefono_invalido"   — campo vacío o sin dígitos
+        "no_registrado"       — teléfono no existe en ninguna tabla
+                                → el usuario debe registrarse primero como invitado
+        "credenciales_invalidas" — teléfono encontrado pero contraseña incorrecta
     """
     tel_raw = (telefono or "").strip()
     tel_key = _phone_key(tel_raw)
@@ -176,43 +183,57 @@ def authenticate_registered_client(telefono: str, password: str, ip: str) -> tup
     if not tel_raw or not tel_key:
         return False, "", "telefono_invalido"
 
+    phone_found = False
+
     with _db_connect() as conn:
+        # ── 1. Búsqueda exacta en clientes ───────────────────────────────────
         row = conn.execute(
-            "SELECT id,telefono,pwd_hash FROM clientes WHERE telefono=?",
-            (tel_raw,),
+            "SELECT id, pwd_hash FROM clientes WHERE telefono=?", (tel_raw,)
         ).fetchone()
-        if row and row["pwd_hash"] == pwd_hash:
-            conn.execute(
-                "UPDATE clientes SET ip=?, ultima_sesion=datetime('now') WHERE id=?",
-                (ip, row["id"]),
-            )
-            return True, "cliente", "ok"
+        if row:
+            phone_found = True
+            if row["pwd_hash"] == pwd_hash:
+                conn.execute(
+                    "UPDATE clientes SET ip=?, ultima_sesion=datetime('now') WHERE id=?",
+                    (ip, row["id"]),
+                )
+                return True, "cliente", "ok"
 
+        # ── 2. Búsqueda exacta en invitados ──────────────────────────────────
         row = conn.execute(
-            "SELECT id,telefono,pwd_hash FROM invitados WHERE telefono=?",
-            (tel_raw,),
+            "SELECT id, pwd_hash FROM invitados WHERE telefono=?", (tel_raw,)
         ).fetchone()
-        if row and row["pwd_hash"] == pwd_hash:
-            conn.execute(
-                "UPDATE invitados SET ip=?, ultima_sesion=datetime('now') WHERE id=?",
-                (ip, row["id"]),
-            )
-            return True, "invitado", "ok"
+        if row:
+            phone_found = True
+            if row["pwd_hash"] == pwd_hash:
+                conn.execute(
+                    "UPDATE invitados SET ip=?, ultima_sesion=datetime('now') WHERE id=?",
+                    (ip, row["id"]),
+                )
+                return True, "invitado", "ok"
 
-        # Fallback por normalización de teléfono (ej. "55 1234 5678" vs "5512345678")
+        # ── 3. Fallback: normalización de teléfono ────────────────────────────
+        # Cubre "55 1234 5678" vs "5512345678", etc.
         for table in ("clientes", "invitados"):
             rows = conn.execute(
-                f"SELECT id,telefono,pwd_hash FROM {table}"
+                f"SELECT id, telefono, pwd_hash FROM {table}"
             ).fetchall()
             for r in rows:
-                if _phone_key(r["telefono"]) == tel_key and r["pwd_hash"] == pwd_hash:
-                    conn.execute(
-                        f"UPDATE {table} SET ip=?, ultima_sesion=datetime('now') WHERE id=?",
-                        (ip, r["id"]),
-                    )
-                    tipo = "cliente" if table == "clientes" else "invitado"
-                    return True, tipo, "ok"
+                if _phone_key(r["telefono"]) == tel_key:
+                    phone_found = True
+                    if r["pwd_hash"] == pwd_hash:
+                        conn.execute(
+                            f"UPDATE {table} SET ip=?, ultima_sesion=datetime('now') WHERE id=?",
+                            (ip, r["id"]),
+                        )
+                        tipo = "cliente" if table == "clientes" else "invitado"
+                        return True, tipo, "ok"
 
+    # El teléfono no existe en ninguna tabla → primera vez, debe ser invitado
+    if not phone_found:
+        return False, "", "no_registrado"
+
+    # Teléfono existe pero la contraseña no coincide
     return False, "", "credenciales_invalidas"
 
 # =============================================================================
@@ -893,7 +914,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         log.info(f"POST {self.path}  peer={self.client_address[0]}")
         data = self._read_json()
 
-        # ── Registro de cliente ──────────────────────────────────────────────
+        # ── Inicio de sesión de cliente / invitado registrado ────────────────
+        # Flujo de uso:
+        #   Primera vez → registrarse como Invitado (/api/register/guest)
+        #   Siguiente visita → entrar como Cliente con teléfono + contraseña
         if self.path == "/api/register/client":
             err = _require_fields(data, ["telefono", "password"])
             if err:
@@ -907,18 +931,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data["password"],
                 client_ip,
             )
+
             if not auth_ok:
-                self._respond(401, {
-                    "ok": False,
-                    "error": "Teléfono o contraseña incorrectos",
-                    "reason": auth_reason,
-                })
+                if auth_reason == "no_registrado":
+                    # El teléfono no existe en ninguna tabla: es la primera vez.
+                    # Guiar al usuario a registrarse como invitado.
+                    log.info(f"register/client: teléfono no registrado — ip={client_ip}")
+                    self._respond(404, {
+                        "ok": False,
+                        "error": (
+                            "No encontramos tu número. "
+                            "La primera vez debes registrarte como Invitado."
+                        ),
+                        "reason": "no_registrado",
+                        "accion": "registrate_como_invitado",
+                    })
+                elif auth_reason == "credenciales_invalidas":
+                    self._respond(401, {
+                        "ok": False,
+                        "error": "Contraseña incorrecta. Intenta de nuevo.",
+                        "reason": "credenciales_invalidas",
+                    })
+                else:
+                    self._respond(400, {
+                        "ok": False,
+                        "error": "Teléfono inválido.",
+                        "reason": auth_reason,
+                    })
                 return
+
             ok = authorize_client(client_ip)
             self._respond(200 if ok else 500, {
                 "ok": ok,
                 "ip": client_ip,
-                "auth_type": auth_type,
+                "auth_type": auth_type,   # "cliente" o "invitado"
             })
             return
 

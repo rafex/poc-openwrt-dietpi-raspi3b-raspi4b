@@ -74,13 +74,25 @@ step()  { echo -e "\n${BOLD}── $* ──${NC}"; }
 # ─── Argumentos ───────────────────────────────────────────────────────────────
 SETUP_SSH=true
 DRY_RUN=false
+WAIT_PI4B=true           # esperar que Pi4B esté operativa antes de iniciar el servicio
+WAIT_MQTT_S=180          # segundos máximos esperando broker MQTT (Pi4B puede tardar en levantar k3s)
+WAIT_HTTP_S=120          # segundos máximos esperando analizador HTTP
+WAIT_INTERVAL=10         # intervalo de reintento en segundos
 
 for arg in "$@"; do
     case "$arg" in
-        --no-ssh)   SETUP_SSH=false ;;
-        --dry-run)  DRY_RUN=true    ;;
+        --no-ssh)     SETUP_SSH=false  ;;
+        --dry-run)    DRY_RUN=true     ;;
+        --no-wait)    WAIT_PI4B=false  ;;
+        --wait-mqtt=*)  WAIT_MQTT_S="${arg#*=}" ;;
+        --wait-http=*)  WAIT_HTTP_S="${arg#*=}" ;;
         --help|-h)
-            echo "Uso: $0 [--no-ssh] [--dry-run]"
+            echo "Uso: $0 [--no-ssh] [--dry-run] [--no-wait] [--wait-mqtt=N] [--wait-http=N]"
+            echo "  --no-ssh          Omitir configuración SSH"
+            echo "  --dry-run         Solo mostrar qué haría"
+            echo "  --no-wait         No esperar a que Pi4B esté operativa"
+            echo "  --wait-mqtt=N     Segundos máximos esperando broker MQTT (default: 180)"
+            echo "  --wait-http=N     Segundos máximos esperando analizador HTTP (default: 120)"
             exit 0
             ;;
         *) die "Argumento desconocido: $arg" ;;
@@ -92,6 +104,111 @@ run() {
         echo -e "${YELLOW}[DRY-RUN]${NC} $*"
     else
         "$@"
+    fi
+}
+
+# ─── Helpers de espera con reintento ──────────────────────────────────────────
+
+# wait_for_port LABEL HOST PORT MAX_S INTERVAL_S
+# Espera hasta MAX_S segundos a que HOST:PORT sea alcanzable via TCP.
+# Retorna 0 si logra conectar, 1 si agota el timeout.
+wait_for_port() {
+    local label="$1" host="$2" port="$3"
+    local max_s="${4:-120}" interval="${5:-10}"
+    local waited=0
+
+    info "Esperando $label ($host:$port) — timeout ${max_s}s, reintento cada ${interval}s"
+    while [ "$waited" -lt "$max_s" ]; do
+        if nc -z -w3 "$host" "$port" 2>/dev/null; then
+            printf '\n'
+            ok "$label accesible ($host:$port) tras ${waited}s"
+            return 0
+        fi
+        printf "  · %3ds/%ds — %s (%s:%s) no disponible aún...\r" \
+            "$waited" "$max_s" "$label" "$host" "$port"
+        sleep "$interval"
+        waited=$((waited + interval))
+    done
+    printf '\n'
+    warn "$label ($host:$port) no alcanzable tras ${max_s}s"
+    return 1
+}
+
+# wait_for_url LABEL URL MAX_S INTERVAL_S
+# Espera hasta MAX_S segundos a que URL devuelva un HTTP válido (2xx/3xx/5xx).
+# Retorna 0 si responde, 1 si agota el timeout.
+wait_for_url() {
+    local label="$1" url="$2"
+    local max_s="${3:-120}" interval="${4:-10}"
+    local waited=0 code
+
+    info "Esperando $label ($url) — timeout ${max_s}s, reintento cada ${interval}s"
+    while [ "$waited" -lt "$max_s" ]; do
+        code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            --connect-timeout 5 --max-time 10 "$url" 2>/dev/null)" || code="000"
+        case "$code" in
+            200|201|204|301|302|307|308|400|401|403|404|500|503)
+                printf '\n'
+                ok "$label responde HTTP $code tras ${waited}s"
+                return 0
+                ;;
+        esac
+        printf "  · %3ds/%ds — %s (HTTP %s) aún no responde...\r" \
+            "$waited" "$max_s" "$label" "$code"
+        sleep "$interval"
+        waited=$((waited + interval))
+    done
+    printf '\n'
+    warn "$label no respondió en ${max_s}s"
+    return 1
+}
+
+# wait_for_raspi4b
+# Espera con reintentos a que la Pi4B tenga el broker MQTT y el analizador IA
+# operativos. Se llama antes de arrancar el servicio sensor para maximizar la
+# probabilidad de que la primera publicación MQTT tenga éxito.
+wait_for_raspi4b() {
+    step "E.0) Esperando que RafexPi4B esté operativa"
+    info "Pi4B puede tardar varios minutos en levantar k3s + Mosquitto + ai-analyzer"
+    info "  Broker MQTT  : $MQTT_HOST:$MQTT_PORT"
+    info "  Analizador   : $ANALYZER_URL"
+
+    # 1) Ping básico — indica que el sistema operativo está vivo
+    local ping_ok=false
+    local waited=0
+    local ping_max=60
+    info "Ping a $MQTT_HOST — máximo ${ping_max}s..."
+    while [ "$waited" -lt "$ping_max" ]; do
+        if ping -c1 -W2 "$MQTT_HOST" &>/dev/null; then
+            printf '\n'
+            ok "Pi4B responde a ping tras ${waited}s"
+            ping_ok=true
+            break
+        fi
+        printf "  · %3ds/%ds — Pi4B sin respuesta a ping...\r" "$waited" "$ping_max"
+        sleep "$WAIT_INTERVAL"
+        waited=$((waited + WAIT_INTERVAL))
+    done
+    printf '\n'
+
+    if ! $ping_ok; then
+        warn "Pi4B no responde a ping — puede estar apagada o arrancando"
+        warn "El sensor iniciará igualmente; se conectará a Pi4B cuando esté lista"
+        return 0
+    fi
+
+    # 2) Puerto MQTT (Mosquitto)
+    if ! wait_for_port "broker MQTT" "$MQTT_HOST" "$MQTT_PORT" \
+            "$WAIT_MQTT_S" "$WAIT_INTERVAL"; then
+        warn "Broker MQTT no disponible en ${WAIT_MQTT_S}s"
+        warn "El sensor publicará los batches en cuanto Pi4B levante Mosquitto"
+    fi
+
+    # 3) Endpoint HTTP del analizador IA
+    local HEALTH_URL="${ANALYZER_URL%/ingest}/health"
+    if ! wait_for_url "analizador IA" "$HEALTH_URL" "$WAIT_HTTP_S" "$WAIT_INTERVAL"; then
+        warn "Analizador IA no disponible en ${WAIT_HTTP_S}s"
+        warn "Verifica que setup-ai-raspi4b.sh se haya ejecutado correctamente en Pi4B"
     fi
 }
 
@@ -162,7 +279,8 @@ run apt-get install -y --no-install-recommends \
     python3-requests \
     openssh-client \
     iproute2 \
-    curl
+    curl \
+    netcat-openbsd
 
 ok "Dependencias instaladas"
 
@@ -183,7 +301,87 @@ if ! $DRY_RUN; then
 fi
 ok "Permisos de captura configurados"
 
-# ─── B) Directorio y sensor.py ────────────────────────────────────────────────
+# ─── A.1) Modo promiscuo en eth0 ───────────────────────────────���──────────────
+# El sensor usa tshark para capturar TODO el tráfico de la LAN, no solo el suyo.
+# Sin modo promiscuo la NIC descarta tramas con MAC destino diferente → el sensor
+# solo vería su propio tráfico y perdería el tráfico de los clientes WiFi.
+step "A.1) Activando modo promiscuo en $INTERFACE"
+
+if ! $DRY_RUN; then
+    # Activar ahora (efecto inmediato)
+    if ip link set "$INTERFACE" promisc on 2>/dev/null; then
+        ok "Modo promiscuo activado: $INTERFACE"
+    else
+        warn "No se pudo activar modo promiscuo con ip link set — intentando con ifconfig..."
+        if command -v ifconfig &>/dev/null && ifconfig "$INTERFACE" promisc 2>/dev/null; then
+            ok "Modo promiscuo activado vía ifconfig: $INTERFACE"
+        else
+            warn "No se pudo activar modo promiscuo — verifica permisos root"
+        fi
+    fi
+
+    # Verificar que quedó activo
+    if ip link show "$INTERFACE" 2>/dev/null | grep -q PROMISC; then
+        ok "$INTERFACE está en modo PROMISC"
+    else
+        warn "$INTERFACE NO muestra flag PROMISC — tshark puede perder paquetes de otros hosts"
+    fi
+
+    # ── Persistencia: activar en cada boot ───────────────���────────────────────
+    # Método 1: stanza "up" en /etc/network/interfaces (DietPi / Debian clásico)
+    # Método 2: systemd-networkd .network file (si systemd-networkd está activo)
+    # Método 3: script rc.local como fallback universal
+    #
+    # DietPi usa ifupdown + /etc/network/interfaces, que es el método más fiable aquí.
+
+    IFACES_FILE="/etc/network/interfaces"
+    PROMISC_MARKER="# promisc-sensor-$INTERFACE"
+
+    if [ -f "$IFACES_FILE" ]; then
+        if grep -q "$PROMISC_MARKER" "$IFACES_FILE" 2>/dev/null; then
+            ok "Persistencia promiscuo ya configurada en $IFACES_FILE"
+        else
+            # Agregar "post-up ip link set eth0 promisc on" a la stanza de $INTERFACE
+            # Si la stanza existe, insertar después de la línea "iface $INTERFACE".
+            # Si no existe, agregar al final.
+            if grep -q "iface $INTERFACE" "$IFACES_FILE" 2>/dev/null; then
+                # Insertar línea post-up justo después de "iface ethX ..."
+                sed -i "/iface $INTERFACE/a\\    post-up ip link set $INTERFACE promisc on  $PROMISC_MARKER" \
+                    "$IFACES_FILE"
+                ok "Añadido post-up promisc a stanza $INTERFACE en $IFACES_FILE"
+            else
+                # La interfaz no tiene stanza explícita — agregar bloque al final
+                printf '\n# Modo promiscuo para sensor de red tshark\niface %s inet manual\n    post-up ip link set %s promisc on  %s\n' \
+                    "$INTERFACE" "$INTERFACE" "$PROMISC_MARKER" >> "$IFACES_FILE"
+                ok "Añadida stanza $INTERFACE con promisc al final de $IFACES_FILE"
+            fi
+        fi
+    else
+        warn "$IFACES_FILE no encontrado — usando rc.local como fallback"
+    fi
+
+    # Fallback: /etc/rc.local (funciona en cualquier sistema con SysV init o systemd compat)
+    RC_LOCAL="/etc/rc.local"
+    RC_MARKER="# promisc-$INTERFACE-sensor"
+    if ! grep -q "$RC_MARKER" "$RC_LOCAL" 2>/dev/null; then
+        if [ -f "$RC_LOCAL" ]; then
+            # Insertar antes del "exit 0" final
+            sed -i "s|^exit 0|ip link set $INTERFACE promisc on  $RC_MARKER\nexit 0|" "$RC_LOCAL"
+        else
+            printf '#!/bin/sh\nip link set %s promisc on  %s\nexit 0\n' \
+                "$INTERFACE" "$RC_MARKER" > "$RC_LOCAL"
+            chmod +x "$RC_LOCAL"
+        fi
+        ok "Persistencia promiscuo agregada en $RC_LOCAL (fallback)"
+    else
+        ok "Persistencia promiscuo ya presente en $RC_LOCAL"
+    fi
+else
+    echo -e "${YELLOW}[DRY-RUN]${NC} ip link set $INTERFACE promisc on"
+    echo -e "${YELLOW}[DRY-RUN]${NC} Configuraría persistencia promisc en /etc/network/interfaces y /etc/rc.local"
+fi
+
+# ─── B) Directorio y sensor.py ─────────────────────────────────���──────────────
 step "B) Instalando sensor.py en $SENSOR_DIR"
 
 run mkdir -p "$SENSOR_DIR"
@@ -335,6 +533,17 @@ else
     reserve_dhcp_on_router
 fi
 
+# ─── E.0) Esperar que Pi4B esté operativa ─────────────────────────────────────
+# El sensor necesita el broker MQTT y el analizador activos para publicar batches.
+# Pi4B arranca k3s + varios pods, lo que puede tardar varios minutos tras el boot.
+if ! $DRY_RUN && $WAIT_PI4B; then
+    wait_for_raspi4b
+elif $DRY_RUN; then
+    echo -e "${YELLOW}[DRY-RUN]${NC} Esperaría hasta ${WAIT_MQTT_S}s a broker MQTT y ${WAIT_HTTP_S}s a analizador en $MQTT_HOST"
+else
+    info "Espera a Pi4B omitida (--no-wait)"
+fi
+
 # ─── E) Servicio init.d ───────────────────────────────────────────────────────
 step "E) Instalando servicio init.d"
 
@@ -354,6 +563,7 @@ DAEMON=/usr/bin/python3
 DAEMON_ARGS="$SENSOR_DIR/sensor.py"
 NAME=network-sensor
 PIDFILE=/var/run/network-sensor.pid
+LAUNCHER_PIDFILE=/var/run/network-sensor-launcher.pid
 LOGFILE=/var/log/network-sensor.log
 
 export SENSOR_IFACE="$INTERFACE"
@@ -369,18 +579,71 @@ export SSH_KEY="$SSH_KEY"
 export USE_ROUTER_SSH="$SETUP_SSH"
 export LOG_LEVEL="INFO"
 
+# Tiempo máximo esperando al broker MQTT en cada arranque (segundos).
+# Pi4B puede tardar en levantar k3s + Mosquitto tras un reboot.
+WAIT_MQTT_MAX_S="${WAIT_MQTT_S}"
+WAIT_INTERVAL_S="${WAIT_INTERVAL}"
+
+log_svc() { printf '[%s] %s\n' "\$(date '+%Y-%m-%dT%H:%M:%S')" "\$*" >> "\$LOGFILE"; }
+
+# Espera hasta WAIT_MQTT_MAX_S segundos a que el broker MQTT esté accesible.
+# No bloquea el arranque del sistema porque do_start lanza este código en background.
+# Si el broker no responde en el timeout, inicia el sensor igualmente para que
+# capture tráfico local; el sensor reintentará la conexión MQTT de forma autónoma.
+wait_for_mqtt() {
+    local waited=0
+    log_svc "Esperando broker MQTT \${MQTT_HOST}:\${MQTT_PORT} (max \${WAIT_MQTT_MAX_S}s, cada \${WAIT_INTERVAL_S}s)..."
+    while [ "\$waited" -lt "\$WAIT_MQTT_MAX_S" ]; do
+        if nc -z -w3 "\$MQTT_HOST" "\$MQTT_PORT" 2>/dev/null; then
+            log_svc "Broker MQTT accesible tras \${waited}s"
+            return 0
+        fi
+        log_svc "  [\${waited}s/\${WAIT_MQTT_MAX_S}s] MQTT no disponible aún — reintentando..."
+        sleep "\$WAIT_INTERVAL_S"
+        waited=\$((waited + WAIT_INTERVAL_S))
+    done
+    log_svc "WARN: broker MQTT no disponible tras \${WAIT_MQTT_MAX_S}s — iniciando sensor de todas formas"
+    return 0
+}
+
+# Lanzador en background: espera al broker y luego arranca el sensor.
+# Se ejecuta como subshell para que do_start retorne de inmediato y no bloquee
+# la secuencia de arranque del sistema (el kernel y otros servicios siguen subiendo).
+_launch_sensor() {
+    wait_for_mqtt
+    log_svc "Lanzando \$DAEMON \$DAEMON_ARGS"
+    \$DAEMON \$DAEMON_ARGS >> "\$LOGFILE" 2>&1 &
+    SENSOR_PID=\$!
+    echo "\$SENSOR_PID" > "\$PIDFILE"
+    log_svc "\$NAME iniciado (PID \$SENSOR_PID)"
+    rm -f "\$LAUNCHER_PIDFILE"
+}
+
 do_start() {
+    # Si el sensor ya corre, no hacer nada
     if [ -f "\$PIDFILE" ] && kill -0 "\$(cat \$PIDFILE)" 2>/dev/null; then
         echo "\$NAME ya está corriendo (PID \$(cat \$PIDFILE))"
         return 0
     fi
-    echo "Iniciando \$NAME..."
-    \$DAEMON \$DAEMON_ARGS >> "\$LOGFILE" 2>&1 &
-    echo \$! > "\$PIDFILE"
-    echo "\$NAME iniciado (PID \$(cat \$PIDFILE))"
+    # Si ya hay un lanzador esperando al broker, no duplicar
+    if [ -f "\$LAUNCHER_PIDFILE" ] && kill -0 "\$(cat \$LAUNCHER_PIDFILE)" 2>/dev/null; then
+        echo "\$NAME: lanzador ya en espera (PID \$(cat \$LAUNCHER_PIDFILE)) — esperando broker MQTT"
+        return 0
+    fi
+    log_svc "=== \$NAME start — lanzador en background (esperará broker MQTT hasta \${WAIT_MQTT_MAX_S}s) ==="
+    echo "\$NAME: iniciando lanzador en background (esperará broker MQTT hasta \${WAIT_MQTT_MAX_S}s)..."
+    _launch_sensor &
+    echo \$! > "\$LAUNCHER_PIDFILE"
 }
 
 do_stop() {
+    # Detener lanzador si todavía está esperando al broker
+    if [ -f "\$LAUNCHER_PIDFILE" ] && kill -0 "\$(cat \$LAUNCHER_PIDFILE)" 2>/dev/null; then
+        echo "Deteniendo lanzador (PID \$(cat \$LAUNCHER_PIDFILE))..."
+        kill "\$(cat \$LAUNCHER_PIDFILE)" 2>/dev/null || true
+        rm -f "\$LAUNCHER_PIDFILE"
+    fi
+    # Detener sensor si ya arrancó
     if [ ! -f "\$PIDFILE" ] || ! kill -0 "\$(cat \$PIDFILE)" 2>/dev/null; then
         echo "\$NAME no está corriendo"
         rm -f "\$PIDFILE"
@@ -390,10 +653,15 @@ do_stop() {
     kill "\$(cat \$PIDFILE)"
     sleep 1
     rm -f "\$PIDFILE"
+    log_svc "=== \$NAME detenido ==="
     echo "\$NAME detenido"
 }
 
 do_status() {
+    if [ -f "\$LAUNCHER_PIDFILE" ] && kill -0 "\$(cat \$LAUNCHER_PIDFILE)" 2>/dev/null; then
+        echo "\$NAME: lanzador en espera (PID \$(cat \$LAUNCHER_PIDFILE)) — esperando broker MQTT en \${MQTT_HOST}:\${MQTT_PORT}"
+        return 0
+    fi
     if [ -f "\$PIDFILE" ] && kill -0 "\$(cat \$PIDFILE)" 2>/dev/null; then
         echo "\$NAME corriendo (PID \$(cat \$PIDFILE))"
         echo ""
@@ -450,6 +718,15 @@ if ! $DRY_RUN; then
         warn "  tail -50 /var/log/network-sensor.log"
     fi
 
+    # Verificar modo promiscuo
+    if ip link show "$INTERFACE" 2>/dev/null | grep -q PROMISC; then
+        ok "$INTERFACE — modo PROMISC activo"
+    else
+        warn "$INTERFACE — NO está en modo PROMISC"
+        warn "  Forzando ahora: ip link set $INTERFACE promisc on"
+        ip link set "$INTERFACE" promisc on 2>/dev/null || true
+    fi
+
     info "Probando captura de 5 segundos en $INTERFACE..."
     if timeout 5 tshark -i "$INTERFACE" -c 5 -Q 2>/dev/null; then
         ok "tshark captura correctamente en $INTERFACE"
@@ -457,13 +734,20 @@ if ! $DRY_RUN; then
         warn "tshark no capturó paquetes en 5s (¿interfaz sin tráfico?)"
     fi
 
-    # Test de conectividad con el analizador
-    info "Probando conectividad con el analizador..."
-    if curl -sf "${ANALYZER_URL%/ingest}/health" -o /dev/null; then
-        ok "Analizador IA responde en $(echo "$ANALYZER_URL" | cut -d/ -f3)"
-    else
-        warn "Analizador IA no disponible aún — asegúrate de ejecutar setup-ai-raspi4b.sh en la 4B"
-    fi
+    # Test de conectividad con el analizador (verificación final tras la espera del paso E.0)
+    info "Verificando conectividad con el analizador..."
+    HEALTH_URL="${ANALYZER_URL%/ingest}/health"
+    HEALTH_CODE="$(curl -sS -o /dev/null -w '%{http_code}' \
+        --connect-timeout 5 --max-time 10 "$HEALTH_URL" 2>/dev/null)" || HEALTH_CODE="000"
+    case "$HEALTH_CODE" in
+        200|301|302|500|503)
+            ok "Analizador IA responde HTTP $HEALTH_CODE en $(echo "$ANALYZER_URL" | cut -d/ -f3)" ;;
+        000)
+            warn "Analizador IA aún no disponible (HTTP 000 / sin conexión)"
+            warn "  → Revisa el estado de Pi4B con: bash scripts/health-raspi4b.sh" ;;
+        *)
+            warn "Analizador IA respondió HTTP $HEALTH_CODE — puede estar inicializándose" ;;
+    esac
 fi
 
 # ─── Resumen ──────────────────────────────────────────────────────────────────

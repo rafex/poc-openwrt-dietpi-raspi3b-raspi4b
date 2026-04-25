@@ -28,6 +28,24 @@ if ! $ONLY_VERIFY; then
     run_cmd sh -c "podman save localhost/ai-analyzer:latest | k3s ctr images import -"
   fi
 
+  # ── Secret de Groq — se crea/actualiza desde la variable de entorno del host ──
+  # Si GROQ_API_KEY no está seteado en el host, el Secret queda con valor vacío
+  # y el analyzer arranca sin Groq (llama.cpp local como fallback).
+  GROQ_KEY_VAL="${GROQ_API_KEY:-}"
+  if [ -n "$GROQ_KEY_VAL" ]; then
+    log_info "Creando/actualizando Secret 'groq-credentials' desde variable de entorno del host..."
+    kubectl create secret generic groq-credentials \
+      --from-literal=GROQ_API_KEY="$GROQ_KEY_VAL" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    log_ok "Secret groq-credentials aplicado (clave de ${#GROQ_KEY_VAL} chars)"
+  else
+    log_info "GROQ_API_KEY no seteado en el host — Groq deshabilitado (se usará llama.cpp local)"
+    # Asegurar que el Secret existe vacío para que optional:true no falle
+    kubectl create secret generic groq-credentials \
+      --from-literal=GROQ_API_KEY="" \
+      --dry-run=client -o yaml | kubectl apply -f - 2>/dev/null || true
+  fi
+
   run_cmd kubectl apply -f "$K8S_DIR/ai-analyzer-deployment.yaml"
   run_cmd kubectl apply -f "$K8S_DIR/ai-analyzer-svc.yaml"
   run_cmd kubectl apply -f "$K8S_DIR/ai-analyzer-ingress.yaml"
