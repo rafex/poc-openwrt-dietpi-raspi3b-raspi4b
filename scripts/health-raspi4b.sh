@@ -49,7 +49,9 @@ done
 TARGET_IP="${RASPI4B_IP:-192.168.1.167}"
 LLAMA_PORT=8081
 MQTT_PORT=1883
-SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+# Sin -i: la máquina admin usa sus propias llaves SSH (~/.ssh/) para las Raspis.
+# El SSH_KEY de common.sh es solo para el router OpenWrt (Dropbear).
+SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
           -o BatchMode=yes -o ConnectTimeout=5 -o LogLevel=ERROR"
 
 # Wrapper SSH para la Pi4B
@@ -80,7 +82,7 @@ $SUMMARY_ONLY || hdr "2. SSH"
 if pi4b_ssh 'echo ok' &>/dev/null; then
     ok "SSH root@$TARGET_IP — acceso OK"
 else
-    fail "SSH root@$TARGET_IP — sin acceso (verifica llave: $SSH_KEY)"
+    fail "SSH root@$TARGET_IP — sin acceso (verifica ~/.ssh/ o ~/.ssh/config)"
     printf "\n${RED}RESULTADO${NC}: CRÍTICO — SSH no disponible en $TARGET_IP\n"
     printf "RESUMEN_SALUD raspi4b PASS=%d WARN=%d FAIL=%d STATUS=CRITICO\n" \
         "$PASS" "$WARN" "$FAIL"
