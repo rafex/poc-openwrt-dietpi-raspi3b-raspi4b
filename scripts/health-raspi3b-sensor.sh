@@ -96,6 +96,20 @@ REMOTE_INFO=$(pi3b_ssh '
     echo "PY_VER=$(python3 --version 2>&1 | cut -d" " -f2)"
 
     # network-sensor init.d
+    # Tres estados posibles:
+    #   running        — sensor Python activo (PIDFILE presente y proceso vivo)
+    #   waiting_mqtt   — lanzador en background esperando al broker MQTT (normal en boot temprano)
+    #   stale_pid      — PIDFILE obsoleto (proceso muerto)
+    #   stopped        — sin PIDFILE ni lanzador
+    if [ -f /var/run/network-sensor-launcher.pid ]; then
+        LPID=$(cat /var/run/network-sensor-launcher.pid)
+        if kill -0 "$LPID" 2>/dev/null; then
+            echo "SENSOR_STATUS=waiting_mqtt"
+            echo "SENSOR_PID=$LPID"
+        else
+            rm -f /var/run/network-sensor-launcher.pid
+        fi
+    fi
     if [ -f /var/run/network-sensor.pid ]; then
         PID=$(cat /var/run/network-sensor.pid)
         if kill -0 "$PID" 2>/dev/null; then
@@ -106,12 +120,12 @@ REMOTE_INFO=$(pi3b_ssh '
             echo "SENSOR_PID=$PID"
         fi
     else
-        # Intentar via init.d
-        if /etc/init.d/network-sensor status 2>/dev/null | grep -qi "running"; then
+        # Solo asignar stopped si no se asignó ya waiting_mqtt arriba
+        if /etc/init.d/network-sensor status 2>/dev/null | grep -qi "running\|lanzador"; then
             echo "SENSOR_STATUS=running"
             echo "SENSOR_PID=unknown"
         else
-            echo "SENSOR_STATUS=stopped"
+            echo "SENSOR_STATUS=${SENSOR_STATUS:-stopped}"
             echo "SENSOR_PID="
         fi
     fi
@@ -213,6 +227,10 @@ $SUMMARY_ONLY || hdr "4. network-sensor (init.d)"
 case "${SENSOR_STATUS:-unknown}" in
     running)
         ok "network-sensor — corriendo (PID ${SENSOR_PID:-?})"
+        ;;
+    waiting_mqtt)
+        warn "network-sensor — lanzador esperando broker MQTT en $BROKER_IP:$MQTT_PORT (PID ${SENSOR_PID:-?})"
+        $SUMMARY_ONLY || info "Esto es normal si Pi4B todavía está arrancando — el sensor iniciará automáticamente"
         ;;
     stale_pid)
         fail "network-sensor — PID obsoleto (${SENSOR_PID:-?} no existe)"

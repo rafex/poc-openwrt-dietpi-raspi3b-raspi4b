@@ -199,6 +199,47 @@ wait_backend_ready() {
   die "Backend de registro no disponible"
 }
 
+install_autostart_service() {
+  # Crea un servicio systemd que arranca los contenedores del portal en cada boot.
+  # --restart unless-stopped de podman NO sobrevive reinicios del sistema;
+  # solo un servicio de systemd garantiza el arranque automático.
+  local SERVICE_FILE="/etc/systemd/system/captive-portal-node.service"
+
+  log_info "Instalando servicio systemd de autoarranque: captive-portal-node"
+
+  run_cmd bash -c "cat > '$SERVICE_FILE'" <<EOF
+[Unit]
+Description=Captive Portal Node — frontend (nginx) + backend (lentium)
+Documentation=https://github.com/rafex/presentaciones-cursos-talleres
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Arranca primero el backend (el frontend hace proxy hacia él)
+ExecStart=/usr/bin/podman start ${CONTAINER_NAME_BACKEND}
+ExecStart=/usr/bin/podman start ${CONTAINER_NAME_FRONTEND}
+
+# Para en orden inverso
+ExecStop=/usr/bin/podman stop -t 10 ${CONTAINER_NAME_FRONTEND}
+ExecStop=/usr/bin/podman stop -t 10 ${CONTAINER_NAME_BACKEND}
+
+Restart=no
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  run_cmd systemctl daemon-reload
+  run_cmd systemctl enable captive-portal-node.service
+  log_ok "Servicio habilitado: captive-portal-node.service"
+  log_info "Los contenedores arrancarán automáticamente en el próximo reboot"
+}
+
 verify_local() {
   local ep code
   for ep in /portal /services /blocked /people /api/history /api/portal/context; do
@@ -231,6 +272,7 @@ if ! $ONLY_VERIFY; then
   wait_backend_ready
   deploy_frontend_container
   check_container_running
+  install_autostart_service
 fi
 
 if ! $DRY_RUN; then
