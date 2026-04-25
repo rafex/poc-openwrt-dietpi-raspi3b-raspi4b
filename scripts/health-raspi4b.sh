@@ -110,6 +110,23 @@ REMOTE_INFO=$(pi4b_ssh '
     else
         echo "MOSQUITTO=stopped"
     fi
+    # Energía — rayo amarillo de subvoltaje (vcgencmd get_throttled)
+    # Bits activos (0-3): problema AHORA. Bits pasados (16-19): ocurrió desde el reboot.
+    # 0x1/0x10000=subvoltaje  0x2/0x20000=frec-limitada  0x4/0x40000=throttled  0x8/0x80000=temp-limit
+    _VC=""
+    for _p in vcgencmd /usr/bin/vcgencmd /opt/vc/bin/vcgencmd; do
+        command -v "$_p" >/dev/null 2>&1 && _VC="$_p" && break
+        [ -x "$_p" ] && _VC="$_p" && break
+    done
+    if [ -n "$_VC" ]; then
+        echo "VCGENCMD_OK=yes"
+        echo "THROTTLE_RAW=$($_VC get_throttled 2>/dev/null | cut -d= -f2)"
+        echo "CPU_TEMP=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo unknown)"
+    else
+        echo "VCGENCMD_OK=no"
+        echo "THROTTLE_RAW=unknown"
+        echo "CPU_TEMP=unknown"
+    fi
 ' 2>/dev/null || echo "REMOTE_INFO_FAILED=1")
 
 eval "$REMOTE_INFO" 2>/dev/null || true
@@ -125,6 +142,44 @@ if ! $SUMMARY_ONLY; then
         MEM_PCT=$(( (MEM_TOTAL - MEM_FREE) * 100 / MEM_TOTAL ))
         info "RAM     : ${MEM_PCT}% usada (${MEM_FREE}kB libre de ${MEM_TOTAL}kB)"
     fi
+fi
+
+# ─── Energía y temperatura ────────────────────────────────────────────────────
+# Siempre se evalúa (afecta los contadores PASS/FAIL/WARN del resumen).
+# vcgencmd get_throttled devuelve un bitmask hex:
+#   bits  0-3  : problema ACTIVO ahora  → el rayo está encendido en este momento
+#   bits 16-19 : evento PASADO desde el último reboot → el rayo apareció y se fue
+#   0x0        : sin problemas
+$SUMMARY_ONLY || hdr "Energía y temperatura"
+if [ "${VCGENCMD_OK:-no}" = "yes" ] && [ "${THROTTLE_RAW:-unknown}" != "unknown" ]; then
+    _T="${THROTTLE_RAW:-0x0}"
+    _T_DEC=$(( _T )) 2>/dev/null || _T_DEC=0
+    if [ "$_T_DEC" -eq 0 ]; then
+        ok "Energía: OK — sin problemas [raw:${_T}]"
+    elif [ "$(( _T_DEC & 0xF ))" -ne 0 ]; then
+        # Problema ACTIVO — el rayo estaría visible ahora mismo
+        _issues=""
+        [ "$(( _T_DEC & 0x1 ))" -ne 0 ] && _issues="${_issues}SUBVOLTAJE "
+        [ "$(( _T_DEC & 0x2 ))" -ne 0 ] && _issues="${_issues}FRECUENCIA-LIMITADA "
+        [ "$(( _T_DEC & 0x4 ))" -ne 0 ] && _issues="${_issues}THROTTLED "
+        [ "$(( _T_DEC & 0x8 ))" -ne 0 ] && _issues="${_issues}TEMP-SOFT-LIMIT "
+        fail "⚡ RAYO ACTIVO: ${_issues}[raw:${_T}] — cambia la fuente de alimentación"
+    else
+        # Solo eventos pasados — el rayo apareció tras el reboot pero ya no está
+        _issues=""
+        [ "$(( _T_DEC & 0x10000 ))" -ne 0 ] && _issues="${_issues}subvoltaje "
+        [ "$(( _T_DEC & 0x20000 ))" -ne 0 ] && _issues="${_issues}frecuencia-limitada "
+        [ "$(( _T_DEC & 0x40000 ))" -ne 0 ] && _issues="${_issues}throttled "
+        [ "$(( _T_DEC & 0x80000 ))" -ne 0 ] && _issues="${_issues}temp-soft-limit "
+        warn "⚡ Rayo pasado (desde último reboot): ${_issues}[raw:${_T}]"
+        ! $SUMMARY_ONLY && info "Para limpiar el historial de throttling: reinicia la Pi"
+    fi
+    if ! $SUMMARY_ONLY && [ "${CPU_TEMP:-unknown}" != "unknown" ] && \
+       [ "$CPU_TEMP" -gt 1000 ] 2>/dev/null; then
+        info "Temperatura CPU: $(( CPU_TEMP / 1000 )).$(( (CPU_TEMP % 1000) / 100 ))°C"
+    fi
+elif [ "${VCGENCMD_OK:-}" = "no" ]; then
+    warn "vcgencmd no disponible — energía sin verificar (apt install libraspberrypi-bin)"
 fi
 
 # ─── 4. k3s ───────────────────────────────────────────────────────────────────
