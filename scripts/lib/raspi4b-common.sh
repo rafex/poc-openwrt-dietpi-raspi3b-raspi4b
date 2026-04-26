@@ -153,10 +153,44 @@ parse_common_flags() {
 }
 
 ensure_k3s_ready() {
-  if ! ps aux | grep -q '[k]3s server'; then
-    die "k3s no está corriendo"
+  local sock="/run/k3s/containerd/containerd.sock"
+  local waited=0
+  local max_s=90    # máx segundos esperando a containerd
+  local max_k=120   # máx segundos esperando a kubectl
+
+  # ── 1. Arrancar k3s si el servicio no está activo ──────────────────────────
+  if ! systemctl is-active --quiet k3s 2>/dev/null; then
+    log_warn "k3s no está activo — intentando arrancar el servicio..."
+    systemctl start k3s 2>/dev/null || die "No se pudo arrancar k3s (systemctl start k3s falló)"
+    sleep 3
   fi
-  run_cmd k3s kubectl get nodes >/dev/null
+
+  # ── 2. Esperar socket containerd (/run/k3s/containerd/containerd.sock) ─────
+  # k3s embebe containerd propio; el socket solo existe mientras k3s corre.
+  while [ ! -S "$sock" ] && [ "$waited" -lt "$max_s" ]; do
+    log_info "  [${waited}s/${max_s}s] Esperando socket containerd..."
+    sleep 5; waited=$((waited + 5))
+  done
+  if [ ! -S "$sock" ]; then
+    log_error "Socket containerd no disponible tras ${max_s}s: $sock"
+    log_error "Estado del servicio k3s:"
+    systemctl status k3s --no-pager -l 2>/dev/null | tail -20 >&2 || true
+    log_error "Si k3s no arranca, ejecuta: bash scripts/raspi4b-k3s-doctor.sh"
+    die "k3s containerd no listo"
+  fi
+  log_ok "Socket containerd listo (${waited}s): $sock"
+
+  # ── 3. Esperar a que kubectl responda ──────────────────────────────────────
+  waited=0
+  while ! k3s kubectl get nodes >/dev/null 2>&1 && [ "$waited" -lt "$max_k" ]; do
+    log_info "  [${waited}s/${max_k}s] Esperando kubectl..."
+    sleep 5; waited=$((waited + 5))
+  done
+  k3s kubectl get nodes >/dev/null 2>&1 || \
+    die "kubectl no responde tras ${max_k}s — revisa: journalctl -u k3s -n 50"
+
+  log_ok "k3s listo (nodo: $(k3s kubectl get nodes --no-headers 2>/dev/null | awk '{print $1}'))"
+  run_cmd k3s kubectl get nodes
 }
 
 ensure_portal_ssh_key() {
