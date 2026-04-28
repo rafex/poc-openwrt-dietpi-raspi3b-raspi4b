@@ -152,11 +152,37 @@ parse_common_flags() {
   REM_ARGS=("$@")
 }
 
-ensure_k3s_ready() {
-  if ! ps aux | grep -q '[k]3s server'; then
-    die "k3s no está corriendo"
+ensure_ai_analyzer_ready() {
+  # Reemplaza ensure_k3s_ready — verifica que el contenedor podman está corriendo
+  local waited=0
+  local max_s=60
+
+  if ! podman container exists ai-analyzer 2>/dev/null; then
+    die "Contenedor ai-analyzer no existe — ejecuta: bash scripts/setup-raspi4b-ai-analyzer.sh"
   fi
-  run_cmd k3s kubectl get nodes >/dev/null
+
+  local state
+  state="$(podman inspect --format '{{.State.Status}}' ai-analyzer 2>/dev/null || echo 'unknown')"
+  if [[ "$state" != "running" ]]; then
+    log_warn "Contenedor ai-analyzer no está corriendo (estado: $state) — arrancando..."
+    podman start ai-analyzer 2>/dev/null || die "No se pudo arrancar ai-analyzer"
+  fi
+
+  while ! curl -sf "http://127.0.0.1:5000/health" >/dev/null 2>&1 && [ "$waited" -lt "$max_s" ]; do
+    log_info "  [${waited}s/${max_s}s] Esperando ai-analyzer /health..."
+    sleep 5; waited=$((waited + 5))
+  done
+
+  curl -sf "http://127.0.0.1:5000/health" >/dev/null 2>&1 || \
+    die "ai-analyzer no responde en :5000 tras ${max_s}s"
+  log_ok "ai-analyzer listo en :5000"
+}
+
+# Alias de compatibilidad — los scripts que aún llamen a ensure_k3s_ready
+# redirigen a la nueva función
+ensure_k3s_ready() {
+  log_warn "DEPRECADO: ensure_k3s_ready — k3s fue reemplazado por podman directo"
+  log_warn "Usa ensure_ai_analyzer_ready o bash scripts/setup-raspi4b-ai-analyzer.sh"
 }
 
 ensure_portal_ssh_key() {

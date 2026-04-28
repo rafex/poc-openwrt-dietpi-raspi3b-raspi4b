@@ -1,0 +1,11 @@
+# .sops.yaml — Configuración de sops+age para este proyecto
+#
+# La clave pública age se genera con: bash scripts/secrets-init.sh
+# La clave privada NUNCA va al repositorio (está en ~/.config/sops/age/keys.txt).
+#
+# Todos los archivos en secrets/ se cifran/descifran con esta pubkey.
+
+creation_rules:
+  - path_regex: ^secrets/.*\.yaml$
+    age: >-
+      REEMPLAZAR_CON_PUBKEY_AGE

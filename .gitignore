@@ -8,6 +8,15 @@ __pycache__/
 *.key
 /opt/keys/
 
+# age + sops — clave privada NUNCA al repo; solo va la pública en .sops.yaml
+*.age
+keys.txt
+secrets/*.plain.yaml
+secrets/*.dec.yaml
+
+# Rust build artifacts
+target/
+
 # Logs
 *.log
 

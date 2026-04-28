@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>mx.rafex.analyzer</groupId>
+  <artifactId>ai-analyzer</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+  <name>AI Analyzer — Java 21 stdlib</name>
+
+  <properties>
+    <java.version>21</java.version>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <mainClass>mx.rafex.analyzer.Main</mainClass>
+  </properties>
+
+  <!--
+    Dependencias externas: UNA SOLA — el cliente MQTT Paho.
+    Todo lo demás es java.* stdlib:
+      - HTTP: com.sun.net.httpserver.HttpServer (JDK built-in)
+      - JSON: builder/parser propio (util/Json.java)
+      - HTTP cliente saliente: java.net.http.HttpClient
+      - Hilos: Thread.ofVirtual() (Project Loom, JDK 21)
+      - Panama FFI: java.lang.foreign.* (JDK 21)
+      - Tareas periódicas: ScheduledExecutorService
+  -->
+  <dependencies>
+    <!-- MQTT client (protocolo MQTT no está en stdlib de Java) -->
+    <dependency>
+      <groupId>org.eclipse.paho</groupId>
+      <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+      <version>1.2.5</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Compilar Java 21 — Panama FFI (java.lang.foreign.*) es estable en JDK 21,
+           no requiere incubator. Se habilita --enable-preview solo para text blocks
+           y otras features preview si se usan. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <source>21</source>
+          <target>21</target>
+          <!-- Panama FFI (java.lang.foreign) es estable en JDK 21, sin flags extra -->
+          <compilerArgs>
+            <!-- Acceso a com.sun.net.httpserver (JDK interno pero siempre disponible) -->
+            <arg>--add-exports=jdk.httpserver/sun.net.httpserver=ALL-UNNAMED</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+
+      <!-- Fat JAR con todas las dependencias (shade plugin) -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <finalName>ai-analyzer-fat</finalName>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>${mainClass}</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!--
+        GraalVM Native Image — compilar a binario arm64 en CI/CD.
+        Se activa con:  mvn -Pnative package
+      -->
+      <plugin>
+        <groupId>org.graalvm.buildtools</groupId>
+        <artifactId>native-maven-plugin</artifactId>
+        <version>0.10.2</version>
+        <extensions>true</extensions>
+        <configuration>
+          <mainClass>${mainClass}</mainClass>
+          <imageName>ai-analyzer</imageName>
+          <buildArgs>
+            <!-- Panama FFI necesita este flag en GraalVM -->
+            <buildArg>-H:+ForeignAPISupport</buildArg>
+            <!-- La clase DbLibrary inicializa MethodHandles en runtime, no en build time -->
+            <buildArg>--initialize-at-run-time=mx.rafex.analyzer.db.DbLibrary</buildArg>
+            <!-- No incluir el agente de SegFault en el binario final -->
+            <buildArg>--no-fallback</buildArg>
+            <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+          </buildArgs>
+        </configuration>
+        <executions>
+          <execution>
+            <id>build-native</id>
+            <goals><goal>compile-no-fork</goal></goals>
+            <phase>package</phase>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <profile>
+      <id>native</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.graalvm.buildtools</groupId>
+            <artifactId>native-maven-plugin</artifactId>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>
