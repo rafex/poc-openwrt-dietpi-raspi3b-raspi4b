@@ -37,6 +37,8 @@ REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$SCRIPT_DIR/lib/raspi4b-common.sh"
 # shellcheck source=./lib/topology-common.sh
 . "$SCRIPT_DIR/lib/topology-common.sh"
+# shellcheck source=./lib/raspi4b-deps.sh
+. "$SCRIPT_DIR/lib/raspi4b-deps.sh"
 
 # ─── Flags extra (además de los comunes) ─────────────────────────────────────
 RELEASE_TAG="latest"
@@ -76,32 +78,10 @@ GITHUB_REPO="rafex/presentaciones-cursos-talleres"  # ajustar si es diferente
 BIN_NAME="ai-analyzer-linux-arm64"
 LIB_NAME="libanalyzer_db-linux-arm64.so"
 
-# ─── Instalar age + sops si no están ─────────────────────────────────────────
-_install_sops_tools() {
-    local need_age=false need_sops=false
-    command -v age  &>/dev/null || need_age=true
-    command -v sops &>/dev/null || need_sops=true
-    if ! $need_age && ! $need_sops; then return 0; fi
-
-    log_info "Instalando age/sops..."
-    apt_update_once
-    $need_age && run_cmd apt-get install -y -q age
-    if $need_sops; then
-        if apt-cache show sops &>/dev/null 2>&1; then
-            run_cmd apt-get install -y -q sops
-        else
-            local ver="3.9.1"
-            run_cmd curl -fsSL \
-                "https://github.com/getsops/sops/releases/download/v${ver}/sops-v${ver}.linux.arm64" \
-                -o /usr/local/bin/sops
-            run_cmd chmod +x /usr/local/bin/sops
-        fi
-    fi
-    command -v age  &>/dev/null || die "age no pudo instalarse"
-    command -v sops &>/dev/null || die "sops no pudo instalarse"
-    log_ok "age y sops disponibles"
-}
-_install_sops_tools
+# ─── Instalar age + sops si no están (via lib/raspi4b-deps.sh) ───────────────
+install_raspi4b_age_sops
+command -v age  &>/dev/null || die "age no pudo instalarse"
+command -v sops &>/dev/null || die "sops no pudo instalarse"
 
 # ─── Descifrar secretos ───────────────────────────────────────────────────────
 SECRETS_FILE="$REPO_DIR/secrets/raspi4b.yaml"

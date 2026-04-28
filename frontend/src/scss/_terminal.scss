@@ -1,0 +1,84 @@
+// ── Terminal ──────────────────────────────────────────────────────────────────
+.terminal-wrap {
+  background: #0a0e13;
+  border: 1px solid $color-border;
+  border-radius: $radius-lg;
+  overflow: hidden;
+  box-shadow: $shadow;
+}
+
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .5rem 1rem;
+  background: $color-bg-elevated;
+  border-bottom: 1px solid $color-border;
+
+  .terminal-dots {
+    display: flex;
+    gap: .4rem;
+    .dot {
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      &.dot-red    { background: #ff5f57; }
+      &.dot-yellow { background: #febc2e; }
+      &.dot-green  { background: #28c840; }
+    }
+  }
+  .terminal-title { flex: 1; text-align: center; font-size: .8rem; color: $color-muted; font-family: $font-mono; }
+}
+
+.terminal-output {
+  padding: 1rem;
+  font-family: $font-mono;
+  font-size: .82rem;
+  line-height: 1.6;
+  color: #a8d8a8;
+  min-height: 300px;
+  max-height: 420px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+
+  .terminal-welcome p { margin-bottom: .1rem; }
+
+  .out-line { color: #c9d1d9; }
+  .err-line { color: $color-danger; }
+  .prompt-echo { color: $color-primary; }
+}
+
+.terminal-input-bar {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .6rem 1rem;
+  border-top: 1px solid $color-border;
+  background: rgba($color-bg-elevated, .6);
+
+  .prompt { color: $color-success; font-family: $font-mono; font-size: .9rem; }
+
+  .terminal-input {
+    flex: 1;
+    background: none;
+    border: none;
+    outline: none;
+    color: $color-text;
+    font-family: $font-mono;
+    font-size: .9rem;
+    caret-color: $color-primary;
+  }
+}
+
+// ── Comandos rápidos ──────────────────────────────────────────────────────────
+.quick-cmds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-top: .75rem;
+
+  .quick-cmd {
+    font-family: $font-mono;
+    font-size: .78rem;
+  }
+}

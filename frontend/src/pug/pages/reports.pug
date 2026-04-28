@@ -1,0 +1,27 @@
+- var pageTitle = 'Reportes'; var pageId = 'reports'; var mainScript = '/src/ts/reports.ts';
+include /includes/_layout.pug
+
+block content
+  .page-header.animate__animated.animate__fadeInDown
+    .page-header-left
+      a.btn.btn-back(href="/dashboard.html") ← Dashboard
+      h1 Reportes
+    p.subtitle Resúmenes periódicos y reportes generados por IA
+
+  .tabs
+    button.tab.tab-active(data-tab="summaries") 📈 Resúmenes
+    button.tab(data-tab="reports") 📄 Reportes completos
+
+  .tab-content#tab-summaries.animate__animated.animate__fadeIn
+    .section
+      .section-header
+        h2 Resúmenes de red (últimas 24h)
+        button.btn.btn-sm#btn-refresh-summaries ↻ Actualizar
+      #summaries-list.cards-list
+
+  .tab-content#tab-reports.hidden.animate__animated.animate__fadeIn
+    .section
+      .section-header
+        h2 Reportes generados
+        button.btn.btn-sm#btn-refresh-reports ↻ Actualizar
+      #reports-list.cards-list

@@ -1,0 +1,55 @@
+- var pageTitle = 'Dashboard'; var pageId = 'dashboard'; var mainScript = '/src/ts/dashboard.ts';
+include /includes/_layout.pug
+
+block content
+  .page-header.animate__animated.animate__fadeInDown
+    h1 Dashboard
+    p.subtitle Monitoreo en tiempo real de la red WiFi
+
+  .stats-grid
+    .stat-card.animate__animated.animate__fadeInUp
+      .stat-icon 📦
+      .stat-label Batches hoy
+      .stat-value#stat-batches —
+    .stat-card.animate__animated.animate__fadeInUp(style="animation-delay:.1s")
+      .stat-icon ⚠️
+      .stat-label Alertas activas
+      .stat-value#stat-alerts —
+    .stat-card.animate__animated.animate__fadeInUp(style="animation-delay:.2s")
+      .stat-icon 🖥
+      .stat-label Dispositivos
+      .stat-value#stat-devices —
+    .stat-card.animate__animated.animate__fadeInUp(style="animation-delay:.3s")
+      .stat-icon 🧠
+      .stat-label Groq habilitado
+      .stat-value#stat-groq —
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Análisis recientes
+      button.btn.btn-sm#btn-refresh-analyses ↻ Actualizar
+    .table-wrap
+      table.data-table#analyses-table
+        thead
+          tr
+            th # Batch
+            th Timestamp
+            th Riesgo
+            th Resumen
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Alertas recientes
+    .table-wrap
+      table.data-table#alerts-table
+        thead
+          tr
+            th Severidad
+            th Timestamp
+            th Mensaje
+            th Dispositivo
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Eventos en vivo (SSE)
+    #sse-log.log-box(aria-live="polite")

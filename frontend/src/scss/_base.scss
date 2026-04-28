@@ -1,0 +1,231 @@
+// ── Reset + base ──────────────────────────────────────────────────────────────
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  font-size: $font-size;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: $font-sans;
+  background: $color-bg;
+  color: $color-text;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a { color: $color-primary; text-decoration: none; &:hover { text-decoration: underline; } }
+
+h1, h2, h3, h4 { color: $color-text-heading; font-weight: 600; }
+h1 { font-size: 1.8rem; }
+h2 { font-size: 1.3rem; }
+h3 { font-size: 1.1rem; }
+
+p, li { line-height: 1.6; }
+
+pre, code { font-family: $font-mono; font-size: .85rem; }
+
+.dim { color: $color-muted; }
+
+.hidden { display: none !important; }
+
+// ── Botones ───────────────────────────────────────────────────────────────────
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .4rem;
+  padding: .45rem .9rem;
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  background: $color-bg-elevated;
+  color: $color-text;
+  font-size: .85rem;
+  cursor: pointer;
+  transition: background $transition, border-color $transition;
+
+  &:hover { background: lighten($color-bg-elevated, 5%); }
+  &:active { transform: translateY(1px); }
+
+  &.btn-primary {
+    background: $color-primary-dim;
+    border-color: $color-primary;
+    color: #fff;
+    &:hover { background: $color-primary; }
+  }
+  &.btn-secondary {
+    background: $color-bg-surface;
+    &:hover { background: $color-bg-elevated; }
+  }
+  &.btn-sm { padding: .3rem .65rem; font-size: .8rem; }
+  &.btn-back { border-color: $color-muted; color: $color-muted; }
+  &:disabled { opacity: .5; cursor: not-allowed; }
+}
+
+// ── Formularios ───────────────────────────────────────────────────────────────
+.form-input {
+  padding: .4rem .7rem;
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  background: $color-bg-surface;
+  color: $color-text;
+  font-size: .9rem;
+  width: 100%;
+  &:focus { outline: none; border-color: $color-primary; }
+}
+
+// ── Tablas ────────────────────────────────────────────────────────────────────
+.table-wrap { overflow-x: auto; margin-top: .75rem; }
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .85rem;
+
+  th, td {
+    padding: .55rem .8rem;
+    border-bottom: 1px solid $color-border;
+    text-align: left;
+  }
+  th { color: $color-muted; font-weight: 500; background: $color-bg-elevated; }
+  tr:hover td { background: rgba($color-primary, .05); }
+
+  .badge {
+    display: inline-block;
+    padding: .15rem .5rem;
+    border-radius: 9999px;
+    font-size: .75rem;
+    font-weight: 600;
+    &.critical { background: rgba($color-danger,.15);  color: $color-danger;  }
+    &.high     { background: rgba($color-warning,.15); color: $color-warning; }
+    &.medium   { background: rgba($color-info,.15);    color: $color-info;    }
+    &.low      { background: rgba($color-success,.15); color: $color-success; }
+  }
+}
+
+// ── Cards generales ───────────────────────────────────────────────────────────
+.cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+
+  .card {
+    background: $color-bg-surface;
+    border: 1px solid $color-border;
+    border-radius: $radius-lg;
+    padding: 1rem 1.2rem;
+
+    .card-header { display: flex; justify-content: space-between; margin-bottom: .5rem; }
+    .card-ts     { color: $color-muted; font-size: .8rem; }
+    .card-body   { font-size: .9rem; line-height: 1.6; white-space: pre-wrap; }
+  }
+}
+
+// ── Secciones ─────────────────────────────────────────────────────────────────
+.section {
+  margin: 1.5rem 0;
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: .75rem;
+  }
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────────
+.tabs {
+  display: flex;
+  gap: .5rem;
+  border-bottom: 1px solid $color-border;
+  margin-bottom: 1.25rem;
+
+  .tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: $color-muted;
+    padding: .6rem 1rem;
+    cursor: pointer;
+    font-size: .9rem;
+    transition: color $transition, border-color $transition;
+
+    &:hover { color: $color-text; }
+    &.tab-active { color: $color-primary; border-bottom-color: $color-primary; }
+  }
+}
+
+// ── Switch toggle ─────────────────────────────────────────────────────────────
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 24px;
+
+  input { opacity: 0; width: 0; height: 0; }
+
+  .slider {
+    position: absolute;
+    inset: 0;
+    background: $color-bg-elevated;
+    border: 1px solid $color-border;
+    border-radius: 9999px;
+    transition: background $transition;
+    cursor: pointer;
+
+    &::before {
+      content: '';
+      position: absolute;
+      width: 18px; height: 18px;
+      left: 2px; top: 2px;
+      border-radius: 50%;
+      background: $color-muted;
+      transition: transform $transition, background $transition;
+    }
+  }
+  input:checked + .slider {
+    background: $color-primary-dim;
+    border-color: $color-primary;
+    .slider::before, &::before { transform: translateX(22px); background: #fff; }
+  }
+}
+
+// ── Spinner ───────────────────────────────────────────────────────────────────
+.spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+// ── Log box ───────────────────────────────────────────────────────────────────
+.log-box {
+  background: $color-bg-surface;
+  border: 1px solid $color-border;
+  border-radius: $radius;
+  padding: .75rem 1rem;
+  font-family: $font-mono;
+  font-size: .8rem;
+  height: 220px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+
+  .log-line { color: $color-muted; }
+  .log-line.ok  { color: $color-success; }
+  .log-line.err { color: $color-danger; }
+  .log-line.warn { color: $color-warning; }
+}
+
+// ── Footer ────────────────────────────────────────────────────────────────────
+.footer {
+  margin-top: auto;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid $color-border;
+  text-align: center;
+  color: $color-muted;
+  font-size: .8rem;
+}

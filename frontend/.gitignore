@@ -1,0 +1,9 @@
+node_modules/
+dist/
+# HTML generados por pug (se regeneran en prebuild)
+/index.html
+/dashboard.html
+/chat.html
+/terminal.html
+/rulez.html
+/reports.html

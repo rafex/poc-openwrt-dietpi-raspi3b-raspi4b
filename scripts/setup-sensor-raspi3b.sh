@@ -22,6 +22,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
 
+# shellcheck source=./lib/raspi3b-deps.sh
+. "$SCRIPT_DIR/lib/raspi3b-deps.sh"
+
 # ─── Logging global a archivo + consola ───────────────────────────────────────
 SCRIPT_NAME="$(basename "$0" .sh)"
 DEFAULT_LOG_DIR="/var/log/demo-openwrt/setup"
@@ -267,20 +270,16 @@ info "  Router IP      : $ROUTER_IP"
 info "  SSH key        : $SSH_KEY"
 info "  Modo dry-run   : $DRY_RUN"
 
-# ─── A) Dependencias del sistema ──────────────────────────────────────────────
+# ─── A) Dependencias del sistema (via lib/raspi3b-deps.sh) ───────────────────
 step "A) Instalando dependencias del sistema"
 
-run apt-get update -qq
-run apt-get install -y --no-install-recommends \
-    tshark \
-    tcpdump \
-    python3 \
-    python3-pip \
-    python3-requests \
-    openssh-client \
-    iproute2 \
-    curl \
-    netcat-openbsd
+# Propagar DRY_RUN a la librería
+export DRY_RUN
+install_raspi3b_base
+install_raspi3b_capture
+install_raspi3b_python
+# Agregar netcat para wait_for_port
+_r3b_apt_install netcat-openbsd
 
 ok "Dependencias instaladas"
 
@@ -291,14 +290,6 @@ else
     die "tshark no instalado correctamente"
 fi
 
-# Permitir a usuarios no-root capturar (setuid en dumpcap)
-if ! $DRY_RUN; then
-    # En DietPi/Debian: tshark puede necesitar pertenecer al grupo wireshark
-    if getent group wireshark &>/dev/null; then
-        usermod -aG wireshark root 2>/dev/null || true
-        chmod +x /usr/bin/dumpcap 2>/dev/null || true
-    fi
-fi
 ok "Permisos de captura configurados"
 
 # ─── A.1) Modo promiscuo en eth0 ───────────────────────────────���──────────────

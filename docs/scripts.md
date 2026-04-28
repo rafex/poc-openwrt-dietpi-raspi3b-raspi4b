@@ -1,30 +1,193 @@
 # Referencia de Scripts
 
-Todos los scripts viven en `scripts/`. Los que interactúan con el router se ejecutan **desde RafexPi4B** via SSH. Los scripts de la Raspi 3B se ejecutan **en RafexPi3B**.
+Todos los scripts viven en `scripts/`. Usan la librería `scripts/lib/raspi4b-common.sh` para logging, flags comunes y helpers de apt.
 
 ---
 
 ## Logging de setup
 
-Los scripts modulares de Raspi4B escriben logs completos (`stdout` + `stderr`) por componente:
+Los scripts modulares escriben logs completos (`stdout` + `stderr`) por componente:
 
 - Primario: `/var/log/demo-openwrt/<componente>`
 - Fallback automático: `/tmp/demo-openwrt/<componente>`
+- Formato: `<script>-YYYYMMDD-HHMMSS.log`
 
-Formato:
-- `<script>-YYYYMMDD-HHMMSS.log`
-
-Ejemplo:
 ```bash
 ls -1t /var/log/demo-openwrt/*/setup-*.log 2>/dev/null | head -5
 ```
 
 ---
 
+## Flags comunes (todos los scripts modulares)
+
+| Flag | Descripción |
+|---|---|
+| `--dry-run` | Muestra qué haría sin ejecutar nada |
+| `--only-verify` | Solo verifica estado, no instala |
+| `--force` | Fuerza reinstalación aunque ya esté listo |
+| `--no-build` | Omite build de imágenes podman (aplica a frontend/portales) |
+
+---
+
+## setup-raspi4b-deps.sh ⬅ NUEVO
+
+**Propósito:** instalar todas las dependencias del SO (Debian/DietPi Bookworm arm64) para el stack completo de Raspi4B.  
+**Ejecutar en:** RafexPi4B (como root)  
+**Idempotente:** Sí — comprueba antes de instalar
+
+```bash
+sudo bash scripts/setup-raspi4b-deps.sh
+sudo bash scripts/setup-raspi4b-deps.sh --skip-node        # si no se compilará frontend en la Pi
+sudo bash scripts/setup-raspi4b-deps.sh --skip-mosquitto   # si ya está instalado
+sudo bash scripts/setup-raspi4b-deps.sh --dry-run
+```
+
+Qué instala:
+
+| Grupo | Detalle |
+|---|---|
+| Base | `curl wget git ca-certificates gnupg jq python3 openssh-client cron iproute2 net-tools dnsutils less htop` |
+| Contenedores | `podman uidmap slirp4netns fuse-overlayfs` |
+| MQTT | `mosquitto mosquitto-clients` |
+| Secretos | `age` (apt) + `sops 3.9.1` (binario arm64 de GitHub) |
+| Frontend | Node.js 20 LTS via NodeSource (binario `node` + `npm`) |
+
+---
+
+## setup-raspi4b-all.sh
+
+**Propósito:** orquestador general de Raspi4B — ejecuta todos los componentes en orden.  
+**Ejecutar en:** RafexPi4B (como root)
+
+Orden de ejecución:
+1. `setup-raspi4b-deps.sh` — dependencias del SO
+2. `setup-raspi4b-mosquitto.sh` — broker MQTT
+3. `setup-raspi4b-llm.sh` — llama.cpp server
+4. `setup-raspi4b-ai-analyzer-java.sh` — binario GraalVM nativo
+5. `setup-raspi4b-frontend.sh` — Vite dist + nginx (podman)
+6. `setup-raspi4b-portals.sh` — portales cautivos
+
+```bash
+sudo bash scripts/setup-raspi4b-all.sh
+sudo bash scripts/setup-raspi4b-all.sh --skip-deps
+sudo bash scripts/setup-raspi4b-all.sh --skip-llm
+sudo bash scripts/setup-raspi4b-all.sh --skip-portals
+sudo bash scripts/setup-raspi4b-all.sh --skip-frontend
+sudo bash scripts/setup-raspi4b-all.sh --headless-web   # solo IA (sin frontend ni portales)
+sudo bash scripts/setup-raspi4b-all.sh --dry-run
+```
+
+---
+
+## setup-raspi4b-mosquitto.sh
+
+**Propósito:** instalar/configurar/verificar solo Mosquitto MQTT.  
+**Idempotente:** Sí
+
+```bash
+sudo bash scripts/setup-raspi4b-mosquitto.sh
+sudo bash scripts/setup-raspi4b-mosquitto.sh --only-verify
+```
+
+- Instala `mosquitto` + `mosquitto-clients`
+- Escribe `/etc/mosquitto/conf.d/rafexpi.conf` (listener `1883 0.0.0.0`, anónimo)
+- Reinicia el servicio (systemd o init.d)
+- Verifica publicación en `127.0.0.1:1883`
+
+---
+
+## setup-raspi4b-llm.sh
+
+**Propósito:** instalar/configurar/verificar solo llama.cpp (`llama-server`).  
+**Idempotente:** Sí
+
+```bash
+sudo bash scripts/setup-raspi4b-llm.sh
+sudo bash scripts/setup-raspi4b-llm.sh --model-path=/opt/models/qwen2.5-0.5b-instruct-q4_k_m.gguf
+sudo bash scripts/setup-raspi4b-llm.sh --only-verify
+```
+
+- Detecta el binario `llama-server` en rutas estándar
+- Detecta el modelo `.gguf` (Qwen2.5-0.5B o TinyLlama)
+- Genera `/etc/init.d/llama-server`
+- Instala watchdog cron `/etc/cron.d/llama-watchdog`
+- Health check: `http://127.0.0.1:8081/health`
+
+**Prerequisito:** modelo descargado previamente en `/opt/models/`.
+
+---
+
+## setup-raspi4b-ai-analyzer-java.sh
+
+**Propósito:** descargar e instalar el binario GraalVM nativo de `ai-analyzer` + `.so` Rust.  
+**Idempotente:** Sí
+
+```bash
+sudo bash scripts/setup-raspi4b-ai-analyzer-java.sh
+sudo bash scripts/setup-raspi4b-ai-analyzer-java.sh --release=v20260428-abc1234
+sudo bash scripts/setup-raspi4b-ai-analyzer-java.sh --only-verify
+sudo bash scripts/setup-raspi4b-ai-analyzer-java.sh --dry-run
+```
+
+- Instala `age` + `sops` si no están
+- Descifra `secrets/raspi4b.yaml` → `GROQ_API_KEY` en memoria (sin escribir a disco)
+- Descarga de GitHub Releases: `ai-analyzer-linux-arm64` + `libanalyzer_db-linux-arm64.so`
+- Instala en `/opt/ai-analyzer/{bin,lib,html}/`
+- Escribe `/etc/ai-analyzer.env` (chmod 600)
+- Instala y arranca `systemd ai-analyzer.service` (`Type=simple`, `MemoryMax=300M`)
+- Verifica `/health` + endpoints principales
+
+**Sin JVM en la Pi** — binario GraalVM Native Image arm64 autocontenido.
+
+---
+
+## setup-raspi4b-frontend.sh
+
+**Propósito:** compilar el frontend Vite (Pug+Sass+TS) y desplegarlo con nginx en podman.  
+**Idempotente:** Sí
+
+```bash
+sudo bash scripts/setup-raspi4b-frontend.sh
+sudo bash scripts/setup-raspi4b-frontend.sh --skip-build   # solo redeployar contenedores
+sudo bash scripts/setup-raspi4b-frontend.sh --dry-run
+```
+
+- Instala Node.js 20 via NodeSource si no está disponible
+- `npm install --prefer-offline` + `npm run build` (pug → HTML + sass + ts + vite)
+- `podman build` de `ai-analyzer-frontend` (nginx:alpine + dist/)
+- `podman build` de `ai-analyzer-proxy` (nginx:alpine + proxy config)
+- Crea red podman `ai-net`
+- Arranca contenedores en `:80` (proxy) y `:3000` (frontend interno)
+- Verifica `/proxy-ping` y endpoints principales
+
+Arquitectura runtime:
+
+```
+:80 → nginx-proxy
+         ├── /          → nginx-frontend :3000   (HTML/CSS/JS hasheados)
+         ├── /api/*     → ai-analyzer    :5000   (API REST Java)
+         ├── /health    → ai-analyzer    :5000
+         └── /events    → ai-analyzer    :5000   (SSE, sin buffer)
+```
+
+---
+
+## setup-raspi4b-portals.sh
+
+**Propósito:** desplegar portales cautivos (clásico + lentium) en podman/k3s (topología legacy).
+
+```bash
+sudo bash scripts/setup-raspi4b-portals.sh
+sudo bash scripts/setup-raspi4b-portals.sh --no-build
+sudo bash scripts/setup-raspi4b-portals.sh --only-verify
+```
+
+---
+
 ## setup-openwrt.sh
 
-**Propósito:** Configuración completa del router OpenWrt para el captive portal y las Raspis.  
-**Ejecutar en:** RafexPi4B (conecta al router via SSH con `/opt/keys/captive-portal`)  
+**Propósito:** configuración completa del router OpenWrt.  
+**Ejecutar en:** RafexPi4B (conecta al router via SSH)  
 **Idempotente:** Sí
 
 ```bash
@@ -35,54 +198,50 @@ bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182 
 
 | Fase | Qué hace |
 |---|---|
-| Pre-flight | Verifica espacio en overlay, interfaz `phy0-ap0`, acceso SSH |
+| Pre-flight | Verifica overlay, interfaz `phy0-ap0`, SSH |
 | A | Agrega llave pública a `/etc/dropbear/authorized_keys` |
-| B | Escribe bloque captive en `/etc/dnsmasq.conf` (sin depender de `/etc/dnsmasq.d/`) |
-| B | Configura DHCP: lease `120m`, option `6` (DNS router), option `114` (URL captive) |
-| C | Aplica nftables: timeout **120m** para clientes, permanentes (timeout 0s) para admin + RafexPi4B + RafexPi3B |
-| **C.1** | **Reservas DHCP UCI permanentes**: RafexPi4B y RafexPi3B con `leasetime=infinite` y su hostname |
-| D | Verificación: tabla nftables, admin en el set, dnsmasq resuelve correctamente |
-
-Cambios respecto a la versión anterior:
-- **DHCP lease time subido de 30m a 120m** (sincronizado con el timeout del set nftables)
-- **RafexPi3B añadida como permanente** en `allowed_clients` (timeout 0s) — nunca necesita pasar por el portal
-- **FASE C.1 nueva** — crea reservas DHCP en el router para ambas Raspis con sus hostnames correctos
-- **Detección captive mejorada**: `dhcp-option=114,http://192.168.1.167/portal`
-- **Dominio fallback manual**: `captive.localhost.com`
-
-> **Regla de oro:** admin `192.168.1.113`, RafexPi4B `192.168.1.167` y RafexPi3B `192.168.1.181`
-> siempre tienen `timeout 0s` — nunca se bloquean.
+| B | Configura dnsmasq: lease `120m`, option `6`, option `114`, `captive.localhost.com` |
+| C | Tabla nftables `ip captive`: permanentes admin+Pi4B+Pi3B (timeout 0s), clientes 120m |
+| C.1 | Reservas DHCP UCI permanentes para ambas Raspis |
+| D | Verificación completa |
 
 ---
 
-## Topologías (orquestación y switch)
+## setup-sensor-raspi3b.sh
 
-### scripts/lib/topology.env
+**Propósito:** instalación del sensor de red en RafexPi3B.  
+**Ejecutar en:** RafexPi3B (como root)  
+**Idempotente:** Sí
 
-Archivo central de configuración de topología (`legacy` o `split_portal`).
+```bash
+sudo bash scripts/setup-sensor-raspi3b.sh
+sudo bash scripts/setup-sensor-raspi3b.sh --no-ssh
+sudo bash scripts/setup-sensor-raspi3b.sh --dry-run
+```
 
-Ruta por defecto en repo:
-- `scripts/lib/topology.env`
+| Fase | Qué hace |
+|---|---|
+| Hostname | `/etc/hostname` = `RafexPi3B` |
+| Pre-flight | Verifica `eth0`, IP activa |
+| A | `apt install tshark tcpdump python3 python3-pip openssh-client iproute2 curl` |
+| B | Copia `sensor/sensor.py` → `/opt/sensor/sensor.py` |
+| C | `pip3 install requests paho-mqtt` |
+| D | Genera llave SSH `/opt/keys/sensor` (ed25519), intenta copiar al router |
+| E | Genera y arranca `/etc/init.d/network-sensor` con todas las env vars |
+| F | Verifica PID, captura tshark 5s, conectividad MQTT |
 
-Override recomendado por host:
-- `/etc/demo-openwrt/topology.env`
+---
+
+## Topologías
 
 ### setup-topology.sh
-
-**Propósito:** ejecutar el flujo completo según topología, sin borrar el despliegue actual.
 
 ```bash
 sudo bash scripts/setup-topology.sh --topology=legacy
 sudo bash scripts/setup-topology.sh --topology=split_portal --portal-host=192.168.1.182
 ```
 
-Comportamiento:
-- `legacy`: OpenWrt + stack completo Raspi4B
-- `split_portal`: OpenWrt + Raspi4B (`--skip-portals`) + portal node Raspi3B#2
-
 ### topology-switch.sh
-
-**Propósito:** cambiar rápidamente el modo activo en OpenWrt (y opcionalmente persistir en topology env).
 
 ```bash
 sudo bash scripts/topology-switch.sh legacy
@@ -91,487 +250,125 @@ sudo bash scripts/topology-switch.sh split_portal --persist
 
 ### verify-topology.sh
 
-**Propósito:** validación E2E de endpoints + permanentes en nftables.
-
 ```bash
-bash scripts/verify-topology.sh --topology=legacy
+bash scripts/verify-topology.sh
 bash scripts/verify-topology.sh --topology=split_portal
 ```
 
 ---
 
-## Setup modular Raspi4B
+## Secretos — age + sops
 
-### scripts/lib/raspi4b-common.sh
-
-**Propósito:** librería compartida para setup modular en Raspi4B.
-
-Incluye:
-- logging estandarizado por componente
-- parsing de flags comunes (`--dry-run`, `--only-verify`, `--no-build`, `--force`)
-- helpers de apt idempotentes
-- validaciones (`need_root`, `ensure_cmd`, `ensure_k3s_ready`)
-
-### setup-raspi4b-mosquitto.sh
-
-**Propósito:** instalar/configurar/verificar solo Mosquitto.
-
-```bash
-sudo bash scripts/setup-raspi4b-mosquitto.sh
-sudo bash scripts/setup-raspi4b-mosquitto.sh --only-verify
-```
-
-Aplica:
-- instalación `mosquitto` + `mosquitto-clients`
-- `/etc/mosquitto/conf.d/rafexpi.conf`
-- restart del servicio
-- test publish local en `127.0.0.1:1883`
-
-### setup-raspi4b-llm.sh
-
-**Propósito:** instalar/configurar/verificar solo `llama.cpp` (`llama-server`).
-
-```bash
-sudo bash scripts/setup-raspi4b-llm.sh
-sudo bash scripts/setup-raspi4b-llm.sh --only-verify
-```
-
-Aplica:
-- detección binario `llama-server`
-- detección modelo `.gguf` (Qwen2.5-0.5B o TinyLlama)
-- generación de `/etc/init.d/llama-server`
-- watchdog `/etc/cron.d/llama-watchdog`
-- health check `http://127.0.0.1:8081/health`
-
-### setup-raspi4b-ai-analyzer.sh
-
-**Propósito:** desplegar solo `ai-analyzer` en k3s.
-
-```bash
-sudo bash scripts/setup-raspi4b-ai-analyzer.sh
-sudo bash scripts/setup-raspi4b-ai-analyzer.sh --no-build
-```
-
-Aplica:
-- build/import `localhost/ai-analyzer:latest` (opcional con `--no-build`)
-- `kubectl apply` deployment/svc/ingress de analyzer
-- `rollout restart` + verificación de endpoints (`/health`, `/dashboard`, `/terminal`, `/rulez`)
-
-### setup-raspi4b-ai-stack.sh
-
-**Propósito:** bundle mínimo de IA en Raspi4B (solo `mosquitto` + `llama.cpp` + `ai-analyzer`).
-
-```bash
-sudo bash scripts/setup-raspi4b-ai-stack.sh
-sudo bash scripts/setup-raspi4b-ai-stack.sh --no-build
-sudo bash scripts/setup-raspi4b-ai-stack.sh --skip-llm
-```
-
-Aplica:
-- `setup-raspi4b-mosquitto.sh`
-- `setup-raspi4b-llm.sh`
-- `setup-raspi4b-ai-analyzer.sh`
-- verificación final de pantallas clave: `/dashboard` y `/rulez`
-
-No despliega portales.
-
-### setup-raspi4b-portals.sh
-
-**Propósito:** desplegar solo portales (clásico + lentium) en k3s.
-
-```bash
-sudo bash scripts/setup-raspi4b-portals.sh
-sudo bash scripts/setup-raspi4b-portals.sh --no-build
-```
-
-Aplica:
-- garantía de llaves SSH del portal
-- ejecución de `scripts/raspi-deploy.sh` (con o sin build)
-- verificación HTTP de `/portal`, `/accepted`, `/services`, `/people`
-
-### setup-raspi4b-all.sh
-
-**Propósito:** orquestador general de Raspi4B (responsabilidad compuesta).
-
-```bash
-sudo bash scripts/setup-raspi4b-all.sh
-sudo bash scripts/setup-raspi4b-all.sh --skip-llm
-sudo bash scripts/setup-raspi4b-all.sh --skip-portals --skip-analyzer
-sudo bash scripts/setup-raspi4b-all.sh --headless-web
-```
-
-Orden de ejecución por defecto:
-1. `setup-raspi4b-mosquitto.sh`
-2. `setup-raspi4b-llm.sh`
-3. `setup-raspi4b-ai-analyzer.sh`
-4. `setup-raspi4b-portals.sh`
-
-`--headless-web`:
-- deja Raspi4B solo para IA (llama.cpp + analyzer + sqlite)
-- pensado para topología `split_portal` (portal frontend en Raspi3B#2)
-
-### setup-ai-raspi4b.sh (legacy)
-
-Se mantiene por compatibilidad histórica, pero la recomendación operativa es usar los scripts modulares anteriores.
-
-**Variables de entorno configurables** (en el deployment k8s `ai-analyzer-deployment.yaml`):
-
-| Variable | Default | Descripción |
-|---|---|---|
-| `MQTT_HOST` | 192.168.1.167 | Broker Mosquitto |
-| `MQTT_PORT` | 1883 | Puerto MQTT |
-| `MQTT_TOPIC` | rafexpi/sensor/batch | Topic MQTT |
-| `DB_PATH` | /data/sensor.db | SQLite (hostPath) |
-| `LLAMA_URL` | http://192.168.1.167:8081 | llama-server endpoint |
-| `N_PREDICT` | 384 | Tokens a generar |
-| `PORT` | 5000 | Puerto Flask |
-| `LOG_LEVEL` | INFO | Nivel de log |
-
----
-
-## setup-openwrt-wifi-uplink.sh
-
-**Propósito:** Configurar router con uplink WAN por WiFi 5GHz y AP 2.4GHz abierto para el captive portal.  
-**Ejecutar en:** RafexPi4B  
-**Idempotente:** Sí
-
-```bash
-bash scripts/setup-openwrt-wifi-uplink.sh \
-  --uplink-ssid netup \
-  --uplink-pass 123 \
-  --ap-ssid "INFINITUM MOVIL"
-```
-
-Qué hace:
-- Detecta radios 2.4/5GHz (`wifi-device`) en OpenWrt
-- Crea `network.wwan` (DHCP)
-- Configura `wireless.sta_uplink` (5GHz, modo `sta`, red `wwan`)
-- Configura `wireless.ap_captive` (2.4GHz, `encryption=none`)
-- Agrega `wwan` a la zona `wan` del firewall
-- Aplica `network reload`, `wifi reload`, `ifup wwan`, `firewall reload`
-
----
-
-## setup-sensor-raspi3b.sh
-
-**Propósito:** Instalación del sensor de red en RafexPi3B.  
-**Ejecutar en:** RafexPi3B (como root)  
-**Idempotente:** Sí
-
-```bash
-sudo bash scripts/setup-sensor-raspi3b.sh
-sudo bash scripts/setup-sensor-raspi3b.sh --no-ssh    # omitir SSH al router
-sudo bash scripts/setup-sensor-raspi3b.sh --dry-run   # solo mostrar qué haría
-```
-
-| Fase | Qué hace |
+| Script | Propósito |
 |---|---|
-| Hostname | `/etc/hostname` = `RafexPi3B`; actualiza `/etc/hosts` y `hostname` en caliente |
-| Pre-flight | Verifica interfaz eth0, detecta IP activa, muestra configuración |
-| A | `apt-get install tshark tcpdump python3 python3-pip python3-requests openssh-client iproute2 curl` |
-| B | Copia `sensor/sensor.py` → `/opt/sensor/sensor.py`; reinicia si ya estaba corriendo |
-| C | `pip3 install requests paho-mqtt` (si no están ya disponibles) |
-| D | Genera llave SSH ed25519 en `/opt/keys/sensor`; intenta `ssh-copy-id` al router automáticamente |
-| D.1 | SSH al router con la llave del sensor → reserva UCI `RafexPi3B  b8:27:eb:5a:ec:33 → 192.168.1.181  infinite` |
-| E | Genera `/etc/init.d/network-sensor` con todas las env vars; `update-rc.d defaults`; inicia el servicio |
-| F | Verifica PID, captura de 5s con tshark, conectividad con el analizador |
-
-**Variables de entorno** del servicio (configurables antes de ejecutar):
-
-| Variable | Default | Descripción |
-|---|---|---|
-| `SENSOR_IFACE` | eth0 | Interfaz de captura |
-| `MQTT_HOST` | 192.168.1.167 | Broker Mosquitto |
-| `MQTT_PORT` | 1883 | Puerto MQTT |
-| `MQTT_TOPIC` | rafexpi/sensor/batch | Topic |
-| `ANALYZER_URL` | http://192.168.1.167/api/ingest | Fallback HTTP |
-| `BATCH_INTERVAL` | 30 | Segundos entre batches |
-| `ROUTER_IP` | 192.168.1.1 | Router para SSH opcional |
-| `USE_ROUTER_SSH` | true | Usar SSH al router para enriquecer datos |
-
----
-
-## setup-portal-raspi3b.sh
-
-**Propósito:** instalar y desplegar portal/frontend liviano en Raspi3B#2 con podman + nginx.
-**Ejecutar en:** Raspi3B#2 (nodo portal alternativo)
+| `secrets-init.sh` | Inicializar keypair age + crear `secrets/raspi4b.yaml` |
+| `secrets-edit.sh` | Abrir editor de secretos cifrados (sops descifra → editar → cifra) |
+| `secrets-push-key.sh` | Copiar clave privada age a la Pi para descifrar en deploy |
 
 ```bash
-sudo bash scripts/setup-portal-raspi3b.sh
-sudo bash scripts/setup-portal-raspi3b.sh --only-verify
-```
-
-Aplica:
-- instala `podman` y `curl`
-- despliega contenedor `captive-portal-node` (`nginx:alpine`)
-- sirve estáticos (`/portal`, `/services`, `/blocked`, `/blocked-art/*`)
-- proxy de `/api/*`, `/people`, `/accepted`, `/dashboard`, `/terminal`, `/rulez` al nodo IA (Raspi4B)
-
-## portal-node-deploy.sh
-
-**Propósito:** redeploy del contenedor nginx en portal node.
-
-```bash
-sudo bash scripts/portal-node-deploy.sh
-```
-
-## portal-node-status.sh
-
-**Propósito:** estado rápido del portal node y health HTTP local.
-
-```bash
-bash scripts/portal-node-status.sh
+bash scripts/secrets-init.sh
+bash scripts/secrets-edit.sh
+bash scripts/secrets-edit.sh --set "GROQ_API_KEY=gsk_..."
+bash scripts/secrets-push-key.sh --host 192.168.1.167
 ```
 
 ---
 
-## sensor-status.sh
+## Health y diagnóstico
 
-**Propósito:** Diagnóstico completo del sistema sensor + IA.  
-**Ejecutar en:** RafexPi4B
-
-```bash
-bash scripts/sensor-status.sh            # estado general
-bash scripts/sensor-status.sh --test     # 8 tests funcionales
-bash scripts/sensor-status.sh --follow   # logs en vivo del analizador
-```
-
-Qué muestra:
-- Estado de pods k3s (`ai-analyzer`, `captive-portal`)
-- Estado de `llama-server` (init.d) y respuesta en `:8081/health`
-- Estado de `mosquitto` (init.d)
-- `/health` y `/api/stats` del analizador
-- URLs de los dashboards
-- (Opcional) SSH a RafexPi3B para verificar el proceso sensor
-
-Tests funcionales (`--test`):
-
-| Test | Qué verifica |
+| Script | Propósito |
 |---|---|
-| 1 | `GET /health` → `{"status":"ok"}` |
-| 2 | `GET /api/stats` → JSON con métricas |
-| 3 | `GET /api/history` → array de análisis |
-| 4 | `GET /api/queue` → estado de la cola |
-| 5 | `POST /api/ingest` con batch de muestra → 202 |
-| 6 | llama-server responde en `:8081` |
-| 7 | Mosquitto acepta publicaciones en `:1883` |
-| 8 | `GET /dashboard` → HTML (200) |
+| `health-raspi4b.sh` | Health check completo de RafexPi4B |
+| `health-raspi3b-sensor.sh` | Health del sensor en RafexPi3B |
+| `health-raspi3b-portal.sh` | Health del portal en RafexPi3B (topología split) |
+| `health-all.sh` | Health check de todos los nodos |
+
+```bash
+bash scripts/health-raspi4b.sh
+bash scripts/health-all.sh
+```
 
 ---
 
-## llm-control.sh
-
-**Propósito:** Encender/apagar el LLM local para reducir uso de CPU cuando no se está usando.  
-**Ejecutar en:** RafexPi4B
+## LLM control
 
 ```bash
 bash scripts/llm-control.sh status
-bash scripts/llm-control.sh off
-bash scripts/llm-control.sh on
+bash scripts/llm-control.sh off    # apaga LLM (libera CPU/RAM)
+bash scripts/llm-control.sh on     # enciende LLM
 bash scripts/llm-control.sh restart
+bash scripts/llm-status.sh         # diagnóstico detallado
 ```
-
-Comportamiento:
-- `off`: detiene `/etc/init.d/llama-server` y desactiva watchdog (`/etc/cron.d/llama-watchdog`)
-- `on`: arranca `llama-server` y reactiva watchdog
-- `status`: muestra PID, health HTTP en `:8081` y estado watchdog
 
 ---
 
-## llm-status.sh
-
-**Propósito:** diagnóstico detallado del LLM, incluyendo qué modelo está corriendo realmente.  
-**Ejecutar en:** RafexPi4B
+## MQTT y análisis
 
 ```bash
-bash scripts/llm-status.sh
+bash scripts/mqtt-queue-status.sh             # estado broker + cola analyzer
+bash scripts/mqtt-queue-status.sh --watch     # monitoreo continuo
 ```
-
-Muestra:
-- estado del servicio `/etc/init.d/llama-server`
-- PID en ejecución (si existe)
-- health HTTP en `:8081`
-- modelo en ejecución (leído de `/proc/<pid>/cmdline`)
-- modelo configurado en el servicio (fallback)
 
 ---
 
-## mqtt-queue-status.sh
-
-**Propósito:** estado detallado del broker Mosquitto y de la cola/procesamiento del `ai-analyzer`.  
-**Ejecutar en:** RafexPi4B
+## OpenWrt — Control de clientes
 
 ```bash
-bash scripts/mqtt-queue-status.sh
-bash scripts/mqtt-queue-status.sh --watch
-bash scripts/mqtt-queue-status.sh --watch --interval 5
-```
-
-Muestra:
-- servicio `mosquitto`, PID y puerto `1883`
-- métricas `$SYS` del broker (clientes, subscripciones, mensajes, bytes)
-- estado de cola del analyzer (`pending`, `processing`, `queue_size`)
-- procesados OK/error, `batches_received`, `llama_calls`, `llama_errors`
-- estado del pod `ai-analyzer` en k3s y conteo de errores/warnings recientes en logs
-- resumen de SQLite (`batches` por status y último `batch_id`) si el archivo está disponible
-
----
-
-## openwrt-allow-client.sh
-
-**Propósito:** Autorizar manualmente una IP en el captive portal.  
-**Ejecutar en:** RafexPi4B
-
-```bash
+bash scripts/openwrt-list-clients.sh              # IPs autorizadas, leases, conntrack
 bash scripts/openwrt-allow-client.sh 192.168.1.55
-bash scripts/openwrt-allow-client.sh 192.168.1.55 --permanent  # timeout 0s
-```
-
----
-
-## openwrt-block-client.sh
-
-**Propósito:** Bloquear una IP (devuelve al portal).  
-**Ejecutar en:** RafexPi4B
-
-```bash
+bash scripts/openwrt-allow-client.sh 192.168.1.55 --permanent
 bash scripts/openwrt-block-client.sh 192.168.1.55
+bash scripts/openwrt-flush-clients.sh             # reset para nueva demo
+bash scripts/openwrt-flush-clients.sh --force
+bash scripts/openwrt-reset-firewall.sh            # emergencia — desactiva todo
 ```
-
-> Nunca bloquea `ADMIN_IP`, `RASPI4B_IP` ni `RASPI3B_IP`. Protección en `common.sh`.
 
 ---
 
-## openwrt-list-clients.sh
-
-**Propósito:** Estado actual de clientes en el router.  
-**Ejecutar en:** RafexPi4B
+## Demo DNS Poisoning
 
 ```bash
-bash scripts/openwrt-list-clients.sh
-```
-
-Muestra:
-- IPs en el set `allowed_clients` (con timeouts)
-- Leases DHCP activos (`/tmp/dhcp.leases`)
-- Conexiones activas al puerto 80 (conntrack)
-- Reglas nftables activas
-
----
-
-## openwrt-reserve-raspi.sh
-
-**Propósito:** Reserva DHCP manual para una Raspi en el router (complemento — `setup-openwrt.sh` ya lo hace automáticamente para ambas Raspis).  
-**Ejecutar en:** RafexPi4B o directamente en la Raspi a reservar  
-**Idempotente:** Sí
-
-```bash
-# Modo recomendado: ejecutar desde la Pi que se quiere reservar
-bash scripts/openwrt-reserve-raspi.sh --auto              # detecta MAC local, usa IP por defecto
-bash scripts/openwrt-reserve-raspi.sh --auto 192.168.1.181
-
-# MAC manual
-bash scripts/openwrt-reserve-raspi.sh --mac b8:27:eb:5a:ec:33 --ip 192.168.1.181
-```
-
-> **Nota:** `setup-openwrt.sh` ya configura las reservas de RafexPi4B y RafexPi3B automáticamente en la FASE C.1. Este script sirve para reservas adicionales o correcciones manuales.
-
----
-
-## openwrt-flush-clients.sh
-
-**Propósito:** Resetear clientes autorizados — todos vuelven al portal.  
-**Ejecutar en:** RafexPi4B
-
-```bash
-bash scripts/openwrt-flush-clients.sh           # pide confirmación
-bash scripts/openwrt-flush-clients.sh --force   # sin confirmación
-```
-
-- Vacía `allowed_clients` preservando admin, RafexPi4B y RafexPi3B (permanentes)
-- `conntrack -F` — fuerza reconexión de sesiones ESTABLISHED
-
-| | `flush-clients` | `reset-firewall` |
-|---|---|---|
-| Elimina clientes temporales | ✅ | ✅ |
-| Mantiene nftables activo | ✅ | ❌ |
-| Portal sigue funcionando | ✅ | ❌ |
-| Uso típico | Reset entre demos | Emergencia total |
-
----
-
-## openwrt-dns-spoof-enable.sh
-
-**Propósito:** Activar demo de DNS poisoning — suplantar dominios.  
-**Ejecutar en:** RafexPi4B  
-**Idempotente:** Sí
-
-```bash
-bash scripts/openwrt-dns-spoof-enable.sh                   # activa rafex.dev
+bash scripts/openwrt-dns-spoof-enable.sh                    # activa rafex.dev
 bash scripts/openwrt-dns-spoof-enable.sh --domain otro.com
-```
-
-Además de dnsmasq, aplica los manifiestos k8s del pod `dns-spoof` (deployment + svc + ingress).
-El pod dns-spoof es **completamente separado** del captive-portal.
-
----
-
-## openwrt-dns-spoof-disable.sh
-
-**Propósito:** Desactivar la demo de DNS poisoning.  
-**Ejecutar en:** RafexPi4B
-
-```bash
 bash scripts/openwrt-dns-spoof-disable.sh
 ```
 
-Elimina entradas dnsmasq y los recursos k8s del pod dns-spoof.
-
 ---
 
-## openwrt-reset-firewall.sh
+## lib/raspi4b-common.sh
 
-**Propósito:** Emergencia — desactiva todo el captive portal.  
-**Ejecutar en:** RafexPi4B
+Librería compartida para los scripts de Raspi4B.
 
-```bash
-bash scripts/openwrt-reset-firewall.sh
-```
-
-Elimina: tabla `ip captive`, `/etc/nftables.d/captive-portal.nft`, `/etc/dnsmasq.d/captive-portal.conf`, bloque captive en `/etc/dnsmasq.conf`, flush conntrack. No toca la configuración base de `fw4`.
+| Función | Descripción |
+|---|---|
+| `log_info/ok/warn/error/die` | Logging estándar `[INFO] [OK] [WARN]` |
+| `need_root` | Verifica ejecución como root |
+| `ensure_cmd cmd...` | Falla si algún comando no está disponible |
+| `run_cmd cmd...` | Ejecuta respetando `--dry-run` |
+| `apt_update_once` | `apt-get update` idempotente (solo una vez por sesión) |
+| `apt_install_pkgs pkg...` | Instala solo los paquetes que faltan (con cache) |
+| `parse_common_flags args...` | Parsea `--dry-run --only-verify --force --no-build` |
+| `init_log_dir component` | Inicializa logging a archivo con `tee` |
+| `ensure_portal_ssh_key` | Genera llave SSH `/opt/keys/captive-portal` si no existe |
+| `ensure_ai_analyzer_ready` | Verifica que ai-analyzer responde en `:5000` |
 
 ---
 
 ## lib/common.sh
 
-Librería compartida cargada con `. scripts/lib/common.sh`.
-
-### Constantes principales
+Constantes de red y helpers para scripts que interactúan con el router.
 
 | Constante | Valor | Descripción |
 |---|---|---|
 | `ROUTER_IP` | 192.168.1.1 | Router OpenWrt |
-| `PORTAL_IP` | 192.168.1.167 | = RASPI4B_IP |
-| `ADMIN_IP` | 192.168.1.113 | Laptop admin — nunca bloquear |
 | `RASPI4B_IP` | 192.168.1.167 | RafexPi4B |
-| `RASPI4B_MAC` | d8:3a:dd:4d:4b:ae | MAC RafexPi4B |
-| `RASPI4B_HOSTNAME` | RafexPi4B | Hostname RafexPi4B |
 | `RASPI3B_IP` | 192.168.1.181 | RafexPi3B |
-| `RASPI3B_MAC` | b8:27:eb:5a:ec:33 | MAC RafexPi3B |
-| `RASPI3B_HOSTNAME` | RafexPi3B | Hostname RafexPi3B |
+| `ADMIN_IP` | 192.168.1.113 | Laptop admin — nunca bloquear |
 | `PORTAL_TIMEOUT` | 120m | Timeout nftables clientes WiFi |
-
-### Funciones
 
 | Función | Descripción |
 |---|---|
-| `log_info/ok/warn/error/die` | Logging estilo `[INFO] [OK] [WARN]` |
-| `validate_ip <ip>` | Valida formato A.B.C.D (POSIX sh puro) |
-| `router_ssh <cmd>` | SSH al router con `/opt/keys/captive-portal` |
-| `check_ssh_key` | Verifica que la llave existe |
-| `test_router_ssh` | Prueba conectividad SSH al router |
-| `router_table_exists` | Verifica si la tabla `ip captive` existe |
-| `router_set_exists` | Verifica si el set `allowed_clients` existe |
-| `router_ip_in_set <ip>` | Verifica si una IP está en el set |
-| `router_add_ip <ip>` | Agrega IP al set (timeout 0s para admin/RafexPi4B/RafexPi3B; PORTAL_TIMEOUT para el resto) |
-| `router_del_ip <ip>` | Elimina IP del set |
+| `router_ssh cmd` | SSH al router con `/opt/keys/captive-portal` |
+| `router_add_ip ip` | Agrega IP al set nftables |
+| `router_del_ip ip` | Elimina IP del set |
+| `router_ip_in_set ip` | Verifica si IP está en `allowed_clients` |

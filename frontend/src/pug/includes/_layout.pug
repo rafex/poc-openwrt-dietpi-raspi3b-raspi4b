@@ -1,0 +1,19 @@
+-//
+  _layout.pug — plantilla base para todas las páginas
+  Variables esperadas: pageTitle, pageId, mainScript
+
+doctype html
+html(lang="es")
+  head
+    meta(charset="UTF-8")
+    meta(name="viewport" content="width=device-width, initial-scale=1.0")
+    title #{pageTitle} — AI Analyzer
+    link(rel="icon" href="/favicon.ico" type="image/x-icon")
+    link(rel="stylesheet" href="/src/scss/main.scss")
+  body(class=pageId + "-page")
+    include _nav.pug
+    main.main-content
+      block content
+    footer.footer
+      p AI Analyzer &copy; #{new Date().getFullYear()} — Red WiFi con IA
+    script(type="module" src=mainScript)

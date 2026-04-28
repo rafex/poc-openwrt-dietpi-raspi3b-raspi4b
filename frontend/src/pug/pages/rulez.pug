@@ -1,0 +1,75 @@
+- var pageTitle = 'Reglas'; var pageId = 'rulez'; var mainScript = '/src/ts/rulez.ts';
+include /includes/_layout.pug
+
+block content
+  .page-header.animate__animated.animate__fadeInDown
+    .page-header-left
+      a.btn.btn-back(href="/dashboard.html") ← Dashboard
+      h1 Reglas y Políticas
+    p.subtitle Gestión de bloqueos, whitelist y parámetros del modelo
+
+  .tabs
+    button.tab.tab-active(data-tab="policies") 🛡 Políticas de bloqueo
+    button.tab(data-tab="whitelist") ✅ Whitelist
+    button.tab(data-tab="ai-rules") 🤖 Reglas IA
+
+  .tab-content#tab-policies.animate__animated.animate__fadeIn
+    .section
+      h2 Configuración de bloqueo social y adultos
+      form#policy-form.form-grid
+        .form-row
+          label.form-label(for="social-enabled") Bloqueo redes sociales
+          label.switch
+            input#social-enabled(type="checkbox" name="SOCIAL_BLOCK_ENABLED")
+            span.slider
+        .form-row
+          label.form-label(for="social-start") Hora inicio
+          input#social-start.form-input(type="number" name="SOCIAL_POLICY_START_HOUR" min="0" max="23")
+        .form-row
+          label.form-label(for="social-end") Hora fin
+          input#social-end.form-input(type="number" name="SOCIAL_POLICY_END_HOUR" min="0" max="23")
+        .form-row
+          label.form-label(for="porn-enabled") Bloqueo adultos
+          label.switch
+            input#porn-enabled(type="checkbox" name="PORN_BLOCK_ENABLED")
+            span.slider
+        .form-actions
+          button.btn.btn-primary(type="submit") 💾 Guardar
+      .table-wrap
+        h3 Historial de acciones
+        table.data-table#policy-actions-table
+          thead
+            tr
+              th Timestamp
+              th Acción
+              th Razón
+
+  .tab-content#tab-whitelist.hidden.animate__animated.animate__fadeIn
+    .section
+      h2 Dominios en whitelist
+      .input-row
+        input#whitelist-input.form-input(type="text" placeholder="ejemplo.com")
+        button.btn.btn-primary#btn-add-whitelist ＋ Agregar
+      .table-wrap
+        table.data-table#whitelist-table
+          thead
+            tr
+              th Dominio
+              th Agregado
+              th Acción
+
+  .tab-content#tab-ai-rules.hidden.animate__animated.animate__fadeIn
+    .section
+      h2 Reglas del modelo de IA
+      .input-row
+        input#rule-key.form-input(type="text" placeholder="clave")
+        input#rule-value.form-input(type="text" placeholder="valor")
+        button.btn.btn-primary#btn-save-rule 💾 Guardar
+      .table-wrap
+        table.data-table#ai-rules-table
+          thead
+            tr
+              th Clave
+              th Valor
+              th Actualizado
+              th Acción

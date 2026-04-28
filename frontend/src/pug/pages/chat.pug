@@ -1,0 +1,38 @@
+- var pageTitle = 'Chat IA'; var pageId = 'chat'; var mainScript = '/src/ts/chat.ts';
+include /includes/_layout.pug
+
+block content
+  .page-header.animate__animated.animate__fadeInDown
+    .page-header-left
+      a.btn.btn-back(href="/dashboard.html") ← Dashboard
+      h1 Chat con IA
+    p.subtitle Consulta al modelo Groq (Qwen) sobre tu red
+
+  .chat-wrap
+    .chat-sidebar
+      h3 Sesiones
+      ul#session-list.session-list
+      button.btn.btn-primary#btn-new-session + Nueva sesión
+
+    .chat-main
+      .chat-messages#chat-messages(aria-live="polite")
+        .chat-empty-state
+          span.empty-icon 💬
+          p Escribe un mensaje para comenzar
+
+      .chat-input-bar
+        textarea#chat-input.chat-input(
+          rows="3"
+          placeholder="Pregunta sobre dispositivos, tráfico, anomalías…"
+          aria-label="Mensaje"
+        )
+        .chat-actions
+          button.btn.btn-sm.btn-secondary#btn-clear-chat 🗑 Limpiar
+          button.btn.btn-primary#btn-send
+            span#btn-send-label Enviar
+            span#btn-send-spinner.spinner(hidden)
+
+  .section.animate__animated.animate__fadeIn
+    details.context-details
+      summary Ver contexto de red enviado al modelo
+      pre#context-preview.code-block (se cargará al enviar el primer mensaje)

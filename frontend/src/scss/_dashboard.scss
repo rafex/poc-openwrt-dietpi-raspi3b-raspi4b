@@ -1,0 +1,25 @@
+// ── Stats grid ────────────────────────────────────────────────────────────────
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+
+  .stat-card {
+    background: $color-bg-surface;
+    border: 1px solid $color-border;
+    border-radius: $radius-lg;
+    padding: 1.2rem 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: .4rem;
+    transition: border-color $transition, transform $transition;
+
+    &:hover { border-color: $color-primary; transform: translateY(-2px); }
+
+    .stat-icon  { font-size: 1.5rem; }
+    .stat-label { font-size: .78rem; color: $color-muted; text-transform: uppercase; letter-spacing: .5px; }
+    .stat-value { font-size: 1.8rem; font-weight: 700; color: $color-text-heading; font-family: $font-mono; }
+  }
+}

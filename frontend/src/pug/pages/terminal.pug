@@ -1,0 +1,47 @@
+- var pageTitle = 'Terminal'; var pageId = 'terminal'; var mainScript = '/src/ts/terminal.ts';
+include /includes/_layout.pug
+
+block content
+  .page-header.animate__animated.animate__fadeInDown
+    .page-header-left
+      a.btn.btn-back(href="/dashboard.html") ← Dashboard
+      h1 Terminal
+    p.subtitle Comandos de diagnóstico y gestión de red
+
+  .terminal-wrap
+    .terminal-toolbar
+      .terminal-dots
+        span.dot.dot-red
+        span.dot.dot-yellow
+        span.dot.dot-green
+      span.terminal-title ai-analyzer ~ bash
+      button.btn.btn-sm#btn-clear-terminal 🗑 Limpiar
+
+    .terminal-output#terminal-output(aria-live="polite")
+      .terminal-welcome
+        p.dim ── AI Analyzer Terminal ──
+        p.dim Selecciona un comando rápido o escribe tu propio.
+
+    .terminal-input-bar
+      span.prompt $
+      input#terminal-input.terminal-input(
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="comando…"
+        aria-label="Comando"
+      )
+      button.btn.btn-primary#btn-run ▶ Ejecutar
+
+  .section
+    h3 Comandos rápidos
+    .quick-cmds
+      button.btn.btn-sm.quick-cmd(data-cmd="ip a") ip a
+      button.btn.btn-sm.quick-cmd(data-cmd="ip route") ip route
+      button.btn.btn-sm.quick-cmd(data-cmd="arp -n") arp -n
+      button.btn.btn-sm.quick-cmd(data-cmd="cat /proc/net/dev") net/dev
+      button.btn.btn-sm.quick-cmd(data-cmd="ss -tulpn") ss -tulpn
+      button.btn.btn-sm.quick-cmd(data-cmd="uptime") uptime
+      button.btn.btn-sm.quick-cmd(data-cmd="free -h") free -h
+      button.btn.btn-sm.quick-cmd(data-cmd="df -h") df -h
+      button.btn.btn-sm.quick-cmd(data-cmd="journalctl -u ai-analyzer -n 50 --no-pager") logs ai-analyzer

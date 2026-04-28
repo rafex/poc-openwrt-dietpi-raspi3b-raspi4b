@@ -1,0 +1,98 @@
+// ── Navbar ────────────────────────────────────────────────────────────────────
+.navbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  height: $navbar-h;
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0 1.5rem;
+  background: rgba($color-bg-surface, .92);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid $color-border;
+  box-shadow: $shadow;
+
+  .navbar-brand {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    flex-shrink: 0;
+
+    .brand-icon {
+      font-size: 1.4rem;
+      color: $color-primary;
+    }
+    .brand-name {
+      font-weight: 700;
+      font-size: 1.1rem;
+      color: $color-text-heading;
+      letter-spacing: -.5px;
+    }
+  }
+
+  .navbar-links {
+    list-style: none;
+    display: flex;
+    gap: .25rem;
+    flex: 1;
+
+    .nav-link {
+      display: flex;
+      align-items: center;
+      gap: .35rem;
+      padding: .4rem .75rem;
+      border-radius: $radius;
+      color: $color-muted;
+      font-size: .875rem;
+      transition: color $transition, background $transition;
+
+      .nav-icon { font-size: 1rem; }
+
+      &:hover { color: $color-text; background: $color-bg-elevated; text-decoration: none; }
+      &.active { color: $color-primary; background: rgba($color-primary,.1); }
+    }
+  }
+
+  .navbar-status {
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+    flex-shrink: 0;
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: $color-muted;
+      transition: background $transition;
+      &.online  { background: $color-success; box-shadow: 0 0 6px $color-success; }
+      &.offline { background: $color-danger; }
+    }
+    .status-text { font-size: .8rem; color: $color-muted; }
+  }
+}
+
+// ── Contenido principal ───────────────────────────────────────────────────────
+.main-content {
+  flex: 1;
+  max-width: 1200px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+// ── Page header ───────────────────────────────────────────────────────────────
+.page-header {
+  margin-bottom: 1.5rem;
+
+  .page-header-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: .5rem;
+  }
+
+  h1 { margin-bottom: .25rem; }
+  .subtitle { color: $color-muted; font-size: .9rem; }
+}

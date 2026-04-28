@@ -1,0 +1,27 @@
+// ── Rulez page ────────────────────────────────────────────────────────────────
+.form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+  max-width: 500px;
+
+  .form-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    .form-label { color: $color-muted; font-size: .9rem; min-width: 200px; }
+    .form-input { max-width: 120px; }
+  }
+  .form-actions { margin-top: .5rem; }
+}
+
+.input-row {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+  margin-bottom: .75rem;
+  flex-wrap: wrap;
+
+  .form-input { flex: 1; min-width: 160px; }
+}

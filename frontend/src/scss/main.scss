@@ -1,0 +1,16 @@
+// ── Punto de entrada principal de Sass ────────────────────────────────────────
+//    Vite procesa este archivo cuando se importa en los HTML generados.
+
+// 1. Animate.css desde node_modules
+@use "animate.css/animate.min.css";
+
+// 2. Variables y base
+@use "variables" as *;
+@use "base";
+@use "navbar";
+
+// 3. Páginas
+@use "dashboard";
+@use "chat";
+@use "terminal";
+@use "rulez";

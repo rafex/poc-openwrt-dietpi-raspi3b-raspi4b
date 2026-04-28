@@ -71,6 +71,22 @@ setup-pi4b-all:
       "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
        bash scripts/setup-raspi4b-all.sh"
 
+# Despliega el frontend (Vite dist) + nginx en Pi4B via podman
+[group('deploy')]
+setup-frontend host=PI4B_IP:
+    @echo "→ Desplegando frontend + nginx proxy en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       bash scripts/setup-raspi4b-frontend.sh"
+
+# Despliega frontend sin recompilar (usa dist/ existente)
+[group('deploy')]
+setup-frontend-fast host=PI4B_IP:
+    @echo "→ Re-desplegando frontend (sin rebuild) en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       bash scripts/setup-raspi4b-frontend.sh --skip-build"
+
 # Despliega llama.cpp en Pi4B
 [group('deploy')]
 setup-llm:
@@ -195,6 +211,18 @@ verify-ai host=PI4B_IP:
 logs host=PI4B_IP:
     @echo "→ Logs ai-analyzer ({{host}}) — Ctrl+C para salir"
     ssh {{SSH_USER_PI}}@{{host}} "journalctl -u ai-analyzer -f --no-pager"
+
+# Logs del nginx proxy en Pi4B
+[group('logs')]
+logs-proxy host=PI4B_IP:
+    @echo "→ Logs nginx proxy ({{host}})"
+    ssh {{SSH_USER_PI}}@{{host}} "podman logs -f ai-analyzer-proxy"
+
+# Logs del contenedor frontend en Pi4B
+[group('logs')]
+logs-frontend host=PI4B_IP:
+    @echo "→ Logs nginx frontend ({{host}})"
+    ssh {{SSH_USER_PI}}@{{host}} "podman logs -f ai-analyzer-frontend"
 
 # Logs de llama.cpp en Pi4B
 [group('logs')]
@@ -406,7 +434,25 @@ build-rust:
     @echo "→ make rust (delega a Makefile)"
     make -C {{project_root}} rust
 
-# Build completo (Rust arm64 + fat JAR) — delega a Makefile
+# Construir frontend localmente (delega a Makefile)
+[group('dev')]
+build-frontend:
+    @echo "→ make frontend (delega a Makefile)"
+    make -C {{project_root}} frontend
+
+# Dev mode frontend (hot-reload pug + sass + ts) — local
+[group('dev')]
+dev-frontend:
+    @echo "→ Frontend dev mode (pug watch + vite)"
+    cd {{project_root}}/frontend && npm run dev
+
+# Type-check TypeScript del frontend
+[group('dev')]
+typecheck-frontend:
+    @echo "→ tsc --noEmit"
+    cd {{project_root}}/frontend && npm run typecheck
+
+# Build completo (Rust arm64 + fat JAR + frontend) — delega a Makefile
 [group('dev')]
 build-all:
     @echo "→ make all (delega a Makefile)"
