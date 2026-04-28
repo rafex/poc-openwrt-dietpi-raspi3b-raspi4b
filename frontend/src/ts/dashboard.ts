@@ -24,13 +24,15 @@ function markActive(): void {
 
 async function loadStats(): Promise<void> {
   try {
-    const h = await getHealth()
-    el('stat-groq').textContent = h.groq_enabled ? '✅ Sí' : '❌ No'
+    const [h, s] = await Promise.all([getHealth(), getStats()])
 
-    const s = await getStats()
-    el('stat-batches').textContent  = String(s.batches_today)
-    el('stat-alerts').textContent   = String(s.alerts_active)
-    el('stat-devices').textContent  = String(s.devices_seen)
+    // Tarjetas mapeadas a campos reales del backend Java
+    el('stat-batches').textContent  = String(s.batches_total)
+    el('stat-analyses').textContent = String(s.analyses_total)
+    el('stat-queue').textContent    = String(s.batches_pending)
+    el('stat-groq').textContent     = h.groq_enabled
+      ? `✅ ${h.chat_provider}`
+      : '❌ No'
   } catch (e) {
     console.error('loadStats:', e)
   }

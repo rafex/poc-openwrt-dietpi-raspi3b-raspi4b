@@ -9,7 +9,8 @@ html(lang="es")
     meta(name="viewport" content="width=device-width, initial-scale=1.0")
     title #{pageTitle} — AI Analyzer
     link(rel="icon" href="/favicon.ico" type="image/x-icon")
-    link(rel="stylesheet" href="/src/scss/main.scss")
+    //- CSS inyectado por Vite vía import '../scss/main.scss' en cada TS entry point.
+    //- No se agrega <link> aquí para evitar doble carga y rutas inválidas en dist/.
   body(class=pageId + "-page")
     include _nav.pug
     main.main-content

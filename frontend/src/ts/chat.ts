@@ -109,11 +109,13 @@ async function sendMessage(): Promise<void> {
   renderMessages(msgs)
   renderSessionList()
 
-  const body: ChatRequest = { session_id: currentSessionId, message: text }
+  // Campo `question` — nombre que espera el backend Java en handleChat()
+  const body: ChatRequest = { session_id: currentSessionId, question: text }
 
   try {
     const resp = await sendChat(body)
-    msgs.push({ role: 'model', text: resp.reply, ts: ts() })
+    // Campo `answer` — nombre que devuelve el backend Java
+    msgs.push({ role: 'model', text: resp.answer, ts: ts() })
     sessions.set(currentSessionId, msgs)
     renderMessages(msgs)
   } catch (e) {

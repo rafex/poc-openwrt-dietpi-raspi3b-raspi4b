@@ -36,7 +36,7 @@
 # =============================================================================
 
 .DEFAULT_GOAL := all
-.PHONY: all rust rust-arm64 fat-jar native native-arm64 frontend check clean dist \
+.PHONY: all rust rust-arm64 fat-jar native native-arm64 frontend docker-web check clean dist \
         license-check license-update license-add javadoc javadoc-fix \
         _ensure-rust _ensure-java _ensure-graalvm _ensure-node
 
@@ -122,7 +122,7 @@ native-arm64: fat-jar rust-arm64 _ensure-graalvm
 	  -Dnative.compiler.path=$(RUST_ARM64_LINKER)
 	@echo "✓ $(NATIVE_BIN_ARM64)-linux-arm64"
 
-## frontend: Compilar frontend — Pug→HTML, Sass, TypeScript vía Vite
+## frontend: Compilar frontend — Pug→HTML, Sass, TypeScript vía Vite → dist/
 frontend: _ensure-node
 	@echo "── Instalando dependencias npm ─────────────────────────────────"
 	cd $(FRONTEND_DIR) && $(NPM) install --prefer-offline
@@ -130,6 +130,24 @@ frontend: _ensure-node
 	cd $(FRONTEND_DIR) && $(NPM) run build
 	@echo "✓ $(FRONTEND_DIR)/dist"
 	@ls -lh $(FRONTEND_DIR)/dist 2>/dev/null | head -20
+
+## docker-web: Construir imagen podman nginx (frontend + proxy) → ai-analyzer-web
+## REQUIERE: make frontend primero (genera frontend/dist/)
+docker-web: frontend
+	@echo "── Construyendo imagen nginx unificada ─────────────────────────"
+	@command -v podman >/dev/null 2>&1 || { \
+	  echo "ERROR: podman no encontrado"; exit 1; }
+	podman build \
+	  --cgroup-manager=cgroupfs \
+	  --platform linux/arm64 \
+	  -f nginx/Dockerfile \
+	  -t ai-analyzer-web:latest \
+	  .
+	@echo "✓ Imagen: ai-analyzer-web:latest"
+	@echo ""
+	@echo "  Deploy (Pi4B, host network):"
+	@echo "    podman run -d --name ai-analyzer-web --network host \\"
+	@echo "      --restart unless-stopped ai-analyzer-web:latest"
 
 # =============================================================================
 # Java / Maven — Documentación y Licencias MIT
