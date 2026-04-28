@@ -400,7 +400,7 @@ topology-switch name:
 [group('dev')]
 lint-rust:
     @echo "→ cargo check + clippy"
-    cd {{project_root}}/backend/ai-analyzer/db-lib && \
+    cd {{project_root}}/backend/java/ai-analyzer/db-lib && \
       cargo check && cargo clippy -- -D warnings
     @echo "✓ Rust OK"
 
@@ -408,19 +408,19 @@ lint-rust:
 [group('dev')]
 fmt-rust:
     @echo "→ cargo fmt"
-    cd {{project_root}}/backend/ai-analyzer/db-lib && cargo fmt
+    cd {{project_root}}/backend/java/ai-analyzer/db-lib && cargo fmt
 
 # Compilar Java sin empaquetar (rápido, solo verifica errores de compilación)
 [group('dev')]
 compile-java:
     @echo "→ mvnw compile"
-    cd {{project_root}}/backend/ai-analyzer-java && ./mvnw compile -q
+    cd {{project_root}}/backend/java/ai-analyzer && ./mvnw compile -q
 
 # Tests Java (cuando se agreguen)
 [group('dev')]
 test-java:
     @echo "→ mvnw test"
-    cd {{project_root}}/backend/ai-analyzer-java && ./mvnw test
+    cd {{project_root}}/backend/java/ai-analyzer && ./mvnw test
 
 # Construir fat JAR localmente (delega a Makefile)
 [group('dev')]

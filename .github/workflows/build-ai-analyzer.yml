@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'backend/ai-analyzer-java/**'
-      - 'backend/ai-analyzer/db-lib/**'
+      - 'backend/java/ai-analyzer/**'
+      - 'backend/java/ai-analyzer/db-lib/**'
       - '.github/workflows/build-ai-analyzer.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'backend/ai-analyzer-java/**'
-      - 'backend/ai-analyzer/db-lib/**'
+      - 'backend/java/ai-analyzer/**'
+      - 'backend/java/ai-analyzer/db-lib/**'
 
 permissions:
   contents: write   # para publicar releases
@@ -41,12 +41,12 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            backend/ai-analyzer/db-lib/target
-          key: rust-arm64-${{ hashFiles('backend/ai-analyzer/db-lib/Cargo.lock') }}
+            backend/java/ai-analyzer/db-lib/target
+          key: rust-arm64-${{ hashFiles('backend/java/ai-analyzer/db-lib/Cargo.lock') }}
           restore-keys: rust-arm64-
 
       - name: Build cdylib arm64
-        working-directory: backend/ai-analyzer/db-lib
+        working-directory: backend/java/ai-analyzer/db-lib
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
@@ -93,21 +93,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.m2/repository
-          key: maven-${{ hashFiles('backend/ai-analyzer-java/pom.xml') }}
+          key: maven-${{ hashFiles('backend/java/ai-analyzer/pom.xml') }}
           restore-keys: maven-
 
       - name: Descargar libanalyzer_db
         uses: actions/download-artifact@v4
         with:
           name: libanalyzer_db-linux-arm64
-          path: backend/ai-analyzer-java/
+          path: backend/java/ai-analyzer/
 
       - name: Compilar fat JAR
-        working-directory: backend/ai-analyzer-java
+        working-directory: backend/java/ai-analyzer
         run: mvn -q package -DskipTests
 
       - name: Build GraalVM Native Image arm64
-        working-directory: backend/ai-analyzer-java
+        working-directory: backend/java/ai-analyzer
         env:
           # Forzar target arm64 a través de cross-compilación GraalVM
           JAVA_HOME_NATIVE: /usr/lib/jvm/graalvm-ce-java21
@@ -123,7 +123,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ai-analyzer-linux-arm64
-          path: backend/ai-analyzer-java/ai-analyzer-linux-arm64
+          path: backend/java/ai-analyzer/ai-analyzer-linux-arm64
           retention-days: 7
 
   # ─── 3. Publicar Release en GitHub ────────────────────────────────────────
@@ -186,10 +186,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.m2/repository
-          key: maven-${{ hashFiles('backend/ai-analyzer-java/pom.xml') }}
+          key: maven-${{ hashFiles('backend/java/ai-analyzer/pom.xml') }}
 
       - name: Compilar (sin native image, sin libanalyzer_db)
-        working-directory: backend/ai-analyzer-java
+        working-directory: backend/java/ai-analyzer
         run: |
           # Compilar sin -Pnative y con un stub de la librería para verificar que compila
           mvn -q compile -DskipTests
@@ -210,11 +210,11 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            backend/ai-analyzer/db-lib/target
-          key: rust-host-${{ hashFiles('backend/ai-analyzer/db-lib/Cargo.lock') }}
+            backend/java/ai-analyzer/db-lib/target
+          key: rust-host-${{ hashFiles('backend/java/ai-analyzer/db-lib/Cargo.lock') }}
 
       - name: cargo check + clippy
-        working-directory: backend/ai-analyzer/db-lib
+        working-directory: backend/java/ai-analyzer/db-lib
         run: |
           cargo check
           cargo clippy -- -D warnings

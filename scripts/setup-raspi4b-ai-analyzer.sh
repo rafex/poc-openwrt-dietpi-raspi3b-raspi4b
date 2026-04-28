@@ -137,7 +137,7 @@ if ! $ONLY_VERIFY; then
         --cgroup-manager=cgroupfs \
         --platform linux/arm64 \
         -t "$IMAGE_NAME" \
-        "$REPO_DIR/backend/ai-analyzer/"
+        "$REPO_DIR/backend/python/ai-analyzer/"
     log_ok "Imagen construida: $IMAGE_NAME"
   else
     log_info "Saltando build (--no-build)"

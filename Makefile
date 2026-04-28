@@ -6,6 +6,7 @@
 #   • Compilar el fat JAR Java (via Maven Wrapper ./mvnw)
 #   • Compilar el binario GraalVM Native Image arm64
 #   • Construir el frontend (Pug + Sass + TypeScript vía Vite)
+#   • Gestionar documentación Javadoc y cabeceras de licencia MIT
 #   • Limpiar artefactos de build
 #
 # Qué NO hace:
@@ -24,16 +25,26 @@
 #   make check               # cargo check + clippy (sin compilar)
 #   make clean               # eliminar todos los artefactos
 #   make dist                # copiar artefactos a dist/
+#
+# Maven lifecycle → targets de este Makefile:
+#   validate         → license-check    (check-file-header — falla si falta MIT)
+#   generate-sources → license-update   (update-file-header + update-project-license)
+#   process-sources  → license-add      (segunda pasada update-file-header)
+#   package          → fat-jar          (shade fat JAR + attach-javadocs)
+#   javadoc:fix      → javadoc-fix      (genera stubs — invocación MANUAL)
+#   mvn -Pnative pkg → native-arm64     (GraalVM native image arm64)
 # =============================================================================
 
 .DEFAULT_GOAL := all
 .PHONY: all rust rust-arm64 fat-jar native native-arm64 frontend check clean dist \
+        license-check license-update license-add javadoc javadoc-fix \
         _ensure-rust _ensure-java _ensure-graalvm _ensure-node
 
 # ── Rutas ────────────────────────────────────────────────────────────────────
 ROOT_DIR     := $(shell pwd)
-RUST_DIR     := $(ROOT_DIR)/backend/ai-analyzer/db-lib
-JAVA_DIR     := $(ROOT_DIR)/backend/ai-analyzer-java
+RUST_DIR     := $(ROOT_DIR)/backend/java/ai-analyzer/db-lib
+JAVA_DIR     := $(ROOT_DIR)/backend/java/ai-analyzer
+PYTHON_DIR   := $(ROOT_DIR)/backend/python/ai-analyzer
 DIST_DIR     := $(ROOT_DIR)/dist
 
 FRONTEND_DIR := $(ROOT_DIR)/frontend
@@ -119,6 +130,67 @@ frontend: _ensure-node
 	cd $(FRONTEND_DIR) && $(NPM) run build
 	@echo "✓ $(FRONTEND_DIR)/dist"
 	@ls -lh $(FRONTEND_DIR)/dist 2>/dev/null | head -20
+
+# =============================================================================
+# Java / Maven — Documentación y Licencias MIT
+# =============================================================================
+# Ciclo Maven que activan estos targets:
+#
+#   license-check  →  mvn validate
+#                       └─ check-file-header   (falla si falta cabecera MIT)
+#
+#   license-update →  mvn generate-sources
+#                       ├─ update-file-header   (agrega/actualiza cabecera MIT)
+#                       └─ update-project-license (escribe archivo LICENSE)
+#
+#   license-add    →  mvn process-sources
+#                       └─ update-file-header   (segunda pasada add-license)
+#
+#   fat-jar        →  mvn package -DskipTests
+#                       └─ attach-javadocs      (genera y adjunta javadoc.jar)
+#
+#   javadoc        →  mvn javadoc:javadoc       (solo genera HTML, sin empaquetar)
+#
+#   javadoc-fix    →  mvn javadoc:fix           (MANUAL — genera stubs en fuentes)
+#                       ¡Modifica archivos .java! Revisar con git diff antes de commit.
+#
+#   native-arm64   →  mvn -Pnative package      (GraalVM native image arm64)
+# =============================================================================
+
+## license-check: [validate] Verificar que todos los .java tienen cabecera MIT
+license-check: _ensure-java
+	@echo "── Maven validate → check-file-header (licencia MIT) ───────────"
+	cd $(JAVA_DIR) && $(MVNW) validate -q
+	@echo "✓ Todas las cabeceras MIT presentes"
+
+## license-update: [generate-sources] Agregar/actualizar cabeceras MIT + archivo LICENSE
+license-update: _ensure-java
+	@echo "── Maven generate-sources → update-file-header + update-project-license ──"
+	cd $(JAVA_DIR) && $(MVNW) generate-sources -q
+	@echo "✓ Cabeceras MIT actualizadas y LICENSE escrito"
+
+## license-add: [process-sources] Segunda pasada — agrega cabecera MIT donde falte
+license-add: _ensure-java
+	@echo "── Maven process-sources → update-file-header (add-license) ───"
+	cd $(JAVA_DIR) && $(MVNW) process-sources -q
+	@echo "✓ Cabeceras MIT añadidas (process-sources)"
+
+## javadoc: Generar Javadoc HTML sin empaquetar (mvn javadoc:javadoc)
+javadoc: _ensure-java
+	@echo "── Maven javadoc:javadoc → generando HTML en target/site/apidocs ─"
+	cd $(JAVA_DIR) && $(MVNW) javadoc:javadoc -q
+	@echo "✓ Javadoc HTML:"
+	@ls -lh $(JAVA_DIR)/target/site/apidocs/index.html 2>/dev/null || \
+	  echo "  (ver $(JAVA_DIR)/target/site/apidocs/)"
+
+## javadoc-fix: [MANUAL] Generar stubs Javadoc en el código fuente (mvn javadoc:fix)
+## ATENCION: modifica archivos .java — revisar con 'git diff' antes de hacer commit
+javadoc-fix: _ensure-java
+	@echo "── Maven javadoc:fix → generando stubs en src/main/java ────────"
+	@echo "  ⚠  Este target modifica archivos fuente. Revisa con: git diff"
+	@printf "  ¿Continuar? [s/N] "; read ans; [ "$$ans" = "s" ] || { echo "Cancelado."; exit 0; }
+	cd $(JAVA_DIR) && $(MVNW) javadoc:fix
+	@echo "✓ Stubs Javadoc generados — revisa los cambios antes de commit"
 
 ## check: Verificar código sin compilar artefactos finales
 check: _ensure-rust _ensure-java

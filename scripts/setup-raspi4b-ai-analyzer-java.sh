@@ -143,15 +143,8 @@ else
         run_cmd chmod +x "${BIN_DIR}/ai-analyzer"
         run_cmd curl -fsSL "$LIB_URL" -o "${LIB_DIR}/libanalyzer_db.so"
         log_ok "Binarios descargados en $INSTALL_DIR"
-
-        # Copiar HTMLs desde el repo (si está disponible)
-        if [[ -d "$REPO_DIR/backend/ai-analyzer" ]]; then
-            for f in dashboard.html chat.html terminal.html rulez.html reports.html; do
-                local_f="$REPO_DIR/backend/ai-analyzer/$f"
-                [[ -f "$local_f" ]] && cp "$local_f" "$HTML_DIR/"
-            done
-            log_ok "HTMLs copiados en $HTML_DIR"
-        fi
+        # Nota: los HTMLs (dashboard, chat, terminal, rulez, reports) los sirve
+        # el frontend Node.js/Vite compilado — no se copian aquí.
     else
         log_info "[dry-run] descargar binarios"
     fi

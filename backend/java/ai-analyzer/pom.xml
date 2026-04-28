@@ -10,6 +10,8 @@
   <version>1.0.0</version>
   <packaging>jar</packaging>
   <name>AI Analyzer — Java 21 stdlib</name>
+  <description>Analizador de red con IA: MQTT, LLM local (llama.cpp) y Groq. Binario nativo GraalVM arm64.</description>
+  <url>https://github.com/rafex/presentaciones-cursos-talleres</url>
 
   <properties>
     <java.version>21</java.version>
@@ -17,6 +19,9 @@
     <maven.compiler.target>21</maven.compiler.target>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <mainClass>mx.rafex.analyzer.Main</mainClass>
+    <!-- Versiones de plugins de documentación y licencias -->
+    <maven-javadoc-plugin.version>3.7.0</maven-javadoc-plugin.version>
+    <license-maven-plugin.version>2.4.0</license-maven-plugin.version>
   </properties>
 
   <!--
@@ -40,8 +45,8 @@
 
   <build>
     <plugins>
-      <!-- Compilar Java 21 — Panama FFI (java.lang.foreign.*) es estable en JDK 21,
-           no requiere incubator. Se habilita --enable-preview solo para text blocks
+      <!-- Compilar Java 21: Panama FFI (java.lang.foreign.*) es estable en JDK 21,
+           no requiere incubator. La flag enable-preview aplica solo para text blocks
            y otras features preview si se usan. -->
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -76,6 +81,104 @@
                 </transformer>
               </transformers>
             </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- ─── Javadoc ────────────────────────────────────────────────────────── -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>${maven-javadoc-plugin.version}</version>
+        <configuration>
+          <!-- Parámetros válidos para jar / javadoc / test-jar -->
+          <source>${java.version}</source>
+          <release>${java.version}</release>
+          <doclint>none</doclint>
+          <quiet>true</quiet>
+          <failOnWarnings>false</failOnWarnings>
+        </configuration>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+          <execution>
+            <!-- javadoc:fix genera stubs deterministas en el código fuente.
+                 phase=none → no corre automáticamente; se invoca manualmente
+                 con: mvn javadoc:fix -->
+            <id>fix-javadoc-stubs</id>
+            <phase>none</phase>
+            <goals>
+              <goal>fix</goal>
+            </goals>
+            <configuration>
+              <fixTags>param,return,throws,link</fixTags>
+              <level>public</level>
+              <defaultAuthor>Raúl Eduardo González Argote</defaultAuthor>
+              <defaultSince>${project.version}</defaultSince>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- ─── Licencias MIT en cabeceras de archivos fuente ─────────────────── -->
+      <!--
+        Uso habitual:
+          mvn license:update-file-header    - agrega/actualiza cabeceras MIT
+          mvn license:update-project-license - escribe LICENSE en raíz del proyecto
+          mvn validate                       - verifica que todas las cabeceras existan
+        La fase generate-sources actualiza cabeceras automáticamente en cada build.
+      -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>license-maven-plugin</artifactId>
+        <version>${license-maven-plugin.version}</version>
+        <configuration>
+          <licenseName>mit</licenseName>
+          <organizationName>Raúl Eduardo González Argote</organizationName>
+          <inceptionYear>2025</inceptionYear>
+          <projectName>${project.name}</projectName>
+          <!-- Limitar explícitamente a fuentes Java del proyecto -->
+          <roots>
+            <root>${project.basedir}/src/main/java</root>
+            <root>${project.basedir}/src/test/java</root>
+          </roots>
+          <includes>
+            <include>**/*.java</include>
+          </includes>
+          <excludes>
+            <exclude>**/generated/**</exclude>
+            <exclude>**/target/**</exclude>
+          </excludes>
+        </configuration>
+        <executions>
+          <execution>
+            <id>update-licenses</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>update-file-header</goal>
+              <goal>update-project-license</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>check-license</id>
+            <phase>validate</phase>
+            <goals>
+              <goal>check-file-header</goal>
+            </goals>
+            <configuration>
+              <failOnMissingHeader>true</failOnMissingHeader>
+            </configuration>
+          </execution>
+          <execution>
+            <id>add-license</id>
+            <phase>process-sources</phase>
+            <goals>
+              <goal>update-file-header</goal>
+            </goals>
           </execution>
         </executions>
       </plugin>

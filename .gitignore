@@ -17,6 +17,13 @@ secrets/*.dec.yaml
 # Rust build artifacts
 target/
 
+# IDE — Eclipse, VSCode
+.classpath
+.project
+.settings/
+*.swp
+*.swo
+
 # Logs
 *.log
 

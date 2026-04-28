@@ -13,8 +13,6 @@ import mx.rafex.analyzer.worker.AnalysisWorker;
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -27,29 +25,38 @@ import java.util.logging.Logger;
  *
  * <p>Sin ningún framework — solo stdlib de Java 21 + hilos virtuales (Loom).
  *
+ * <p>Este servidor expone <strong>únicamente la API REST y el canal SSE</strong>.
+ * Las páginas HTML ({@code /dashboard}, {@code /chat}, etc.) las sirve el frontend
+ * Node.js compilado con Vite ({@code frontend/}), ya sea en desarrollo ({@code npm run dev})
+ * o en producción (nginx en contenedor podman).
+ *
  * <p>Rutas disponibles:
  * <pre>
- *   GET  /health          → estado del sistema (JSON)
- *   GET  /dashboard       → HTML
- *   GET  /chat            → HTML
- *   GET  /terminal        → HTML
- *   GET  /rulez           → HTML
- *   GET  /reports         → HTML
- *   GET  /api/analyses    → JSON últimos análisis
- *   GET  /api/alerts      → JSON últimas alertas
- *   GET  /api/stats       → JSON estadísticas
- *   POST /api/ingest      → insertar batch via HTTP (testing)
- *   POST /api/chat        → chat con LLM
- *   GET  /api/chat/history → historial de chat
- *   DELETE /api/chat/session → limpiar sesión
- *   GET  /api/whitelist   → listar whitelist
- *   POST /api/whitelist   → agregar dominio
- *   DELETE /api/whitelist → eliminar dominio
- *   GET  /api/profiles    → perfiles de dispositivos
- *   GET  /api/reports     → reportes de red
- *   GET  /api/summaries   → resúmenes periódicos
- *   GET  /events          → SSE tiempo real
+ *   GET    /health                → estado del sistema (JSON)
+ *   GET    /api/analyses          → JSON últimos análisis
+ *   GET    /api/alerts            → JSON últimas alertas
+ *   GET    /api/stats             → JSON estadísticas
+ *   POST   /api/ingest            → insertar batch via HTTP (testing)
+ *   POST   /api/chat              → chat con LLM
+ *   GET    /api/chat/history      → historial de chat
+ *   DELETE /api/chat/session      → limpiar sesión
+ *   GET    /api/whitelist         → listar whitelist
+ *   POST   /api/whitelist         → agregar dominio
+ *   DELETE /api/whitelist         → eliminar dominio
+ *   GET    /api/profiles          → perfiles de dispositivos
+ *   GET    /api/reports           → reportes de red
+ *   GET    /api/summaries         → resúmenes periódicos
+ *   GET    /events                → SSE tiempo real
+ *   OPTIONS *                     → CORS preflight
  * </pre>
+ *
+ * <p><strong>Separación de responsabilidades:</strong>
+ * <ul>
+ *   <li>Frontend (Node.js/Vite/nginx) → sirve HTML, CSS, JS en {@code :3000} (prod) / {@code :5173} (dev)
+ *   <li>Backend Java (este servidor)  → API REST + SSE en {@code :5000}
+ *   <li>nginx proxy                   → enruta {@code /api/*}, {@code /health}, {@code /events}
+ *       al backend y el resto al frontend
+ * </ul>
  */
 public final class ApiServer {
 
@@ -92,14 +99,8 @@ public final class ApiServer {
     // ─── Registro de rutas ────────────────────────────────────────────────────
 
     private void registerRoutes() {
-        // Páginas HTML estáticas (servidas desde el classpath / directorio actual)
-        server.createContext("/dashboard", ex -> serveHtml(ex, "dashboard.html"));
-        server.createContext("/chat",      ex -> serveHtml(ex, "chat.html"));
-        server.createContext("/terminal",  ex -> serveHtml(ex, "terminal.html"));
-        server.createContext("/rulez",     ex -> serveHtml(ex, "rulez.html"));
-        server.createContext("/reports",   ex -> serveHtml(ex, "reports.html"));
-
-        // API JSON
+        // ── API REST ──────────────────────────────────────────────────────────
+        // Las páginas HTML las sirve el frontend Node.js/Vite (no este servidor).
         server.createContext("/health",          this::handleHealth);
         server.createContext("/api/analyses",    this::handleAnalyses);
         server.createContext("/api/alerts",      this::handleAlerts);
@@ -110,14 +111,30 @@ public final class ApiServer {
         server.createContext("/api/profiles",    this::handleProfiles);
         server.createContext("/api/reports",     this::handleReports);
         server.createContext("/api/summaries",   this::handleSummaries);
+
+        // ── SSE ───────────────────────────────────────────────────────────────
         server.createContext("/events",          this::handleSse);
 
-        // Raíz → redirigir a dashboard
+        // ── Raíz / catch-all ─────────────────────────────────────────────────
+        // Devuelve un índice JSON de la API; el HTML lo sirve el frontend.
         server.createContext("/", ex -> {
-            if ("/".equals(ex.getRequestURI().getPath())) {
-                redirect(ex, "/dashboard");
+            // CORS preflight para todas las rutas
+            if ("OPTIONS".equals(ex.getRequestMethod())) {
+                corsOk(ex);
+                return;
+            }
+            var path = ex.getRequestURI().getPath();
+            if ("/".equals(path)) {
+                json(ex, 200, """
+                    {"service":"ai-analyzer","version":"1.0.0",
+                     "endpoints":["/health","/api/analyses","/api/alerts",
+                     "/api/stats","/api/ingest","/api/chat","/api/whitelist",
+                     "/api/profiles","/api/reports","/api/summaries","/events"],
+                     "ui":"served by frontend (Node.js/Vite)"}
+                    """.strip());
             } else {
-                json(ex, 404, Json.error("Ruta no encontrada: " + ex.getRequestURI().getPath()));
+                json(ex, 404, Json.error("Ruta no encontrada: " + path
+                    + " — las páginas HTML las sirve el frontend en :3000"));
             }
         });
     }
@@ -325,40 +342,31 @@ public final class ApiServer {
         sseClients.removeAll(dead);
     }
 
-    // ── HTML estático ─────────────────────────────────────────────────────────
-
-    private void serveHtml(HttpExchange ex, String filename) throws IOException {
-        // 1. Buscar en directorio de trabajo (junto al jar en producción)
-        var file = Path.of(filename);
-        byte[] bytes;
-        if (Files.exists(file)) {
-            bytes = Files.readAllBytes(file);
-        } else {
-            // 2. Buscar en classpath (durante desarrollo con Maven)
-            try (var is = getClass().getClassLoader().getResourceAsStream(filename)) {
-                if (is == null) { json(ex, 404, Json.error("Archivo no encontrado: " + filename)); return; }
-                bytes = is.readAllBytes();
-            }
-        }
-        ex.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
-        ex.sendResponseHeaders(200, bytes.length);
-        ex.getResponseBody().write(bytes);
-        ex.getResponseBody().close();
-    }
-
     // ── Helpers HTTP ─────────────────────────────────────────────────────────
 
+    /**
+     * Responde con JSON y cabeceras CORS para que el frontend (dev en :5173,
+     * prod en :3000) pueda consumir la API desde otro origen.
+     */
     private static void json(HttpExchange ex, int status, String body) throws IOException {
         var bytes = body.getBytes(StandardCharsets.UTF_8);
-        ex.getResponseHeaders().set("Content-Type", "application/json; charset=UTF-8");
-        ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+        var h = ex.getResponseHeaders();
+        h.set("Content-Type",                 "application/json; charset=UTF-8");
+        h.set("Access-Control-Allow-Origin",  "*");
+        h.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+        h.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
         ex.sendResponseHeaders(status, bytes.length);
         try (var out = ex.getResponseBody()) { out.write(bytes); }
     }
 
-    private static void redirect(HttpExchange ex, String location) throws IOException {
-        ex.getResponseHeaders().set("Location", location);
-        ex.sendResponseHeaders(302, -1);
+    /** Responde 204 a peticiones CORS preflight (OPTIONS). */
+    private static void corsOk(HttpExchange ex) throws IOException {
+        var h = ex.getResponseHeaders();
+        h.set("Access-Control-Allow-Origin",  "*");
+        h.set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+        h.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+        h.set("Access-Control-Max-Age",       "86400");
+        ex.sendResponseHeaders(204, -1);
         ex.getResponseBody().close();
     }
 

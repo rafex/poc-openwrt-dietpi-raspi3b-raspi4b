@@ -644,7 +644,7 @@ else
         --cgroup-manager=cgroupfs \
         --platform linux/arm64 \
         -t localhost/ai-analyzer:latest \
-        "$REPO_DIR/backend/ai-analyzer/"
+        "$REPO_DIR/backend/python/ai-analyzer/"
     ok "Imagen ai-analyzer construida"
 fi
 
