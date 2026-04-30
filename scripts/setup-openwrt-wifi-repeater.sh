@@ -390,25 +390,82 @@ _r "/etc/init.d/network restart 2>/dev/null || true; \
     /etc/init.d/firewall restart 2>/dev/null || true; \
     ifup wwan 2>/dev/null || true"
 
-# ── Resultado ─────────────────────────────────────────────────────────────────
+# ── Verificación automática ───────────────────────────────────────────────────
+#
+# Espera a que la radio levante y verifica:
+#   1. wifi status  — interfaces y modo de operación
+#   2. ifstatus wwan — IP asignada por DHCP de la red de casa
+#   3. ping 8.8.8.8 — conectividad a Internet
+# Si el ping falla, muestra el diagnóstico de WPA y un scan de la radio STA.
+
+VERIFY_WAIT=15   # segundos para que la radio asocie antes de verificar
 
 printf '\n'
 log_ok "Configuración aplicada en ${HOST}."
+log_info "Esperando ${VERIFY_WAIT}s para que la radio levante..."
+sleep "$VERIFY_WAIT"
+
+# ── wifi status ───────────────────────────────────────────────────────────────
 printf '\n'
-printf '  Para verificar el estado, conecta al router:\n'
-printf '    ssh %s@%s\n' "$SSH_USER" "$HOST"
+printf '══════════════════════════════════════════\n'
+printf ' wifi status\n'
+printf '══════════════════════════════════════════\n'
+_r "wifi status 2>/dev/null || iw dev 2>/dev/null || echo '(wifi status no disponible)'"
+
+# ── ifstatus wwan ─────────────────────────────────────────────────────────────
 printf '\n'
-printf '  Y ejecuta dentro del router:\n'
-printf '    wifi status\n'
-printf '    ifstatus wwan\n'
-printf '    ping -c3 8.8.8.8\n'
+printf '══════════════════════════════════════════\n'
+printf ' ifstatus wwan  (IP asignada por red de casa)\n'
+printf '══════════════════════════════════════════\n'
+WWAN_STATUS=$(_r "ifstatus wwan 2>/dev/null || echo 'wwan no disponible'")
+printf '%s\n' "$WWAN_STATUS"
+
+# ── ping a Internet ───────────────────────────────────────────────────────────
 printf '\n'
-printf '  Si no hay conectividad en 30s:\n'
-printf '    logread | grep wpa\n'
-printf '    iwinfo %s scan\n' "$WIFI_STA"
+printf '══════════════════════════════════════════\n'
+printf ' ping -c3 8.8.8.8  (conectividad a Internet)\n'
+printf '══════════════════════════════════════════\n'
+if _r "ping -c3 -W2 8.8.8.8" 2>/dev/null; then
+    printf '\n'
+    log_ok "Conectividad a Internet: OK"
+    PING_OK=true
+else
+    printf '\n'
+    log_warn "Sin respuesta de 8.8.8.8 — mostrando diagnóstico..."
+    PING_OK=false
+fi
+
+# ── Diagnóstico si el ping falló ──────────────────────────────────────────────
+if ! $PING_OK; then
+    printf '\n'
+    printf '══════════════════════════════════════════\n'
+    printf ' logread | grep wpa  (errores de autenticación)\n'
+    printf '══════════════════════════════════════════\n'
+    _r "logread 2>/dev/null | grep -i wpa | tail -20 || echo '(sin entradas wpa en el log)'"
+
+    printf '\n'
+    printf '══════════════════════════════════════════\n'
+    printf ' iwinfo %s scan  (redes visibles desde el router)\n' "$WIFI_STA"
+    printf '══════════════════════════════════════════\n'
+    _r "iwinfo ${WIFI_STA} scan 2>/dev/null || iw dev ${WIFI_STA} scan 2>/dev/null || echo '(scan no disponible)'"
+
+    printf '\n'
+    log_warn "Posibles causas:"
+    log_warn "  • HOME_SSID o HOME_PASS incorrectos en el .env"
+    log_warn "  • La red '${HOME_SSID}' no está en rango del router"
+    log_warn "  • El radio ${WIFI_STA} no soporta la banda de la red de casa"
+    printf '\n'
+    printf '  Para revertir los cambios en el router:\n'
+    printf '    ssh %s@%s\n' "$SSH_USER" "$HOST"
+    printf '    cp /etc/config/wireless.bak.%s /etc/config/wireless\n' "$TS"
+    printf '    cp /etc/config/network.bak.%s  /etc/config/network\n'  "$TS"
+    printf '    uci commit wireless network && wifi\n'
+    printf '\n'
+    exit 1
+fi
+
 printf '\n'
-printf '  Para revertir los cambios en el router:\n'
-printf '    cp /etc/config/wireless.bak.%s /etc/config/wireless\n' "$TS"
-printf '    cp /etc/config/network.bak.%s  /etc/config/network\n'  "$TS"
-printf '    uci commit wireless network && wifi\n'
+printf '  Backup guardado en el router:\n'
+printf '    /etc/config/wireless.bak.%s\n' "$TS"
+printf '    /etc/config/network.bak.%s\n'  "$TS"
 printf '\n'
