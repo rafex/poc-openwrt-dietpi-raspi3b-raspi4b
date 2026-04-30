@@ -91,9 +91,10 @@
         <artifactId>maven-javadoc-plugin</artifactId>
         <version>${maven-javadoc-plugin.version}</version>
         <configuration>
-          <!-- Parámetros válidos para jar / javadoc / test-jar -->
-          <source>${java.version}</source>
-          <release>${java.version}</release>
+          <!-- En CI usamos JDK 25: java.lang.foreign ya no es preview y javadoc
+               debe resolverse contra ese release para evitar errores de preview. -->
+          <source>25</source>
+          <release>25</release>
           <doclint>none</doclint>
           <quiet>true</quiet>
           <failOnWarnings>false</failOnWarnings>
