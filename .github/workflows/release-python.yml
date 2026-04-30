@@ -2,8 +2,12 @@ name: Release — ai-analyzer Python (arm64)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Flujo de release para el backend Python:
-#   1. Construir imagen Docker linux/arm64 (Alpine + Python 3.13)
-#   2. Publicar en ghcr.io
+#   1. Compilar frontend (Pug → HTML + Vite) — el backend Python sirve los HTML
+#   2. Construir imagen Docker linux/arm64 (Alpine + Python 3.13)
+#   3. Publicar en ghcr.io
+#
+# El backend Python sirve los HTML directamente (dashboard, chat, terminal…)
+# desde su propio directorio. Los HTML los genera el frontend Vite.
 #
 # Triggers:
 #   • push de tag  v*.*.*          →  release producción  + :latest en ghcr.io
@@ -41,6 +45,7 @@ permissions:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/poc-ai-analyzer-python
+  NODE_VERSION: '20'
 
 jobs:
   publish-python-image:
@@ -49,6 +54,33 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # El backend Python sirve los HTML directamente (dashboard, chat, terminal…)
+      # Compilar frontend para obtener los HTML con assets Vite embebidos
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package.json
+
+      - name: Compilar frontend (pug → HTML + Vite)
+        working-directory: frontend
+        run: |
+          npm install --prefer-offline
+          npm run build
+
+      - name: Copiar HTML compilados al directorio Python
+        run: |
+          echo "── Archivos HTML generados por Vite ──"
+          ls -lh frontend/dist/*.html
+          cp frontend/dist/dashboard.html  backend/python/ai-analyzer/
+          cp frontend/dist/chat.html       backend/python/ai-analyzer/
+          cp frontend/dist/terminal.html   backend/python/ai-analyzer/
+          cp frontend/dist/rulez.html      backend/python/ai-analyzer/
+          cp frontend/dist/reports.html    backend/python/ai-analyzer/
+          echo "── Contexto Python listo ──"
+          ls -lh backend/python/ai-analyzer/*.html
 
       - name: Login ghcr.io
         uses: docker/login-action@v3
