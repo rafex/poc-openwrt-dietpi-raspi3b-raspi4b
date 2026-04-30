@@ -145,14 +145,21 @@ _require_var() {
 _require_var HOME_SSID
 _require_var HOME_PASS
 _require_var AP_SSID
-_require_var AP_PASS
+# AP_PASS es OPCIONAL: si está vacío o ausente, el AP queda abierto (sin clave)
+AP_PASS="${AP_PASS:-}"
 
-# Validación básica de longitud (WPA2: 8-63 caracteres)
+# Validación de longitud solo para variables con valor
 [ ${#HOME_PASS} -ge 8 ] || die "HOME_PASS demasiado corta (mínimo 8 caracteres para WPA2)"
-[ ${#AP_PASS}   -ge 8 ] || die "AP_PASS demasiado corta (mínimo 8 caracteres para WPA2)"
+if [ -n "$AP_PASS" ]; then
+    [ ${#AP_PASS} -ge 8 ] || die "AP_PASS demasiado corta (mínimo 8 caracteres para WPA2). Para AP abierto, deja AP_PASS vacío o sin definir."
+fi
 
 log_ok "Credenciales cargadas — HOME_SSID='${HOME_SSID}' AP_SSID='${AP_SSID}'"
-log_info "(Las contraseñas no se muestran en logs)"
+if [ -n "$AP_PASS" ]; then
+    log_info "AP: protegido con WPA2 (contraseña no se muestra en logs)"
+else
+    log_warn "AP: SIN contraseña — red abierta (cualquiera puede conectarse)"
+fi
 
 # ── Autodetectar radios ───────────────────────────────────────────────────────
 #
@@ -204,10 +211,15 @@ log_info "Radio AP  (para clientes):  $WIFI_AP"
 
 if $DRY_RUN; then
     log_info "--- DRY-RUN (sin cambios) ---"
-    log_info "  HOME_SSID : $HOME_SSID"
-    log_info "  AP_SSID   : $AP_SSID"
-    log_info "  STA radio : $WIFI_STA"
-    log_info "  AP  radio : $WIFI_AP"
+    log_info "  HOME_SSID  : $HOME_SSID"
+    log_info "  AP_SSID    : $AP_SSID"
+    if [ -n "$AP_PASS" ]; then
+        log_info "  AP_SEGUR   : WPA2 (con contraseña)"
+    else
+        log_warn "  AP_SEGUR   : ABIERTO (sin contraseña)"
+    fi
+    log_info "  STA radio  : $WIFI_STA"
+    log_info "  AP  radio  : $WIFI_AP"
     log_ok "Dry-run completado"
     exit 0
 fi
@@ -260,8 +272,15 @@ uci set wireless.wifinet_ap.device="$WIFI_AP"
 uci set wireless.wifinet_ap.mode='ap'
 uci set wireless.wifinet_ap.network='lan'
 uci set wireless.wifinet_ap.ssid="$AP_SSID"
-uci set wireless.wifinet_ap.encryption='psk2'
-uci set wireless.wifinet_ap.key="$AP_PASS"
+if [ -n "$AP_PASS" ]; then
+    uci set wireless.wifinet_ap.encryption='psk2'
+    uci set wireless.wifinet_ap.key="$AP_PASS"
+    log_ok "AP configurado con WPA2 (contraseña establecida)"
+else
+    uci set wireless.wifinet_ap.encryption='none'
+    uci -q delete wireless.wifinet_ap.key 2>/dev/null || true
+    log_warn "AP configurado SIN contraseña — red abierta"
+fi
 uci set wireless.wifinet_ap.disabled='0'
 
 # ── 6. Agregar WWAN a la zona WAN del firewall ────────────────────────────────
