@@ -123,15 +123,29 @@ if git tag --list | grep -q "^${TAG}$"; then
   TAG_EXISTS=true
   if $FORCE; then
     log_warn "Tag '${TAG}' ya existe y será sobreescrito (--force)"
+  elif $DRY_RUN; then
+    log_warn "Tag '${TAG}' ya existe (dry-run: se simularía --force)"
   else
-    log_error "El tag '${TAG}' ya existe en este repositorio."
-    log_error "  Opciones:"
-    log_error "    1. Actualiza VERSION para subir a la siguiente versión"
-    log_error "    2. Usa --force para sobreescribir el tag existente"
-    log_error ""
-    log_error "  Tags v* existentes:"
+    echo ""
+    log_warn "El tag '${TAG}' ya existe en este repositorio."
+    echo ""
+    echo -e "  Tags v* existentes:"
     git tag --list "v*" | sort -V | tail -10 | sed 's/^/    /'
-    exit 1
+    echo ""
+    printf "  ¿Sobreescribir '${TAG}' con el commit actual? [s/N] "
+    read -r ANSWER </dev/tty
+    case "$ANSWER" in
+      s|S|si|SI|sí|SÍ|yes|YES|y|Y)
+        FORCE=true
+        log_warn "Sobreescribiendo tag '${TAG}'..."
+        ;;
+      *)
+        log_info "Cancelado. Opciones:"
+        log_info "  1. Actualiza VERSION:  just version-set X.Y.Z"
+        log_info "  2. Fuerza directamente: just tag -F"
+        exit 0
+        ;;
+    esac
   fi
 fi
 

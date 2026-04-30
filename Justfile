@@ -503,12 +503,13 @@ topology-switch name:
 
 # Crea y empuja el tag de release según la rama actual.
 # develop → v{{VERSION}}-preview  |  main → v{{VERSION}}
-# Uso: just tag
-#      just tag-dry-run   (ver qué haría sin ejecutar nada)
+# Uso: just tag         (falla si el tag ya existe)
+#      just tag -F      (sobreescribe el tag existente)
+#      just tag-dry-run (ver qué haría sin ejecutar nada)
 [group('release')]
-tag:
+tag *FLAGS:
     @echo "→ Creando y empujando tag (VERSION={{VERSION}}, rama: $(git rev-parse --abbrev-ref HEAD))"
-    sh {{scripts}}/tag-release.sh --push
+    sh {{scripts}}/tag-release.sh --push {{ if FLAGS == "-F" { "--force" } else { FLAGS } }}
 
 # Muestra qué tag se crearía y qué workflows se dispararían, sin hacer cambios
 [group('release')]
