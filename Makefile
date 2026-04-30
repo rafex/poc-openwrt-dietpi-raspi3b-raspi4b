@@ -19,7 +19,7 @@
 #   make rust                # solo Rust host (para desarrollo)
 #   make rust-arm64          # cross-compile Rust → aarch64
 #   make fat-jar             # fat JAR Java (requiere JDK 21)
-#   make native-arm64        # GraalVM native image arm64 (requiere GraalVM CE 21)
+#   make native-arm64        # GraalVM native image arm64 (requiere GraalVM CE 25, código Java 21)
 #   make frontend            # compilar frontend (Pug→HTML + Sass + TS + Vite)
 #   make all                 # rust-arm64 + fat-jar + frontend
 #   make check               # cargo check + clippy (sin compilar)
@@ -111,7 +111,7 @@ native: fat-jar _ensure-graalvm
 	@echo "✓ $(NATIVE_BIN)"
 	@ls -lh $(NATIVE_BIN)
 
-## native-arm64: GraalVM Native Image arm64 (requiere GraalVM CE 21 + QEMU, usar en CI)
+## native-arm64: GraalVM Native Image arm64 (requiere GraalVM CE 25 + QEMU, usar en CI)
 native-arm64: fat-jar rust-arm64 _ensure-graalvm
 	@echo "── GraalVM Native Image (arm64) ────────────────────────────────"
 	@echo "  NOTA: cross-compilation GraalVM requiere QEMU+binfmt en CI."
@@ -265,7 +265,14 @@ _ensure-java:
 _ensure-graalvm:
 	@java -version 2>&1 | grep -qi 'graalvm\|native' || { \
 	  echo "ADVERTENCIA: GraalVM no detectado — native image puede fallar."; \
-	  echo "  Instala GraalVM CE 21: https://github.com/graalvm/graalvm-ce-builds"; }
+	  echo "  Instala GraalVM CE 25 (compila código Java 21):"; \
+	  echo "    https://github.com/graalvm/graalvm-ce-builds/releases"; \
+	  echo "  O via SDKMAN:  sdk install java 25-graalce"; }
+	@java -version 2>&1 | grep -qi 'graalvm' && { \
+	  VER=$$(java -version 2>&1 | grep -oP '(?<=version ")[0-9]+' | head -1); \
+	  [ "$$VER" -ge 25 ] 2>/dev/null || \
+	    echo "ADVERTENCIA: GraalVM $$VER detectado — se recomienda GraalVM 25 (mejor compilación native image)"; \
+	} || true
 
 _ensure-node:
 	@command -v node >/dev/null 2>&1 || { \

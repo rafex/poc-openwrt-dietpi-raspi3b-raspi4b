@@ -71,10 +71,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instalar GraalVM CE 21 (arm64 cross-compile via QEMU)
+      # GraalVM 25 compila código Java 21 (source/target en pom.xml se mantiene en 21)
+      # Ventajas vs GraalVM 21: mejor PGO, menor footprint, startup más rápido
+      - name: Instalar GraalVM CE 25 (compila código Java 21)
         uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '21'
+          java-version: '25'
           distribution: 'graalvm-community'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -108,10 +110,10 @@ jobs:
 
       - name: Build GraalVM Native Image arm64
         working-directory: backend/java/ai-analyzer
-        env:
-          # Forzar target arm64 a través de cross-compilación GraalVM
-          JAVA_HOME_NATIVE: /usr/lib/jvm/graalvm-ce-java21
         run: |
+          # JAVA_HOME ya apunta a GraalVM 25 gracias a graalvm/setup-graalvm@v1
+          # El código fuente es Java 21 (source/target en pom.xml); GraalVM 25
+          # compila bytecode Java 21 sin necesidad de flags adicionales.
           mvn -q -Pnative package -DskipTests \
             -Dnative.compiler.path=aarch64-linux-gnu-gcc \
             -Dnative.imageName=ai-analyzer \

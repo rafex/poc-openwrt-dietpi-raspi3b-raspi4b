@@ -90,10 +90,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Instalar GraalVM CE 21
+      # GraalVM 25 compila código Java 21 (source/target en pom.xml se mantiene en 21)
+      # Mejoras vs GraalVM 21: mejor PGO, menor footprint, startup más rápido,
+      # mejor soporte de Panama FFI (estable desde JDK 22, sin flags extra)
+      - name: Instalar GraalVM CE 25 (compila código Java 21)
         uses: graalvm/setup-graalvm@v1
         with:
-          java-version: '21'
+          java-version: '25'
           distribution: 'graalvm-community'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -126,6 +129,8 @@ jobs:
       - name: GraalVM Native Image arm64
         working-directory: backend/java/ai-analyzer
         run: |
+          # JAVA_HOME ya apunta a GraalVM 25 gracias a graalvm/setup-graalvm@v1
+          # source/target Java 21 — GraalVM 25 compila bytecode 21 sin flags extra
           ./mvnw -q -Pnative package -DskipTests \
             -Dnative.compiler.path=aarch64-linux-gnu-gcc \
             -Dnative.imageName=ai-analyzer \

@@ -186,22 +186,32 @@
       <!--
         GraalVM Native Image — compilar a binario arm64 en CI/CD.
         Se activa con:  mvn -Pnative package
+
+        Compilador: GraalVM 25 (CI/CD) aunque el código fuente sea Java 21.
+        GraalVM 25 mejora el análisis estático, PGO y el footprint del binario
+        respecto a GraalVM 21, manteniendo compatibilidad con bytecode Java 21.
+
+        native-maven-plugin 0.10.3 es el mínimo compatible con GraalVM 25.
       -->
       <plugin>
         <groupId>org.graalvm.buildtools</groupId>
         <artifactId>native-maven-plugin</artifactId>
-        <version>0.10.2</version>
+        <version>0.10.3</version>
         <extensions>true</extensions>
         <configuration>
           <mainClass>${mainClass}</mainClass>
           <imageName>ai-analyzer</imageName>
           <buildArgs>
-            <!-- Panama FFI necesita este flag en GraalVM -->
-            <buildArg>-H:+ForeignAPISupport</buildArg>
+            <!--
+              -H:+ForeignAPISupport eliminado: Panama FFI (Foreign Function &amp; Memory API)
+              es estable desde JDK 22 y está habilitado por defecto en GraalVM 22+.
+              En GraalVM 25 el flag genera WARNING "obsolete option" y puede eliminarse.
+            -->
             <!-- La clase DbLibrary inicializa MethodHandles en runtime, no en build time -->
             <buildArg>--initialize-at-run-time=mx.rafex.analyzer.db.DbLibrary</buildArg>
-            <!-- No incluir el agente de SegFault en el binario final -->
+            <!-- Fallar si no se puede compilar (sin fallback a JVM interpretada) -->
             <buildArg>--no-fallback</buildArg>
+            <!-- Stack traces completos en excepciones no capturadas -->
             <buildArg>-H:+ReportExceptionStackTraces</buildArg>
           </buildArgs>
         </configuration>
