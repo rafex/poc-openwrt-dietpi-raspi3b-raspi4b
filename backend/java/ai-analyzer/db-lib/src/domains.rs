@@ -38,7 +38,7 @@ pub unsafe extern "C" fn domain_category_upsert(
     };
     let dom = match cstr_to_str(domain)     { Some(s) => s, None => { set_last_error("domain nulo"); return 0; } };
     let cat = match cstr_to_str(category)   { Some(s) => s, None => { set_last_error("category nulo"); return 0; } };
-    let src = match cstr_to_str(source)     { Some(s) => s, None => "rule" };
+    let src = cstr_to_str(source).unwrap_or("rule");
     let ua  = match cstr_to_str(updated_at) { Some(s) => s, None => { set_last_error("updated_at nulo"); return 0; } };
 
     let conn = h.conn.lock();

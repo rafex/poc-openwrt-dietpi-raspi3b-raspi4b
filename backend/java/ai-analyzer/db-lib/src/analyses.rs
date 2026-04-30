@@ -44,9 +44,9 @@ pub unsafe extern "C" fn analysis_insert(
         None => { set_last_error("handle nulo"); return 0; }
     };
     let ts   = match cstr_to_str(timestamp) { Some(s) => s, None => { set_last_error("timestamp nulo"); return 0; } };
-    let risk = match cstr_to_str(risk)      { Some(s) => s, None => "BAJO" };
-    let txt  = match cstr_to_str(analysis)  { Some(s) => s, None => "" };
-    let bfmt = match cstr_to_str(bytes_fmt) { Some(s) => s, None => "0 B" };
+    let risk = cstr_to_str(risk).unwrap_or("BAJO");
+    let txt  = cstr_to_str(analysis).unwrap_or_default();
+    let bfmt = cstr_to_str(bytes_fmt).unwrap_or("0 B");
 
     let conn = h.conn.lock();
     match conn.execute(

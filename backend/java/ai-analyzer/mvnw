@@ -25,7 +25,9 @@ fi
 # Directorio de distribución en ~/.m2/wrapper/dists
 DISTRIBUTION_NAME=$(basename "${DISTRIBUTION_URL}" .zip)
 WRAPPER_DIR="${HOME}/.m2/wrapper/dists/${DISTRIBUTION_NAME}"
-MAVEN_HOME="${WRAPPER_DIR}/unzipped/${DISTRIBUTION_NAME}"
+# El zip apache-maven-X.Y.Z-bin.zip extrae a apache-maven-X.Y.Z/ (sin el sufijo -bin)
+DISTRIBUTION_DIR=$(echo "${DISTRIBUTION_NAME}" | sed 's/-bin$//')
+MAVEN_HOME="${WRAPPER_DIR}/unzipped/${DISTRIBUTION_DIR}"
 
 # Descargar si no existe
 if [ ! -d "${MAVEN_HOME}" ]; then

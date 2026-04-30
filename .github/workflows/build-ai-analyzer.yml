@@ -190,10 +190,14 @@ jobs:
           path: ~/.m2/repository
           key: maven-${{ hashFiles('backend/java/ai-analyzer/pom.xml') }}
 
+      - name: Agregar cabeceras de licencia MIT (generate-sources)
+        working-directory: backend/java/ai-analyzer
+        run: mvn -q generate-sources -DskipTests
+
       - name: Compilar (sin native image, sin libanalyzer_db)
         working-directory: backend/java/ai-analyzer
         run: |
-          # Compilar sin -Pnative y con un stub de la librería para verificar que compila
+          # Compilar sin -Pnative; generate-sources ya agregó las cabeceras MIT
           mvn -q compile -DskipTests
 
   # ─── 5. Verificar crate Rust ──────────────────────────────────────────────
