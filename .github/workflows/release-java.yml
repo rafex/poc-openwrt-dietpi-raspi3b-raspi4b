@@ -124,6 +124,10 @@ jobs:
           name: libanalyzer_db-linux-arm64
           path: backend/java/ai-analyzer/
 
+      - name: Agregar cabeceras de licencia MIT (generate-sources)
+        working-directory: backend/java/ai-analyzer
+        run: ./mvnw -q generate-sources -DskipTests
+
       - name: Compilar fat JAR
         working-directory: backend/java/ai-analyzer
         run: ./mvnw -q package -DskipTests
