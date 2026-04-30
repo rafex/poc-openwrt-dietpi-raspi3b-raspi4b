@@ -162,12 +162,7 @@ just setup-router
 
 ### `just router-repeater [env_file] [host]`
 
-**Convierte el router OpenWrt en repetidor WiFi.** Flujo completo en un solo comando:
-
-1. Sube el archivo `.env` de credenciales al router como `/etc/wifi-repeater.env`
-2. Aplica `chmod 600` al archivo en el router
-3. Sube `scripts/setup-openwrt-wifi-repeater.sh` a `/tmp/` del router
-4. Ejecuta el script en el router
+**Convierte el router OpenWrt en repetidor WiFi.** Se ejecuta **desde la máquina admin**: lee las credenciales del `.env` localmente y aplica la configuración UCI en el router via SSH. No se copia ningún archivo al router.
 
 ```bash
 # Uso básico (usa secrets/openwrt.env y ROUTER_IP)
@@ -183,24 +178,29 @@ ROUTER_IP=192.168.2.1 just router-repeater
 just router-repeater env_file=secrets/openwrt.env host=192.168.2.1
 ```
 
-**Prerequisito:** crear el archivo `.env` desde la plantilla:
+**Prerequisitos:**
 
 ```bash
+# 1. Crear el .env con las credenciales reales (nunca va al repo)
 cp secrets/openwrt.env.example secrets/openwrt.env
-# editar con valores reales — este archivo NUNCA va al repo (.gitignore)
+chmod 600 secrets/openwrt.env
+# editar: HOME_SSID, HOME_PASS, AP_SSID, AP_PASS
+
+# 2. Tener acceso SSH al router (recomendado: sin password)
+ssh-copy-id root@192.168.1.1
 ```
 
 Contenido del `.env`:
 
 ```sh
-HOME_SSID="NombreWiFiCasa"       # SSID al que el router se conecta como cliente
-HOME_PASS="PasswordCasa"          # contraseña WPA2 (mínimo 8 caracteres)
-AP_SSID="OpenWrt-Portal"          # SSID del AP que expone el router
-AP_PASS="PasswordAP"              # WPA2 (opcional — vacío = AP abierto sin contraseña)
+HOME_SSID="NombreWiFiCasa"    # SSID de la red a la que el router se conecta como cliente
+HOME_PASS="PasswordCasa"       # contraseña WPA2 (mínimo 8 caracteres)
+AP_SSID="OpenWrt-Portal"       # SSID del AP que el router expone para clientes
+AP_PASS="PasswordAP"           # WPA2 (opcional — vacío o ausente = AP abierto)
 
-# Radios (opcional — autodetectado si se omite)
-# WIFI_STA="radio0"               # radio cliente hacia la red de casa
-# WIFI_AP="radio1"                # radio para los clientes del portal
+# Radios (opcional — se autodetectan consultando el router via SSH si se omiten)
+# WIFI_STA="radio0"            # radio para el cliente STA (hacia la red de casa)
+# WIFI_AP="radio1"             # radio para el AP (para clientes del portal)
 ```
 
 Resultado en el router:
@@ -216,20 +216,9 @@ radio AP  (radio1) ──→ AP "OpenWrt-Portal" (LAN, para clientes del portal)
 
 Control del router OpenWrt durante las demos.
 
-### `just router-repeater-push-env [env_file] [host]`
-
-Sube únicamente el archivo `.env` de credenciales al router, sin ejecutar el script de configuración. Útil para actualizar credenciales sin reconfigurar la radio.
-
-```bash
-just router-repeater-push-env
-just router-repeater-push-env env_file=secrets/openwrt-nueva.env
-```
-
----
-
 ### `just router-repeater-dry-run [env_file] [host]`
 
-Muestra exactamente qué haría `router-repeater` sin aplicar ningún cambio al router. Sube el `.env` y el script, ejecuta con `--dry-run`.
+Muestra exactamente qué haría `router-repeater` sin aplicar ningún cambio al router. Las credenciales se leen localmente; no se establece ninguna conexión SSH durante el dry-run.
 
 ```bash
 just router-repeater-dry-run
@@ -239,13 +228,21 @@ just router-repeater-dry-run env_file=secrets/openwrt.env host=192.168.2.1
 Salida de ejemplo:
 
 ```
-[INFO]  --- DRY-RUN (sin cambios) ---
+[INFO]  Cargando credenciales desde: secrets/openwrt.env
+[OK]    Credenciales cargadas — HOME_SSID='MiCasa_WiFi'  AP_SSID='OpenWrt-Portal'
+[WARN]  AP: SIN contraseña — red abierta (cualquiera puede conectarse)
+[INFO]  Radio STA (cliente → casa): radio0
+[INFO]  Radio AP  (para clientes):  radio1
+
+[INFO]  ─── DRY-RUN ─── (ningún cambio se aplica en el router) ──────────
+[INFO]    Router     : root@192.168.1.1
 [INFO]    HOME_SSID  : MiCasa_WiFi
 [INFO]    AP_SSID    : OpenWrt-Portal
 [WARN]    AP_SEGUR   : ABIERTO (sin contraseña)
-[INFO]    STA radio  : radio0
-[INFO]    AP  radio  : radio1
-[OK]    Dry-run completado
+[INFO]    STA radio  : radio0  (cliente → red de casa)
+[INFO]    AP  radio  : radio1  (AP para clientes del portal)
+
+[OK]    Dry-run completado. Ejecuta sin --dry-run para aplicar.
 ```
 
 ---
@@ -877,14 +874,14 @@ just setup-frontend-fast         # sin recompilar — solo redeploy del contened
 ### Cambiar credenciales WiFi del repetidor
 
 ```bash
-# Editar el .env local
+# Editar el .env local (las credenciales solo viven en la máquina admin)
 vim secrets/openwrt.env
 
-# Opción A: solo subir el .env (si el script ya configuró la radio correctamente)
-just router-repeater-push-env
-
-# Opción B: reconfigurar todo (cambió HOME_SSID o AP_SSID)
+# Re-aplicar la configuración en el router (siempre desde la máquina admin)
 just router-repeater
+
+# Si solo quieres verificar qué se aplicaría antes de hacerlo
+just router-repeater-dry-run
 ```
 
 ---
@@ -935,8 +932,7 @@ DESPLIEGUE
   router-repeater [env] [host]  Configura repetidor WiFi (flujo completo)
 
 OPENWRT
-  router-repeater-push-env      Solo sube el .env de credenciales
-  router-repeater-dry-run       Previsualiza sin aplicar cambios
+  router-repeater-dry-run       Previsualiza sin aplicar cambios (sin SSH)
   router-clients                Lista clientes conectados
   router-block/allow/kick       Control de clientes
   portal-dns-on/off             Control DNS spoof

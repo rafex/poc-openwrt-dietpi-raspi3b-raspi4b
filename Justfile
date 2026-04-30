@@ -127,59 +127,29 @@ setup-router:
     @echo "→ Setup OpenWrt en {{ROUTER_IP}}"
     bash {{scripts}}/setup-openwrt.sh
 
-# Convierte el router OpenWrt en repetidor WiFi (STA → red de casa, AP → clientes)
-# Flujo: sube .env → sube script → ejecuta en el router
-# Uso: just router-repeater                           # usa secrets/openwrt.env
-#      just router-repeater env_file=mi/ruta.env      # .env alternativo
-#      ROUTER_IP=192.168.2.1 just router-repeater     # router en otra IP
+# Convierte el router OpenWrt en repetidor WiFi (STA → red de casa, AP → clientes).
+# Lee las credenciales del .env LOCALMENTE y aplica la configuración via SSH —
+# no se copia ningún archivo al router.
+# Uso: just router-repeater
+#      just router-repeater env_file=secrets/openwrt.env
+#      ROUTER_IP=192.168.2.1 just router-repeater
 [group('deploy')]
 router-repeater env_file=OPENWRT_ENV host=ROUTER_IP:
     @echo "→ Configurando repetidor WiFi en {{host}}"
-    @[ -f "{{project_root}}/{{env_file}}" ] || { \
-      echo "ERROR: {{env_file}} no existe."; \
-      echo "  Crea desde la plantilla:"; \
-      echo "    cp secrets/openwrt.env.example secrets/openwrt.env"; \
-      echo "    # editar con valores reales"; \
-      exit 1; }
-    @echo "  [1/3] Subiendo credenciales a {{host}}:/etc/wifi-repeater.env"
-    scp "{{project_root}}/{{env_file}}" \
-        {{SSH_USER_ROUTER}}@{{host}}:/etc/wifi-repeater.env
-    ssh {{SSH_USER_ROUTER}}@{{host}} "chmod 600 /etc/wifi-repeater.env"
-    @echo "  [2/3] Subiendo script de configuración"
-    scp "{{project_root}}/scripts/setup-openwrt-wifi-repeater.sh" \
-        {{SSH_USER_ROUTER}}@{{host}}:/tmp/setup-openwrt-wifi-repeater.sh
-    @echo "  [3/3] Ejecutando configuración del repetidor"
-    ssh {{SSH_USER_ROUTER}}@{{host}} \
-        "sh /tmp/setup-openwrt-wifi-repeater.sh --env-file /etc/wifi-repeater.env"
-    @echo "✓ Repetidor WiFi configurado en {{host}}"
+    sh {{scripts}}/setup-openwrt-wifi-repeater.sh \
+      --host {{host}} \
+      --ssh-user {{SSH_USER_ROUTER}} \
+      --env-file "{{project_root}}/{{env_file}}"
 
-# Sube el archivo .env de credenciales al router (sin ejecutar el script)
-# Útil para actualizar credenciales sin reconfigurar la radio
-[group('openwrt')]
-router-repeater-push-env env_file=OPENWRT_ENV host=ROUTER_IP:
-    @echo "→ Subiendo credenciales WiFi a {{host}}"
-    @[ -f "{{project_root}}/{{env_file}}" ] || { \
-      echo "ERROR: {{env_file}} no existe. Crea desde secrets/openwrt.env.example"; \
-      exit 1; }
-    scp "{{project_root}}/{{env_file}}" \
-        {{SSH_USER_ROUTER}}@{{host}}:/etc/wifi-repeater.env
-    ssh {{SSH_USER_ROUTER}}@{{host}} "chmod 600 /etc/wifi-repeater.env"
-    @echo "✓ /etc/wifi-repeater.env actualizado en {{host}} (chmod 600)"
-
-# Muestra qué haría el script del repetidor, sin aplicar cambios (--dry-run)
+# Muestra qué haría el script del repetidor, sin aplicar ningún cambio en el router
 [group('openwrt')]
 router-repeater-dry-run env_file=OPENWRT_ENV host=ROUTER_IP:
-    @echo "→ Dry-run repetidor WiFi en {{host}}"
-    @[ -f "{{project_root}}/{{env_file}}" ] || { \
-      echo "ERROR: {{env_file}} no existe. Crea desde secrets/openwrt.env.example"; \
-      exit 1; }
-    scp "{{project_root}}/{{env_file}}" \
-        {{SSH_USER_ROUTER}}@{{host}}:/etc/wifi-repeater.env
-    ssh {{SSH_USER_ROUTER}}@{{host}} "chmod 600 /etc/wifi-repeater.env"
-    scp "{{project_root}}/scripts/setup-openwrt-wifi-repeater.sh" \
-        {{SSH_USER_ROUTER}}@{{host}}:/tmp/setup-openwrt-wifi-repeater.sh
-    ssh {{SSH_USER_ROUTER}}@{{host}} \
-        "sh /tmp/setup-openwrt-wifi-repeater.sh --env-file /etc/wifi-repeater.env --dry-run"
+    @echo "→ Dry-run repetidor WiFi (sin cambios en {{host}})"
+    sh {{scripts}}/setup-openwrt-wifi-repeater.sh \
+      --host {{host}} \
+      --ssh-user {{SSH_USER_ROUTER}} \
+      --env-file "{{project_root}}/{{env_file}}" \
+      --dry-run
 
 # =============================================================================
 # SECRETOS — age + sops
