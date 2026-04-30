@@ -8,22 +8,24 @@ name: Release — ai-analyzer Java (arm64)
 #   4. Construir imagen Docker linux/arm64 y publicar en ghcr.io
 #
 # Triggers:
-#   • push de tag  v*.*.*   →  release completo + imagen ghcr.io
-#   • workflow_dispatch      →  release manual con versión explícita
+#   • push de tag  v*.*.*          →  release producción  + :latest en ghcr.io
+#   • push de tag  v*.*.*-preview  →  pre-release (develop) — NO sobreescribe :latest
+#   • workflow_dispatch             →  release manual con versión explícita
 #
-# Imagen publicada:
-#   ghcr.io/<owner>/poc-ai-analyzer-java:<tag>
-#   ghcr.io/<owner>/poc-ai-analyzer-java:latest   (solo en tags semánticos)
+# Tags de Docker publicados:
+#   v0.4.0          →  ghcr.io/…:0.4.0  ghcr.io/…:0.4  ghcr.io/…:latest
+#   v0.4.0-preview  →  ghcr.io/…:0.4.0-preview  ghcr.io/…:preview  (sin latest)
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
   push:
     tags:
       - 'v*.*.*'
+      - 'v*.*.*-preview'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag de versión (ej: v1.2.3)'
+        description: 'Tag de versión (ej: v1.2.3 o v1.2.3-preview)'
         required: true
         default: 'v0.0.0-dev'
 
@@ -182,8 +184,12 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: "AI Analyzer ${{ steps.version.outputs.tag }}"
+          prerelease: ${{ contains(steps.version.outputs.tag, '-preview') }}
+          make_latest: ${{ !contains(steps.version.outputs.tag, '-preview') }}
           body: |
             ## AI Analyzer ${{ steps.version.outputs.tag }}
+
+            ${{ contains(steps.version.outputs.tag, '-preview') && '> ⚠️ **Pre-release** — compilado desde rama `develop`. No usar en producción.' || '> ✅ **Release de producción** — compilado desde rama `main`.' }}
 
             ### Artefactos para Raspberry Pi 4B (linux/arm64)
 
@@ -213,7 +219,6 @@ jobs:
             dist/libanalyzer_db-linux-arm64/libanalyzer_db-linux-arm64.so
             dist/ai-analyzer-fat-jar/ai-analyzer-fat.jar
           fail_on_unmatched_files: true
-          make_latest: true
           token: ${{ secrets.GITHUB_TOKEN }}
 
   # ─── 4. Docker image → ghcr.io ────────────────────────────────────────────
@@ -260,7 +265,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-preview') }}
+            type=raw,value=preview,enable=${{ contains(github.ref, '-preview') }}
             type=sha,prefix=dev-,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
           labels: |
             org.opencontainers.image.title=AI Analyzer Java

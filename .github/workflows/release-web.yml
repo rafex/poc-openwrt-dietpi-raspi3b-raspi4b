@@ -12,21 +12,24 @@ name: Release — ai-analyzer Web (nginx + frontend)
 #   • SSE sin buffer en /events
 #
 # Triggers:
-#   • push de tag  v*.*.*   →  release completo
-#   • push a main con cambios en frontend/** o nginx/**  →  imagen dev-<sha>
-#   • workflow_dispatch      →  release manual
+#   • push de tag  v*.*.*          →  release producción  + :latest en ghcr.io
+#   • push de tag  v*.*.*-preview  →  pre-release (develop) — NO sobreescribe :latest
+#   • push a main/develop con cambios en frontend/** o nginx/**  →  imagen dev-<sha>
+#   • workflow_dispatch             →  release manual
 #
-# Imagen publicada:
-#   ghcr.io/<owner>/poc-ai-analyzer-web:<tag>
-#   ghcr.io/<owner>/poc-ai-analyzer-web:latest   (solo en tags semánticos)
+# Tags de Docker publicados:
+#   v0.4.0          →  ghcr.io/…:0.4.0  ghcr.io/…:0.4  ghcr.io/…:latest
+#   v0.4.0-preview  →  ghcr.io/…:0.4.0-preview  ghcr.io/…:preview  (sin latest)
 # ─────────────────────────────────────────────────────────────────────────────
 
 on:
   push:
     tags:
       - 'v*.*.*'
+      - 'v*.*.*-preview'
     branches:
       - main
+      - develop
     paths:
       - 'frontend/**'
       - 'nginx/**'
@@ -34,7 +37,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag de versión (ej: v1.2.3)'
+        description: 'Tag de versión (ej: v1.2.3 o v1.2.3-preview)'
         required: true
         default: 'v0.0.0-dev'
 
@@ -121,7 +124,8 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-preview') }}
+            type=raw,value=preview,enable=${{ contains(github.ref, '-preview') }}
             type=sha,prefix=dev-
           labels: |
             org.opencontainers.image.title=AI Analyzer Web

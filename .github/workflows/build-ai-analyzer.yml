@@ -2,13 +2,13 @@ name: Build AI Analyzer (Rust + Java → arm64)
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
     paths:
       - 'backend/java/ai-analyzer/**'
       - 'backend/java/ai-analyzer/db-lib/**'
       - '.github/workflows/build-ai-analyzer.yml'
   pull_request:
-    branches: [main]
+    branches: [main, develop]
     paths:
       - 'backend/java/ai-analyzer/**'
       - 'backend/java/ai-analyzer/db-lib/**'

@@ -25,6 +25,9 @@
 project_root := justfile_directory()
 scripts      := project_root / "scripts"
 
+# ── Versión del proyecto (leída de VERSION en la raíz) ───────────────────────
+VERSION := `cat VERSION 2>/dev/null | tr -d '[:space:]' || echo "0.0.0"`
+
 # ── Variables de entorno con defaults ────────────────────────────────────────
 # Pueden sobreescribirse: PI4B_IP=192.168.1.200 just setup-java
 PI4B_IP         := env_var_or_default("RASPI4B_IP",       "192.168.1.167")
@@ -486,6 +489,90 @@ topology-setup:
 topology-switch name:
     @echo "→ Cambiando topología a '{{name}}'"
     bash {{scripts}}/topology-switch.sh "{{name}}"
+
+# =============================================================================
+# RELEASE — Etiquetado semántico por rama
+# =============================================================================
+# Lógica de tags:
+#   rama develop  →  v0.4.0-preview   (pre-release, no sobreescribe :latest)
+#   rama main     →  v0.4.0           (production, publica :latest en ghcr.io)
+#
+# Al hacer push del tag, GitHub Actions dispara automáticamente:
+#   release-java.yml + release-python.yml + release-web.yml
+# =============================================================================
+
+# Crea y empuja el tag de release según la rama actual.
+# develop → v{{VERSION}}-preview  |  main → v{{VERSION}}
+# Uso: just tag
+#      just tag-dry-run   (ver qué haría sin ejecutar nada)
+[group('release')]
+tag:
+    @echo "→ Creando y empujando tag (VERSION={{VERSION}}, rama: $(git rev-parse --abbrev-ref HEAD))"
+    sh {{scripts}}/tag-release.sh --push
+
+# Muestra qué tag se crearía y qué workflows se dispararían, sin hacer cambios
+[group('release')]
+tag-dry-run:
+    @echo "→ Dry-run tag release (VERSION={{VERSION}})"
+    sh {{scripts}}/tag-release.sh --dry-run --push
+
+# Crea el tag solo en local (sin push a origin)
+# Útil para revisar antes de empujar
+[group('release')]
+tag-local:
+    @echo "→ Creando tag local (sin push) — VERSION={{VERSION}}"
+    sh {{scripts}}/tag-release.sh
+
+# Empuja el último tag local a origin (sin crear uno nuevo)
+# Usar después de just tag-local
+[group('release')]
+tag-push:
+    #!/usr/bin/env bash
+    TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || git tag --sort=-version:refname | head -1)
+    if [ -z "$TAG" ]; then
+      echo "ERROR: No hay ningún tag en el commit actual. Usa 'just tag-local' primero."
+      exit 1
+    fi
+    echo "→ Empujando tag: ${TAG}"
+    git push origin "${TAG}"
+    echo "✓ Empujado: ${TAG}"
+    echo "  gh run list --workflow=release-java.yml"
+
+# Sobreescribe el tag existente con el commit actual y empuja (--force)
+# Útil para rehacer un preview tras un fix rápido
+[group('release')]
+tag-force:
+    @echo "→ Forzando tag (--force) en VERSION={{VERSION}}"
+    sh {{scripts}}/tag-release.sh --push --force
+
+# Actualiza el archivo VERSION y muestra el próximo tag
+# Uso: just version-set 0.5.0
+[group('release')]
+version-set version:
+    @echo "{{version}}" > VERSION
+    @echo "→ VERSION actualizado a {{version}}"
+    @echo "  Próximo tag en develop : v{{version}}-preview"
+    @echo "  Próximo tag en main    : v{{version}}"
+
+# Muestra la versión actual y el tag que se generaría en la rama actual
+[group('release')]
+version-show:
+    #!/usr/bin/env bash
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    VERSION=$(cat VERSION 2>/dev/null | tr -d '[:space:]' || echo "0.0.0")
+    case "$BRANCH" in
+      develop)      TAG="v${VERSION}-preview" ;;
+      main|master)  TAG="v${VERSION}" ;;
+      *)            TAG="v${VERSION}-preview (rama: ${BRANCH})" ;;
+    esac
+    echo ""
+    echo "  VERSION  : ${VERSION}"
+    echo "  Rama     : ${BRANCH}"
+    echo "  Tag      : ${TAG}"
+    echo ""
+    echo "  Tags existentes:"
+    git tag --list "v*" | sort -V | tail -8 | sed 's/^/    /'
+    echo ""
 
 # =============================================================================
 # DESARROLLO LOCAL
