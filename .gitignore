@@ -13,6 +13,9 @@ __pycache__/
 keys.txt
 secrets/*.plain.yaml
 secrets/*.dec.yaml
+# Archivos .env con credenciales reales (el .example SÍ va al repo)
+secrets/*.env
+!secrets/*.env.example
 
 # Rust build artifacts
 target/
