@@ -36,6 +36,75 @@ SSH_USER_PI     := env_var_or_default("SSH_USER_PI",      "root")
 SSH_USER_ROUTER := env_var_or_default("SSH_USER_ROUTER",  "root")
 # Ruta al archivo .env con credenciales WiFi del repetidor (no se commitea)
 OPENWRT_ENV     := env_var_or_default("OPENWRT_ENV", "secrets/openwrt.env")
+# Token para autenticarse en ghcr.io al hacer pull de imágenes privadas
+GHCR_TOKEN      := env_var_or_default("GHCR_TOKEN",  "")
+GHCR_USER       := env_var_or_default("GHCR_USER",   "rafex")
+
+# =============================================================================
+# DESPLIEGUE — Contenedores podman (desde ghcr.io)
+# =============================================================================
+
+# Despliega el stack completo (backend Java + nginx web) via podman desde ghcr.io
+# Uso: just setup-containers
+#      just setup-containers v1.2.3          # release específico
+#      GHCR_TOKEN=ghp_xxx just setup-containers   # paquetes privados
+[group('deploy')]
+setup-containers release=RELEASE_TAG host=PI4B_IP:
+    @echo "→ Desplegando stack podman (release: {{release}}) en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       GHCR_TOKEN='{{GHCR_TOKEN}}' GHCR_USER='{{GHCR_USER}}' \
+       bash scripts/setup-raspi4b-containers.sh \
+         --release={{release}} \
+         --backend=java"
+
+# Despliega solo el backend Java en podman (sin web)
+[group('deploy')]
+setup-java-container release=RELEASE_TAG host=PI4B_IP:
+    @echo "→ Desplegando ai-analyzer-java (release: {{release}}) en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       GHCR_TOKEN='{{GHCR_TOKEN}}' GHCR_USER='{{GHCR_USER}}' \
+       bash scripts/setup-raspi4b-containers.sh \
+         --release={{release}} \
+         --backend=java \
+         --skip-web"
+
+# Despliega solo el backend Python en podman (sin web)
+[group('deploy')]
+setup-python-container release=RELEASE_TAG host=PI4B_IP:
+    @echo "→ Desplegando ai-analyzer-python (release: {{release}}) en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       GHCR_TOKEN='{{GHCR_TOKEN}}' GHCR_USER='{{GHCR_USER}}' \
+       bash scripts/setup-raspi4b-containers.sh \
+         --release={{release}} \
+         --backend=python \
+         --skip-web"
+
+# Despliega solo el nginx + frontend (sin tocar el backend)
+[group('deploy')]
+setup-web-container release=RELEASE_TAG host=PI4B_IP:
+    @echo "→ Desplegando ai-analyzer-web nginx (release: {{release}}) en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       GHCR_TOKEN='{{GHCR_TOKEN}}' GHCR_USER='{{GHCR_USER}}' \
+       bash scripts/setup-raspi4b-containers.sh \
+         --release={{release}} \
+         --skip-backend"
+
+# Build local en la Pi: descarga binarios de GitHub Releases y construye imagen podman
+# Útil cuando no hay acceso a ghcr.io o los paquetes son privados
+[group('deploy')]
+setup-java-build-local release=RELEASE_TAG host=PI4B_IP:
+    @echo "→ Build local ai-analyzer-java (release: {{release}}) en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       bash scripts/setup-raspi4b-containers.sh \
+         --release={{release}} \
+         --backend=java \
+         --build-local \
+         --skip-web"
 
 # =============================================================================
 # DESPLIEGUE — ai-analyzer (Java nativo + Rust .so)

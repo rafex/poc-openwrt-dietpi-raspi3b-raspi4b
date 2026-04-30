@@ -1,0 +1,287 @@
+name: Release — ai-analyzer Java (arm64)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Flujo de release para el backend Java:
+#   1. Compilar libanalyzer_db.so (Rust cdylib, aarch64)
+#   2. Compilar binario GraalVM Native Image (aarch64)
+#   3. Publicar artefactos como GitHub Release (tag semántico)
+#   4. Construir imagen Docker linux/arm64 y publicar en ghcr.io
+#
+# Triggers:
+#   • push de tag  v*.*.*   →  release completo + imagen ghcr.io
+#   • workflow_dispatch      →  release manual con versión explícita
+#
+# Imagen publicada:
+#   ghcr.io/<owner>/poc-ai-analyzer-java:<tag>
+#   ghcr.io/<owner>/poc-ai-analyzer-java:latest   (solo en tags semánticos)
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag de versión (ej: v1.2.3)'
+        required: true
+        default: 'v0.0.0-dev'
+
+permissions:
+  contents: write   # crear GitHub Release y subir assets
+  packages: write   # publicar en ghcr.io
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/poc-ai-analyzer-java
+
+jobs:
+  # ─── 1. Compilar Rust → libanalyzer_db-linux-arm64.so ─────────────────────
+  build-rust-arm64:
+    name: "Rust cdylib (aarch64)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Rust stable + target arm64
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Instalar cross-compiler arm64
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Caché Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/java/ai-analyzer/db-lib/target
+          key: rust-arm64-${{ hashFiles('backend/java/ai-analyzer/db-lib/Cargo.lock') }}
+          restore-keys: rust-arm64-
+
+      - name: Build cdylib arm64
+        working-directory: backend/java/ai-analyzer/db-lib
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+        run: |
+          cargo build --release --target aarch64-unknown-linux-gnu
+          cp target/aarch64-unknown-linux-gnu/release/libanalyzer_db.so \
+             ../libanalyzer_db-linux-arm64.so
+          echo "Tamaño: $(du -sh ../libanalyzer_db-linux-arm64.so)"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libanalyzer_db-linux-arm64
+          path: backend/java/ai-analyzer/libanalyzer_db-linux-arm64.so
+          retention-days: 7
+
+  # ─── 2. Compilar Java → GraalVM Native Image arm64 ────────────────────────
+  build-java-native-arm64:
+    name: "GraalVM Native Image (aarch64)"
+    runs-on: ubuntu-latest
+    needs: build-rust-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar GraalVM CE 21
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '21'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Instalar QEMU + cross-tools arm64
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            qemu-user-static binfmt-support \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            zlib1g-dev libstdc++-11-dev
+          sudo update-binfmts --enable qemu-aarch64
+
+      - name: Caché Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ hashFiles('backend/java/ai-analyzer/pom.xml') }}
+          restore-keys: maven-
+
+      - name: Descargar libanalyzer_db
+        uses: actions/download-artifact@v4
+        with:
+          name: libanalyzer_db-linux-arm64
+          path: backend/java/ai-analyzer/
+
+      - name: Compilar fat JAR
+        working-directory: backend/java/ai-analyzer
+        run: ./mvnw -q package -DskipTests
+
+      - name: GraalVM Native Image arm64
+        working-directory: backend/java/ai-analyzer
+        run: |
+          ./mvnw -q -Pnative package -DskipTests \
+            -Dnative.compiler.path=aarch64-linux-gnu-gcc \
+            -Dnative.imageName=ai-analyzer \
+            -Dnative.platform=aarch64-linux
+          cp target/ai-analyzer ai-analyzer-linux-arm64
+          echo "Tamaño: $(du -sh ai-analyzer-linux-arm64)"
+
+      - name: Upload artifact — binario nativo
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-analyzer-linux-arm64
+          path: backend/java/ai-analyzer/ai-analyzer-linux-arm64
+          retention-days: 7
+
+      - name: Upload artifact — fat JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-analyzer-fat-jar
+          path: backend/java/ai-analyzer/target/ai-analyzer-fat.jar
+          retention-days: 7
+
+  # ─── 3. GitHub Release con artefactos ─────────────────────────────────────
+  github-release:
+    name: "GitHub Release"
+    runs-on: ubuntu-latest
+    needs: [build-rust-arm64, build-java-native-arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar todos los artefactos
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Determinar versión
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Publicando release: ${TAG}"
+
+      - name: Crear GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "AI Analyzer ${{ steps.version.outputs.tag }}"
+          body: |
+            ## AI Analyzer ${{ steps.version.outputs.tag }}
+
+            ### Artefactos para Raspberry Pi 4B (linux/arm64)
+
+            | Archivo | Descripción |
+            |---|---|
+            | `ai-analyzer-linux-arm64` | Binario nativo GraalVM — sin JVM, <80 MB RAM, startup <100ms |
+            | `libanalyzer_db-linux-arm64.so` | Librería Rust (SQLite embebido vía Panama FFI) |
+            | `ai-analyzer-fat.jar` | Fat JAR JVM (fallback, requiere Java 21) |
+
+            ### Imagen Docker (ghcr.io)
+
+            ```bash
+            # Pi4B — instalar stack completo vía podman
+            bash scripts/setup-raspi4b-containers.sh --release=${{ steps.version.outputs.tag }}
+
+            # O pull manual
+            podman pull ghcr.io/${{ github.repository_owner }}/poc-ai-analyzer-java:${{ steps.version.outputs.tag }}
+            ```
+
+            ### Deploy directo (sin podman)
+
+            ```bash
+            bash scripts/setup-raspi4b-ai-analyzer-java.sh --release=${{ steps.version.outputs.tag }}
+            ```
+          files: |
+            dist/ai-analyzer-linux-arm64/ai-analyzer-linux-arm64
+            dist/libanalyzer_db-linux-arm64/libanalyzer_db-linux-arm64.so
+            dist/ai-analyzer-fat-jar/ai-analyzer-fat.jar
+          fail_on_unmatched_files: true
+          make_latest: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── 4. Docker image → ghcr.io ────────────────────────────────────────────
+  publish-java-image:
+    name: "Docker image → ghcr.io (linux/arm64)"
+    runs-on: ubuntu-latest
+    needs: [build-rust-arm64, build-java-native-arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar artefactos compilados
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Preparar contexto Docker
+        run: |
+          mkdir -p _docker_staging
+          cp dist/ai-analyzer-linux-arm64/ai-analyzer-linux-arm64        _docker_staging/
+          cp dist/libanalyzer_db-linux-arm64/libanalyzer_db-linux-arm64.so _docker_staging/
+          cp backend/java/ai-analyzer/Dockerfile                          _docker_staging/
+          echo "── Contexto Docker ──────────────────────────────"
+          ls -lh _docker_staging/
+
+      - name: Login ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU (para build arm64 en runner x86)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Metadatos de imagen (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=dev-,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=AI Analyzer Java
+            org.opencontainers.image.description=Analizador de red con IA — backend Java GraalVM arm64
+            org.opencontainers.image.vendor=Rafex
+
+      - name: Build y push imagen arm64
+        uses: docker/build-push-action@v5
+        with:
+          context: _docker_staging/
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resumen
+        run: |
+          echo "## Imagen publicada" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Pull en Pi4B" >> "$GITHUB_STEP_SUMMARY"
+          echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+          echo "podman pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

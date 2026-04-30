@@ -1,0 +1,155 @@
+name: Release — ai-analyzer Web (nginx + frontend)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Flujo de release para el frontend + nginx:
+#   1. Compilar frontend Vite (Pug → HTML + Sass + TypeScript)
+#   2. Construir imagen Docker nginx:alpine con el frontend compilado
+#   3. Publicar en ghcr.io como linux/arm64
+#
+# La imagen nginx sirve:
+#   • Archivos estáticos del frontend (Vite MPA)
+#   • Proxy reverso → backend Java/Python en localhost:5000
+#   • SSE sin buffer en /events
+#
+# Triggers:
+#   • push de tag  v*.*.*   →  release completo
+#   • push a main con cambios en frontend/** o nginx/**  →  imagen dev-<sha>
+#   • workflow_dispatch      →  release manual
+#
+# Imagen publicada:
+#   ghcr.io/<owner>/poc-ai-analyzer-web:<tag>
+#   ghcr.io/<owner>/poc-ai-analyzer-web:latest   (solo en tags semánticos)
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
+      - 'nginx/**'
+      - '.github/workflows/release-web.yml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag de versión (ej: v1.2.3)'
+        required: true
+        default: 'v0.0.0-dev'
+
+permissions:
+  contents: read
+  packages: write   # publicar en ghcr.io
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/poc-ai-analyzer-web
+  NODE_VERSION: '20'
+
+jobs:
+  # ─── 1. Compilar frontend (Pug + Sass + TS → dist/) ──────────────────────
+  build-frontend:
+    name: "Build frontend (Vite)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Instalar dependencias npm
+        working-directory: frontend
+        run: npm ci --prefer-offline
+
+      - name: Build frontend (pug → html + sass + ts + vite)
+        working-directory: frontend
+        run: npm run build
+
+      - name: Verificar artefactos del frontend
+        run: |
+          echo "── Archivos en frontend/dist/ ──────────────────────────"
+          find frontend/dist -type f | sort
+          echo "── Tamaño total ─────────────────────────────────────────"
+          du -sh frontend/dist/
+
+      - name: Upload artifact — frontend/dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          retention-days: 1
+
+  # ─── 2. Construir imagen nginx y publicar en ghcr.io ──────────────────────
+  publish-web-image:
+    name: "Docker image → ghcr.io (linux/arm64)"
+    runs-on: ubuntu-latest
+    needs: build-frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar frontend compilado
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      - name: Login ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU (para build arm64 en runner x86)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Metadatos de imagen (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,prefix=dev-
+          labels: |
+            org.opencontainers.image.title=AI Analyzer Web
+            org.opencontainers.image.description=Frontend Vite (Pug+Sass+TS) + nginx proxy reverso arm64
+            org.opencontainers.image.vendor=Rafex
+
+      - name: Build y push imagen arm64
+        uses: docker/build-push-action@v5
+        with:
+          # Contexto = raíz del repo para acceder a nginx/ y frontend/dist/
+          context: .
+          file: nginx/Dockerfile
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Resumen
+        run: |
+          echo "## Imagen Web publicada" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Pull en Pi4B" >> "$GITHUB_STEP_SUMMARY"
+          echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+          echo "bash scripts/setup-raspi4b-containers.sh --skip-backend --release=latest" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
