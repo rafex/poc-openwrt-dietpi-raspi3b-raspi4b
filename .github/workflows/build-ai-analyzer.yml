@@ -190,9 +190,9 @@ jobs:
           path: ~/.m2/repository
           key: maven-${{ hashFiles('backend/java/ai-analyzer/pom.xml') }}
 
-      - name: Agregar cabeceras de licencia MIT (generate-sources)
+      - name: Agregar cabeceras de licencia MIT
         working-directory: backend/java/ai-analyzer
-        run: mvn -q generate-sources -DskipTests
+        run: mvn license:update-file-header -q
 
       - name: Compilar (sin native image, sin libanalyzer_db)
         working-directory: backend/java/ai-analyzer
