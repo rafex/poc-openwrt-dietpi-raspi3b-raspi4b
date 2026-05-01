@@ -310,6 +310,7 @@ _pull_image_with_fallback() {
     local selected="$image_name"
     local repo_path="${image_name#${GHCR_REGISTRY}/}"
     repo_path="${repo_path%%:*}"
+    local image_repo="${image_name%:*}"
 
     _list_release_tags() {
         # Lista tags semánticos desde GitHub Releases (no requiere GHCR auth).
@@ -325,6 +326,19 @@ _pull_image_with_fallback() {
         log_ok "Pull completado: $image_name"
         PULLED_IMAGE="$selected"
         return 0
+    fi
+
+    # Si el release viene con prefijo "v" (ej. v0.4.1-preview) y GHCR publica
+    # sin "v" (0.4.1-preview), intentar automáticamente.
+    if [[ "$RELEASE" =~ ^v.+ ]]; then
+        local nov_tag="${RELEASE#v}"
+        local nov_image="${image_repo}:${nov_tag}"
+        log_warn "Tag con prefijo 'v' no encontrado. Intentando sin prefijo: $nov_image"
+        if run_cmd $PODMAN_BIN pull --platform linux/arm64 "$nov_image"; then
+            log_ok "Pull completado sin prefijo 'v': $nov_image"
+            PULLED_IMAGE="$nov_image"
+            return 0
+        fi
     fi
 
     # Fallback seguro para GHCR cuando no existe :latest (solo hay previews).
