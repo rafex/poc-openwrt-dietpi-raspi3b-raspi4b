@@ -248,6 +248,24 @@ jobs:
           echo "── Contexto Docker ──────────────────────────────"
           ls -lh _docker_staging/
 
+      - name: Validar arquitectura de artefactos (debe ser ARM64)
+        run: |
+          set -euo pipefail
+          file _docker_staging/ai-analyzer-linux-arm64
+          file _docker_staging/libanalyzer_db-linux-arm64.so
+
+          # Binario GraalVM: debe ser AArch64
+          file _docker_staging/ai-analyzer-linux-arm64 | grep -Eiq 'aarch64|arm64' || {
+            echo "ERROR: ai-analyzer-linux-arm64 no es ARM64"
+            exit 1
+          }
+
+          # Librería Rust: debe ser AArch64
+          file _docker_staging/libanalyzer_db-linux-arm64.so | grep -Eiq 'aarch64|arm64' || {
+            echo "ERROR: libanalyzer_db-linux-arm64.so no es ARM64"
+            exit 1
+          }
+
       - name: Login ghcr.io
         uses: docker/login-action@v3
         with:
@@ -278,6 +296,7 @@ jobs:
             org.opencontainers.image.vendor=Rafex
 
       - name: Build y push imagen arm64
+        id: buildpush
         uses: docker/build-push-action@v5
         with:
           context: _docker_staging/
@@ -287,6 +306,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Verificar manifest publicado (debe incluir linux/arm64)
+        run: |
+          set -euo pipefail
+          FIRST_TAG="$(echo "${{ steps.meta.outputs.tags }}" | head -1)"
+          docker buildx imagetools inspect "$FIRST_TAG" | tee /tmp/imagetools-java.txt
+          grep -q "linux/arm64" /tmp/imagetools-java.txt || {
+            echo "ERROR: El manifest publicado no contiene linux/arm64"
+            exit 1
+          }
 
       - name: Resumen
         run: |
