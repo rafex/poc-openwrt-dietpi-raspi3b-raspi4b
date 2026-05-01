@@ -100,6 +100,10 @@ log_info "  Build-local: $BUILD_LOCAL"
 ensure_cmd bash curl podman
 load_topology
 
+# DietPi suele ejecutarse sin systemd como PID 1; forzamos cgroupfs para evitar
+# errores de crun/sd-bus al crear/iniciar contenedores.
+PODMAN_BIN="podman --cgroup-manager=cgroupfs"
+
 # ── Configuración de imágenes ─────────────────────────────────────────────────
 GHCR_REGISTRY="ghcr.io"
 IMAGE_JAVA="${GHCR_REGISTRY}/${GHCR_USER}/poc-ai-analyzer-java:${RELEASE}"
@@ -202,7 +206,7 @@ if ! $NO_PULL; then
     if [[ -n "$GHCR_TOKEN" ]]; then
         log_info "Autenticando en ${GHCR_REGISTRY} como ${GHCR_USER}..."
         run_cmd printf '%s' "$GHCR_TOKEN" | \
-            podman login "$GHCR_REGISTRY" --username "$GHCR_USER" --password-stdin
+            $PODMAN_BIN login "$GHCR_REGISTRY" --username "$GHCR_USER" --password-stdin
         log_ok "Login en ${GHCR_REGISTRY} OK"
     else
         log_info "GHCR_TOKEN no definido — intentando pull sin autenticación (paquetes públicos)"
@@ -306,7 +310,7 @@ _pull_image_with_fallback() {
     }
 
     log_info "Pulling $image_name ..."
-    if run_cmd podman pull --platform linux/arm64 "$image_name"; then
+    if run_cmd $PODMAN_BIN pull --platform linux/arm64 "$image_name"; then
         log_ok "Pull completado: $image_name"
         PULLED_IMAGE="$selected"
         return 0
@@ -316,7 +320,7 @@ _pull_image_with_fallback() {
     if [[ "$RELEASE" == "latest" ]]; then
         local fallback="${image_name%:latest}:preview"
         log_warn "Tag latest no disponible en GHCR. Intentando fallback: $fallback"
-        if run_cmd podman pull --platform linux/arm64 "$fallback"; then
+        if run_cmd $PODMAN_BIN pull --platform linux/arm64 "$fallback"; then
             log_ok "Pull completado con fallback: $fallback"
             log_warn "Se está usando 'preview' porque 'latest' no existe para ${repo_path}"
             PULLED_IMAGE="$fallback"
@@ -339,7 +343,7 @@ _pull_image_with_fallback() {
             if [[ -n "${chosen_tag:-}" ]]; then
                 local chosen_image="${image_name%:latest}:$chosen_tag"
                 log_info "Intentando tag seleccionado: $chosen_image"
-                if run_cmd podman pull --platform linux/arm64 "$chosen_image"; then
+                if run_cmd $PODMAN_BIN pull --platform linux/arm64 "$chosen_image"; then
                     log_ok "Pull completado: $chosen_image"
                     PULLED_IMAGE="$chosen_image"
                     return 0
@@ -364,10 +368,10 @@ _deploy_backend() {
 
     # Eliminar contenedor anterior si existe (sea java o python)
     for old_name in ai-analyzer ai-analyzer-java ai-analyzer-python; do
-        if podman container exists "$old_name" 2>/dev/null; then
+        if $PODMAN_BIN container exists "$old_name" 2>/dev/null; then
             log_info "Eliminando contenedor anterior: $old_name"
-            run_cmd podman stop -t 10 "$old_name" 2>/dev/null || true
-            run_cmd podman rm -f "$old_name" 2>/dev/null || true
+            run_cmd $PODMAN_BIN stop -t 10 "$old_name" 2>/dev/null || true
+            run_cmd $PODMAN_BIN rm -f "$old_name" 2>/dev/null || true
         fi
     done
 
@@ -379,7 +383,7 @@ _deploy_backend() {
     fi
 
     log_info "Creando contenedor $CONTAINER_BACKEND ..."
-    run_cmd podman create \
+    run_cmd $PODMAN_BIN create \
         --name  "$CONTAINER_BACKEND" \
         --restart unless-stopped \
         --network host \
@@ -388,7 +392,7 @@ _deploy_backend() {
         -v "${KEYS_DIR}:/opt/keys:ro,z" \
         "$image_name"
 
-    run_cmd podman start "$CONTAINER_BACKEND"
+    run_cmd $PODMAN_BIN start "$CONTAINER_BACKEND"
     log_ok "Contenedor $CONTAINER_BACKEND iniciado"
 
     # Servicio systemd
@@ -466,10 +470,10 @@ _deploy_web() {
 
     log_info "─── Web (nginx + frontend) ──────────────────────────────────────────"
 
-    if podman container exists "$CONTAINER_WEB" 2>/dev/null; then
+    if $PODMAN_BIN container exists "$CONTAINER_WEB" 2>/dev/null; then
         log_info "Eliminando contenedor anterior: $CONTAINER_WEB"
-        run_cmd podman stop -t 10 "$CONTAINER_WEB" 2>/dev/null || true
-        run_cmd podman rm -f "$CONTAINER_WEB" 2>/dev/null || true
+        run_cmd $PODMAN_BIN stop -t 10 "$CONTAINER_WEB" 2>/dev/null || true
+        run_cmd $PODMAN_BIN rm -f "$CONTAINER_WEB" 2>/dev/null || true
     fi
 
     if ! $NO_PULL; then
@@ -478,13 +482,13 @@ _deploy_web() {
     fi
 
     log_info "Creando contenedor $CONTAINER_WEB ..."
-    run_cmd podman create \
+    run_cmd $PODMAN_BIN create \
         --name  "$CONTAINER_WEB" \
         --restart unless-stopped \
         --network host \
         "$image_name"
 
-    run_cmd podman start "$CONTAINER_WEB"
+    run_cmd $PODMAN_BIN start "$CONTAINER_WEB"
     log_ok "Contenedor $CONTAINER_WEB iniciado"
 
     log_info "Instalando $SYSTEMD_WEB ..."
