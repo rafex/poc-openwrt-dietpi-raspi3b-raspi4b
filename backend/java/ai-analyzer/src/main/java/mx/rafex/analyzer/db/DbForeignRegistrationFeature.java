@@ -46,7 +46,7 @@ public final class DbForeignRegistrationFeature implements Feature {
     private static final AddressLayout        C_PTR    = ValueLayout.ADDRESS;
 
     @Override
-    public void beforeAnalysis(BeforeAnalysisAccess access) {
+    public void duringSetup(DuringSetupAccess access) {
         registerDowncalls();
     }
 
