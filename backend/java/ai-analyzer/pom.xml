@@ -41,6 +41,13 @@
       <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
       <version>1.2.5</version>
     </dependency>
+    <!-- API de Native Image para registrar FFM downcalls en build-time -->
+    <dependency>
+      <groupId>org.graalvm.sdk</groupId>
+      <artifactId>nativeimage</artifactId>
+      <version>25.0.2</version>
+      <scope>provided</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -210,6 +217,10 @@
             -->
             <!-- La clase DbLibrary inicializa MethodHandles en runtime, no en build time -->
             <buildArg>--initialize-at-run-time=mx.rafex.analyzer.db.DbLibrary</buildArg>
+            <!-- Requerido para FFM (Panama) en Native Image -->
+            <buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
+            <!-- Registro de descriptors FFM para downcalls -->
+            <buildArg>--features=mx.rafex.analyzer.db.DbForeignRegistrationFeature</buildArg>
             <!--
               Importante para Raspberry Pi 4B:
               evita que Native Image genere binarios atados a extensiones de CPU
