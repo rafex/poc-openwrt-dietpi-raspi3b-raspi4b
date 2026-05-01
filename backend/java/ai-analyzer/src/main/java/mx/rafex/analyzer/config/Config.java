@@ -27,6 +27,7 @@ package mx.rafex.analyzer.config;
  */
 
 import java.util.Set;
+import java.util.LinkedHashSet;
 
 /**
  * Configuración leída exclusivamente de variables de entorno (sin ninguna
@@ -70,7 +71,7 @@ public final class Config {
     public static final String AP_EXTENDER_IP  = env("AP_EXTENDER_IP",  "192.168.1.183");
 
     /** IPs que NUNCA deben bloquearse — misma lógica que PROTECTED_IPS en Python. */
-    public static final Set<String> PROTECTED_IPS = Set.of(
+    public static final Set<String> PROTECTED_IPS = dedupeSet(
         ROUTER_IP, PORTAL_IP, RASPI4B_IP, RASPI3B_IP,
         PORTAL_NODE_IP, AP_EXTENDER_IP, ADMIN_IP
     );
@@ -116,6 +117,14 @@ public final class Config {
         var v = System.getenv(key);
         if (v == null || v.isBlank()) return def;
         return v.equalsIgnoreCase("true") || v.equals("1");
+    }
+
+    private static Set<String> dedupeSet(String... values) {
+        var out = new LinkedHashSet<String>();
+        for (var value : values) {
+            if (value != null && !value.isBlank()) out.add(value);
+        }
+        return Set.copyOf(out);
     }
 
     private Config() {}
