@@ -117,6 +117,9 @@ detect_mac_router() {
     if [ -z "$_mac" ]; then
         _mac="$(router_ssh "awk '\$1==\"$_ip\"{print \$4}' /proc/net/arp 2>/dev/null | head -1" 2>/dev/null)"
     fi
+    case "$_mac" in
+        ""|FAILED|failed|"(incomplete)"|"00:00:00:00:00:00") _mac="" ;;
+    esac
     printf '%s' "$_mac"
 }
 
@@ -133,7 +136,7 @@ reserve_entry() {
             ;;
     esac
 
-    router_ssh "
+    if ! router_ssh "
         EXISTING_IDX=''
         IDX=0
         while uci get dhcp.@host[\$IDX] > /dev/null 2>&1; do
@@ -159,7 +162,10 @@ reserve_entry() {
             uci set dhcp.@host[-1].leasetime='infinite'
         fi
         uci commit dhcp
-    " >/dev/null 2>&1
+    " >/dev/null 2>&1; then
+        return 1
+    fi
+    return 0
 }
 
 # =============================================================================
