@@ -20,20 +20,13 @@ jobs:
   # ─── 1. Compilar Rust → libanalyzer_db-linux-arm64.so ─────────────────────
   build-rust-arm64:
     name: Rust cdylib (aarch64-linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Instalar Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
-
-      - name: Instalar cross-compiler arm64
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Caché Cargo
         uses: actions/cache@v4
@@ -45,15 +38,18 @@ jobs:
           key: rust-arm64-${{ hashFiles('backend/java/ai-analyzer/db-lib/Cargo.lock') }}
           restore-keys: rust-arm64-
 
-      - name: Build cdylib arm64
+      - name: Build cdylib arm64 nativo
         working-directory: backend/java/ai-analyzer/db-lib
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
-          cargo build --release --target aarch64-unknown-linux-gnu
+          cargo build --release
           # Copiar artefacto con nombre canónico
-          cp target/aarch64-unknown-linux-gnu/release/libanalyzer_db.so \
+          cp target/release/libanalyzer_db.so \
              ../../libanalyzer_db-linux-arm64.so
+          file ../../libanalyzer_db-linux-arm64.so
+          file ../../libanalyzer_db-linux-arm64.so | grep -Eiq 'aarch64|arm64' || {
+            echo "ERROR: libanalyzer_db-linux-arm64.so no es ARM64"
+            exit 1
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -65,7 +61,7 @@ jobs:
   # ─── 2. Compilar Java + GraalVM Native Image → ai-analyzer-linux-arm64 ────
   build-java-native-arm64:
     name: GraalVM Native Image (aarch64-linux)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     needs: build-rust-arm64
 
     steps:
@@ -80,16 +76,10 @@ jobs:
           distribution: 'graalvm-community'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Instalar QEMU + cross-tools
+      - name: Dependencias de build Native Image
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y qemu-user-static binfmt-support \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            zlib1g-dev libstdc++-11-dev
-
-      - name: Registrar intérprete QEMU arm64
-        run: |
-          sudo update-binfmts --enable qemu-aarch64
+          sudo apt-get install -y zlib1g-dev libstdc++-11-dev
 
       - name: Caché Maven
         uses: actions/cache@v4
@@ -112,14 +102,16 @@ jobs:
         working-directory: backend/java/ai-analyzer
         run: |
           # JAVA_HOME ya apunta a GraalVM 25 gracias a graalvm/setup-graalvm@v1
-          # El código fuente es Java 21 (source/target en pom.xml); GraalVM 25
-          # compila bytecode Java 21 sin necesidad de flags adicionales.
-          mvn -q -Pnative package -DskipTests \
-            -Dnative.compiler.path=aarch64-linux-gnu-gcc \
-            -Dnative.imageName=ai-analyzer \
-            -Dnative.platform=aarch64-linux
+          # El código fuente es Java 21 (source/target en pom.xml); GraalVM 25 compila
+          # bytecode Java 21. Runner ARM64 evita cross-compile ambiguo.
+          mvn -q -Pnative package -DskipTests -Dnative.imageName=ai-analyzer
           # El binario queda en target/ai-analyzer
           cp target/ai-analyzer ai-analyzer-linux-arm64
+          file ai-analyzer-linux-arm64
+          file ai-analyzer-linux-arm64 | grep -Eiq 'aarch64|arm64' || {
+            echo "ERROR: ai-analyzer-linux-arm64 no es ARM64"
+            exit 1
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
