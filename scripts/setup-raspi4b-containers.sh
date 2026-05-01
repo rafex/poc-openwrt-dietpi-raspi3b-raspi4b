@@ -439,6 +439,23 @@ Opciones:
     run_cmd $PODMAN_BIN start "$CONTAINER_BACKEND"
     log_ok "Contenedor $CONTAINER_BACKEND iniciado"
 
+    # Validación ABI temprana para backend Java:
+    # evita loops de crash cuando la lib Rust no coincide con el binario Java.
+    if [[ "$BACKEND" == "java" ]]; then
+        log_info "Validando ABI Java↔Rust dentro del contenedor..."
+        if ! $PODMAN_BIN exec "$CONTAINER_BACKEND" sh -lc \
+            'test -f /opt/ai-analyzer/lib/libanalyzer_db.so && grep -a -q "rule_upsert" /opt/ai-analyzer/lib/libanalyzer_db.so'; then
+            die "ABI incompatible detectada: la librería Rust no exporta 'rule_upsert'.
+Esto indica desalineación entre el binario Java y libanalyzer_db.so en la imagen.
+
+Acciones recomendadas:
+  1) Usar tag explícito alineado (no mutable):
+     bash scripts/setup-raspi4b-containers.sh --backend=java --release=vX.Y.Z-preview
+  2) Re-publicar release/image asegurando que Java + lib Rust se construyan en el mismo run."
+        fi
+        log_ok "ABI Java↔Rust OK (símbolo rule_upsert presente)"
+    fi
+
     # Servicio systemd
     log_info "Instalando $SYSTEMD_BACKEND ..."
     cat > "$SYSTEMD_BACKEND" <<UNITEOF
