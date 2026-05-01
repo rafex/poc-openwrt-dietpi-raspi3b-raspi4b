@@ -104,18 +104,18 @@ detect_mac_router() {
     _ip="$1"
     # Forzar resolución ARP antes de leer tablas:
     # muchos routers no mantienen entrada ARP si el host lleva rato inactivo.
-    router_ssh "ping -c 1 -W 1 $_ip >/dev/null 2>&1 || true" >/dev/null 2>&1 || true
+    router_ssh "ping -c 1 -W 1 $_ip >/dev/null 2>&1 || true" </dev/null >/dev/null 2>&1 || true
     sleep 1
 
-    _mac="$(router_ssh "ip neigh show $_ip 2>/dev/null | awk '{print \$5}' | head -1" 2>/dev/null)"
+    _mac="$(router_ssh "ip neigh show $_ip 2>/dev/null | awk '{print \$5}' | head -1" </dev/null 2>/dev/null)"
     if [ -z "$_mac" ] || [ "$_mac" = "FAILED" ]; then
-        _mac="$(router_ssh "awk '\$3==\"$_ip\"{print \$2}' /tmp/dhcp.leases 2>/dev/null | head -1" 2>/dev/null)"
+        _mac="$(router_ssh "awk '\$3==\"$_ip\"{print \$2}' /tmp/dhcp.leases 2>/dev/null | head -1" </dev/null 2>/dev/null)"
     fi
     if [ -z "$_mac" ]; then
-        _mac="$(router_ssh "arp -n $_ip 2>/dev/null | awk 'NR==2{print \$3}'" 2>/dev/null)"
+        _mac="$(router_ssh "arp -n $_ip 2>/dev/null | awk 'NR==2{print \$3}'" </dev/null 2>/dev/null)"
     fi
     if [ -z "$_mac" ]; then
-        _mac="$(router_ssh "awk '\$1==\"$_ip\"{print \$4}' /proc/net/arp 2>/dev/null | head -1" 2>/dev/null)"
+        _mac="$(router_ssh "awk '\$1==\"$_ip\"{print \$4}' /proc/net/arp 2>/dev/null | head -1" </dev/null 2>/dev/null)"
     fi
     case "$_mac" in
         ""|FAILED|failed|"(incomplete)"|"00:00:00:00:00:00") _mac="" ;;
@@ -162,7 +162,7 @@ reserve_entry() {
             uci set dhcp.@host[-1].leasetime='infinite'
         fi
         uci commit dhcp
-    " >/dev/null 2>&1; then
+    " </dev/null >/dev/null 2>&1; then
         return 1
     fi
     return 0
