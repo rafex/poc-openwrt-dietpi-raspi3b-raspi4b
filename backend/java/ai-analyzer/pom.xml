@@ -210,6 +210,13 @@
             -->
             <!-- La clase DbLibrary inicializa MethodHandles en runtime, no en build time -->
             <buildArg>--initialize-at-run-time=mx.rafex.analyzer.db.DbLibrary</buildArg>
+            <!--
+              Importante para Raspberry Pi 4B:
+              evita que Native Image genere binarios atados a extensiones de CPU
+              más nuevas (ej. LSE / ARMv8.1+) presentes en runners ARM modernos.
+              Con armv8-a el binario corre en Cortex-A72 (Pi4B).
+            -->
+            <buildArg>-march=armv8-a</buildArg>
             <!-- Fallar si no se puede compilar (sin fallback a JVM interpretada) -->
             <buildArg>--no-fallback</buildArg>
             <!-- Stack traces completos en excepciones no capturadas -->
