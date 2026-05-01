@@ -163,7 +163,7 @@ until curl -sf "http://127.0.0.1:80/proxy-ping" >/dev/null 2>&1; do
 done
 log_ok "nginx proxy responde en :80 (${WAIT}s)"
 
-for path in / /dashboard.html /chat.html /health; do
+for path in / /dashboard /chat /terminal /rulez /reports /health; do
     code="$(curl -s -o /dev/null -w '%{http_code}' \
         --connect-timeout 5 --max-time 10 \
         "http://${PI_IP}:80${path}" 2>/dev/null || echo 000)"
@@ -178,7 +178,10 @@ log_ok "Frontend desplegado"
 printf "\n"
 printf "  Acceso:\n"
 printf "    http://%s/           → Dashboard\n" "$PI_IP"
-printf "    http://%s/chat.html  → Chat IA\n"   "$PI_IP"
+printf "    http://%s/chat       → Chat IA\n"   "$PI_IP"
+printf "    http://%s/terminal   → Terminal\n"  "$PI_IP"
+printf "    http://%s/rulez      → Reglas\n"    "$PI_IP"
+printf "    http://%s/reports    → Reportes\n"  "$PI_IP"
 printf "    http://%s/health     → Health API\n" "$PI_IP"
 printf "\n"
 printf "  Gestión:\n"
