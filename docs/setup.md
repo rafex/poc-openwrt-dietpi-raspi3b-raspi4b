@@ -139,6 +139,67 @@ sudo bash scripts/setup-raspi4b-all.sh --dry-run          # ver sin ejecutar
 
 ## Paso 3 — Setup por componente (reinstalación parcial)
 
+## Paso 3.A — Instalación Raspi4B desde imágenes GHCR (sin build local)
+
+Si quieres instalar rápido en la Pi4B usando imágenes ya publicadas por GitHub Actions:
+
+```bash
+# Stack completo: backend Java + web nginx/frontend
+just setup-containers
+
+# Release/tag específico
+just setup-containers v1.2.3
+
+# Paquetes GHCR privados
+GHCR_TOKEN=ghp_xxx GHCR_USER=rafex just setup-containers v1.2.3
+```
+
+Este target ejecuta remotamente en la Pi:
+
+```bash
+bash scripts/setup-raspi4b-containers.sh --release=<tag> --backend=java
+```
+
+Variantes útiles:
+
+```bash
+# Solo backend Java (sin web)
+just setup-java-container v1.2.3
+
+# Solo backend Python (sin web)
+just setup-python-container v1.2.3
+
+# Solo web nginx/frontend
+just setup-web-container v1.2.3
+```
+
+Notas:
+- `setup-raspi4b-all.sh` compila/despliega componentes locales; no es el flujo GHCR.
+- `setup-raspi4b-containers.sh` hace `podman pull` de `poc-ai-analyzer-java`, `poc-ai-analyzer-python` y/o `poc-ai-analyzer-web` según flags.
+
+### Migración: quitar k3s viejo y dejar solo Podman + ai-analyzer
+
+Ejecutar directamente en la Raspi4B:
+
+```bash
+# 1) Bajar portal/backend en k3s (si existen)
+sudo bash scripts/raspi4b-portals-down.sh
+
+# 2) Eliminar k3s completo
+sudo bash scripts/raspi4b-clean-k3s.sh --force
+
+# 3A) Levantar solo backend AI por podman (sin web/portal)
+sudo bash scripts/setup-raspi4b-containers.sh --release=latest --backend=java --skip-web
+
+# 3B) (Opcional) Levantar también web AI (/dashboard, /chat, ...)
+sudo bash scripts/setup-raspi4b-containers.sh --release=latest --backend=java
+```
+
+Resultado esperado:
+- Sin k3s ni portales en la Raspi4B.
+- Backend AI corriendo en podman (`ai-analyzer`) en `:5000`.
+- Web AI opcional en podman (`ai-analyzer-web`) en `:80`.
+
 ### 3.1 — Broker MQTT (Mosquitto)
 
 ```bash

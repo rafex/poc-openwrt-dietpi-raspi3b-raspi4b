@@ -141,6 +141,79 @@ sudo bash scripts/setup-raspi4b-ai-analyzer-java.sh --dry-run
 
 ---
 
+## setup-raspi4b-containers.sh
+
+**Propósito:** desplegar en Raspi4B el stack desde imágenes preconstruidas en `ghcr.io` (sin compilar localmente).  
+**Idempotente:** Sí
+
+```bash
+sudo bash scripts/setup-raspi4b-containers.sh
+sudo bash scripts/setup-raspi4b-containers.sh --release=v1.2.3
+sudo bash scripts/setup-raspi4b-containers.sh --backend=python
+sudo bash scripts/setup-raspi4b-containers.sh --skip-web
+sudo bash scripts/setup-raspi4b-containers.sh --skip-backend
+```
+
+Qué hace:
+
+| Paso | Acción |
+|---|---|
+| 1 | Login opcional a GHCR (`GHCR_TOKEN`) |
+| 2 | Pull `linux/arm64` de imágenes según backend/flags |
+| 3 | Crea/recrea contenedores podman (`ai-analyzer`, `ai-analyzer-web`) |
+| 4 | Genera unidades systemd para autostart |
+| 5 | Verifica endpoints (`/health`, `/api/*`, `nginx-health`) |
+
+Imágenes usadas:
+- `ghcr.io/<owner>/poc-ai-analyzer-java:<release>`
+- `ghcr.io/<owner>/poc-ai-analyzer-python:<release>`
+- `ghcr.io/<owner>/poc-ai-analyzer-web:<release>`
+
+Atajo con `just` (desde tu laptop/admin):
+
+```bash
+just setup-containers
+just setup-containers v1.2.3
+GHCR_TOKEN=ghp_xxx GHCR_USER=rafex just setup-containers v1.2.3
+```
+
+---
+
+## raspi4b-portals-down.sh
+
+**Propósito:** eliminar en k3s todo lo de portal/backend cautivo en Raspi4B para dejar solo componentes de IA.  
+**Idempotente:** Sí
+
+```bash
+sudo bash scripts/raspi4b-portals-down.sh
+sudo bash scripts/raspi4b-portals-down.sh --only-verify
+```
+
+Acciones:
+- Escala a `0` deployments de portal.
+- Elimina deployments/services/ingress/configmaps de captive portal.
+- Verifica que no queden pods `captive-portal*` en Running.
+
+---
+
+## raspi4b-clean-k3s.sh
+
+**Propósito:** desinstalar completamente k3s de Raspi4B y liberar recursos (CNI, binarios, datos).  
+**Idempotente:** Sí (si ya no existe k3s, omite lo no encontrado)
+
+```bash
+sudo bash scripts/raspi4b-clean-k3s.sh --force
+sudo bash scripts/raspi4b-clean-k3s.sh --dry-run
+```
+
+Acciones:
+- Detiene workloads y servicio `k3s`.
+- Ejecuta `k3s-uninstall.sh` si existe.
+- Limpia `/var/lib/rancher/k3s`, `/etc/rancher/k3s`, CNI e interfaces (`flannel.1`, `cni0`, etc.).
+- Mantiene servicios no k3s (ej. mosquitto, llama-server).
+
+---
+
 ## setup-raspi4b-frontend.sh
 
 **Propósito:** compilar el frontend Vite (Pug+Sass+TS) y desplegarlo con nginx en podman.  
