@@ -293,6 +293,17 @@ log_ok "Directorios: $DATA_DIR  $KEYS_DIR"
 _pull_image_with_fallback() {
     local image_name="$1"
     local selected="$image_name"
+    local repo_path="${image_name#${GHCR_REGISTRY}/}"
+    repo_path="${repo_path%%:*}"
+
+    _list_release_tags() {
+        # Lista tags semánticos desde GitHub Releases (no requiere GHCR auth).
+        # Se usa como ayuda cuando latest no existe en GHCR.
+        curl -fsSL "https://api.github.com/repos/${GHCR_USER}/presentaciones-cursos-talleres/releases?per_page=12" 2>/dev/null \
+            | grep -o '"tag_name":[[:space:]]*"[^"]*"' \
+            | sed -E 's/.*"([^"]+)"/\1/' \
+            | head -6
+    }
 
     log_info "Pulling $image_name ..."
     if run_cmd podman pull --platform linux/arm64 "$image_name"; then
@@ -307,12 +318,42 @@ _pull_image_with_fallback() {
         log_warn "Tag latest no disponible en GHCR. Intentando fallback: $fallback"
         if run_cmd podman pull --platform linux/arm64 "$fallback"; then
             log_ok "Pull completado con fallback: $fallback"
+            log_warn "Se está usando 'preview' porque 'latest' no existe para ${repo_path}"
             printf '%s' "$fallback"
             return 0
         fi
+
+        log_warn "Tampoco se pudo descargar 'preview' para ${repo_path}"
+        local tags
+        tags="$(_list_release_tags || true)"
+        if [[ -n "$tags" ]]; then
+            log_info "Tags sugeridos (GitHub Releases):"
+            printf '%s\n' "$tags" | sed 's/^/  - /'
+        else
+            log_warn "No se pudieron consultar tags sugeridos vía GitHub API"
+        fi
+
+        if [[ -t 0 && -t 1 ]]; then
+            printf "\nSelecciona un tag para continuar (ej: v1.2.3 o preview), Enter para cancelar: "
+            read -r chosen_tag || true
+            if [[ -n "${chosen_tag:-}" ]]; then
+                local chosen_image="${image_name%:latest}:$chosen_tag"
+                log_info "Intentando tag seleccionado: $chosen_image"
+                if run_cmd podman pull --platform linux/arm64 "$chosen_image"; then
+                    log_ok "Pull completado: $chosen_image"
+                    printf '%s' "$chosen_image"
+                    return 0
+                fi
+                log_warn "Falló el pull del tag seleccionado: $chosen_tag"
+            fi
+        fi
     fi
 
-    die "No se pudo descargar imagen: $image_name"
+    die "No se pudo descargar imagen: $image_name
+Opciones:
+  1) Usar preview: --release=preview
+  2) Usar tag explícito: --release=vX.Y.Z
+  3) Build local desde release: --build-local --release=vX.Y.Z"
 }
 
 _deploy_backend() {
