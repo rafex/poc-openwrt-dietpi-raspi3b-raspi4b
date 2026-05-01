@@ -360,6 +360,23 @@ Opciones:
   3) Build local desde release: --build-local --release=vX.Y.Z"
 }
 
+_check_image_arch() {
+    local image_name="$1"
+    local expected="arm64"
+    local arch
+    arch="$($PODMAN_BIN image inspect "$image_name" --format '{{.Architecture}}' 2>/dev/null || echo unknown)"
+    case "$arch" in
+        arm64|aarch64)
+            log_ok "Arquitectura de imagen OK: $image_name ($arch)"
+            return 0
+            ;;
+        *)
+            log_warn "Arquitectura inesperada para $image_name: '$arch' (esperado: arm64)"
+            return 1
+            ;;
+    esac
+}
+
 _deploy_backend() {
     local image_name="$1"
     local build_mode="$2"   # pull | local
@@ -380,6 +397,20 @@ _deploy_backend() {
     elif ! $NO_PULL; then
         _pull_image_with_fallback "$image_name"
         image_name="$PULLED_IMAGE"
+        if ! _check_image_arch "$image_name"; then
+            if [[ "$BACKEND" == "java" ]]; then
+                die "La imagen Java descargada no es arm64 y fallará con 'exec format error'.
+Opciones:
+  1) Reintentar con build local arm64:
+     bash scripts/setup-raspi4b-containers.sh --backend=java --build-local --release=${RELEASE}
+  2) Usar backend Python publicado:
+     bash scripts/setup-raspi4b-containers.sh --backend=python --release=${RELEASE}
+  3) Usar un tag explícito arm64:
+     bash scripts/setup-raspi4b-containers.sh --backend=java --release=vX.Y.Z"
+            else
+                die "La imagen descargada no es arm64. Usa un tag arm64 válido."
+            fi
+        fi
     fi
 
     log_info "Creando contenedor $CONTAINER_BACKEND ..."
