@@ -28,7 +28,10 @@ package mx.rafex.analyzer.db;
 
 import java.lang.foreign.*;
 import java.lang.invoke.MethodHandle;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Bindings Panama FFI para {@code libanalyzer_db.so}.
@@ -64,10 +67,7 @@ public final class DbLibrary {
     private static final AddressLayout        C_PTR    = ValueLayout.ADDRESS;
 
     static {
-        // Ruta de la librería: puede sobreescribirse con -Danalyzer.db.lib=...
-        var libPath = System.getProperty("analyzer.db.lib",
-            System.getenv().getOrDefault("ANALYZER_DB_LIB", "libanalyzer_db.so"));
-        LIB = SymbolLookup.libraryLookup(Path.of(libPath), Arena.global());
+        LIB = loadLibraryLookup();
     }
 
     // ── MethodHandles ─────────────────────────────────────────────────────────
@@ -147,6 +147,46 @@ public final class DbLibrary {
         var addr = LIB.find(name)
             .orElseThrow(() -> new UnsatisfiedLinkError("símbolo no encontrado en libanalyzer_db: " + name));
         return LINKER.downcallHandle(addr, desc);
+    }
+
+    private static SymbolLookup loadLibraryLookup() {
+        var explicit = System.getProperty("analyzer.db.lib",
+            System.getenv().getOrDefault("ANALYZER_DB_LIB", "")).trim();
+
+        List<Path> candidates = new ArrayList<>();
+        if (!explicit.isBlank()) {
+            candidates.add(Path.of(explicit));
+        }
+
+        // Defaults conocidos para contenedor/runtime
+        candidates.add(Path.of("/opt/ai-analyzer/lib/libanalyzer_db.so"));
+        candidates.add(Path.of("/usr/local/lib/libanalyzer_db.so"));
+        candidates.add(Path.of("libanalyzer_db.so"));
+        candidates.add(Path.of("lib/libanalyzer_db.so"));
+
+        var tried = new StringBuilder();
+        for (Path candidate : candidates) {
+            try {
+                var normalized = candidate.toAbsolutePath().normalize();
+                if (!Files.exists(normalized)) {
+                    tried.append(" - ").append(normalized).append(" (no existe)\n");
+                    continue;
+                }
+                if (!Files.isRegularFile(normalized)) {
+                    tried.append(" - ").append(normalized).append(" (no es archivo regular)\n");
+                    continue;
+                }
+                return SymbolLookup.libraryLookup(normalized, Arena.global());
+            } catch (Throwable t) {
+                tried.append(" - ").append(candidate.toAbsolutePath().normalize())
+                    .append(" (error: ").append(t.getClass().getSimpleName()).append(": ")
+                    .append(t.getMessage()).append(")\n");
+            }
+        }
+
+        throw new IllegalStateException(
+            "No se pudo cargar libanalyzer_db.so. Rutas probadas:\n" + tried
+        );
     }
 
     // ── API pública ───────────────────────────────────────────────────────────
