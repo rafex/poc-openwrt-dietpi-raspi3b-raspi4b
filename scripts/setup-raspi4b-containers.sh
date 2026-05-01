@@ -290,6 +290,31 @@ run_cmd mkdir -p "$DATA_DIR" "$KEYS_DIR"
 log_ok "Directorios: $DATA_DIR  $KEYS_DIR"
 
 # ── 6. Desplegar backend ──────────────────────────────────────────────────────
+_pull_image_with_fallback() {
+    local image_name="$1"
+    local selected="$image_name"
+
+    log_info "Pulling $image_name ..."
+    if run_cmd podman pull --platform linux/arm64 "$image_name"; then
+        log_ok "Pull completado: $image_name"
+        printf '%s' "$selected"
+        return 0
+    fi
+
+    # Fallback seguro para GHCR cuando no existe :latest (solo hay previews).
+    if [[ "$RELEASE" == "latest" ]]; then
+        local fallback="${image_name%:latest}:preview"
+        log_warn "Tag latest no disponible en GHCR. Intentando fallback: $fallback"
+        if run_cmd podman pull --platform linux/arm64 "$fallback"; then
+            log_ok "Pull completado con fallback: $fallback"
+            printf '%s' "$fallback"
+            return 0
+        fi
+    fi
+
+    die "No se pudo descargar imagen: $image_name"
+}
+
 _deploy_backend() {
     local image_name="$1"
     local build_mode="$2"   # pull | local
@@ -308,9 +333,7 @@ _deploy_backend() {
     if [[ "$build_mode" == "local" ]]; then
         _build_java_local "$image_name"
     elif ! $NO_PULL; then
-        log_info "Pulling $image_name ..."
-        run_cmd podman pull --platform linux/arm64 "$image_name"
-        log_ok "Pull completado: $image_name"
+        image_name="$(_pull_image_with_fallback "$image_name")"
     fi
 
     log_info "Creando contenedor $CONTAINER_BACKEND ..."
@@ -408,9 +431,7 @@ _deploy_web() {
     fi
 
     if ! $NO_PULL; then
-        log_info "Pulling $image_name ..."
-        run_cmd podman pull --platform linux/arm64 "$image_name"
-        log_ok "Pull completado: $image_name"
+        image_name="$(_pull_image_with_fallback "$image_name")"
     fi
 
     log_info "Creando contenedor $CONTAINER_WEB ..."
