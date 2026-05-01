@@ -36,6 +36,7 @@ RASPI_HOSTNAME="RafexPi"
 RASPI_IP="$PORTAL_IP"      # 192.168.1.167 — puede sobreescribirse con --ip
 MANUAL_MAC=""
 AUTO_MODE=0
+EXPLICIT_IP=0
 
 # =============================================================================
 # Argumentos
@@ -55,9 +56,18 @@ while [ $# -gt 0 ]; do
         --ip)
             shift
             RASPI_IP="$1"
+            EXPLICIT_IP=1
             ;;
         --ip=*)
             RASPI_IP="${1#--ip=}"
+            EXPLICIT_IP=1
+            ;;
+        --hostname)
+            shift
+            RASPI_HOSTNAME="$1"
+            ;;
+        --hostname=*)
+            RASPI_HOSTNAME="${1#--hostname=}"
             ;;
         --help|-h)
             sed -n '2,25p' "$0" | sed 's/^# \?//'
@@ -66,6 +76,7 @@ while [ $# -gt 0 ]; do
         # Compatibilidad: primer argumento posicional como IP
         [0-9]*.[0-9]*.[0-9]*.[0-9]*)
             RASPI_IP="$1"
+            EXPLICIT_IP=1
             ;;
         *)
             die "Argumento desconocido: '$1'
@@ -85,6 +96,103 @@ validate_ip "$RASPI_IP" || die "IP inválida: '$RASPI_IP'"
 # =============================================================================
 check_ssh_key
 test_router_ssh
+
+# =============================================================================
+# Helpers
+# =============================================================================
+detect_mac_router() {
+    _ip="$1"
+    _mac="$(router_ssh "ip neigh show $_ip 2>/dev/null | awk '{print \$5}' | head -1" 2>/dev/null)"
+    if [ -z "$_mac" ] || [ "$_mac" = "FAILED" ]; then
+        _mac="$(router_ssh "awk '\$3==\"$_ip\"{print \$2}' /tmp/dhcp.leases 2>/dev/null | head -1" 2>/dev/null)"
+    fi
+    if [ -z "$_mac" ]; then
+        _mac="$(router_ssh "arp -n $_ip 2>/dev/null | awk 'NR==2{print \$3}'" 2>/dev/null)"
+    fi
+    printf '%s' "$_mac"
+}
+
+reserve_entry() {
+    _host="$1"
+    _mac="$2"
+    _ip="$3"
+
+    case "$_mac" in
+        *:*:*:*:*:*) ;;
+        *)
+            log_warn "MAC inválida para $_host ($_ip): $_mac — se omite"
+            return 1
+            ;;
+    esac
+
+    router_ssh "
+        EXISTING_IDX=''
+        IDX=0
+        while uci get dhcp.@host[\$IDX] > /dev/null 2>&1; do
+            CUR_IP=\$(uci get dhcp.@host[\$IDX].ip 2>/dev/null)
+            CUR_MAC=\$(uci get dhcp.@host[\$IDX].mac 2>/dev/null)
+            if [ \"\$CUR_IP\" = '$_ip' ] || [ \"\$CUR_MAC\" = '$_mac' ]; then
+                EXISTING_IDX=\$IDX
+                break
+            fi
+            IDX=\$((IDX + 1))
+        done
+
+        if [ -n \"\$EXISTING_IDX\" ]; then
+            uci set dhcp.@host[\$EXISTING_IDX].name='$_host'
+            uci set dhcp.@host[\$EXISTING_IDX].mac='$_mac'
+            uci set dhcp.@host[\$EXISTING_IDX].ip='$_ip'
+            uci set dhcp.@host[\$EXISTING_IDX].leasetime='infinite'
+        else
+            uci add dhcp host >/dev/null
+            uci set dhcp.@host[-1].name='$_host'
+            uci set dhcp.@host[-1].mac='$_mac'
+            uci set dhcp.@host[-1].ip='$_ip'
+            uci set dhcp.@host[-1].leasetime='infinite'
+        fi
+        uci commit dhcp
+    " >/dev/null 2>&1
+}
+
+# =============================================================================
+# Modo batch automático (sin --auto/--mac/--ip)
+# Reserva solo equipos detectables en red y omite el resto.
+# =============================================================================
+if [ "$AUTO_MODE" -eq 0 ] && [ -z "$MANUAL_MAC" ] && [ "$EXPLICIT_IP" -eq 0 ]; then
+    log_info "--- MODO BATCH: Reservando solo dispositivos detectados en red ---"
+    RESERVED=0
+    SKIPPED=0
+
+    while IFS='|' read -r _host _ip; do
+        [ -n "$_host" ] || continue
+        validate_ip "$_ip" || { log_warn "$_host IP inválida ($_ip) — omitido"; SKIPPED=$((SKIPPED + 1)); continue; }
+        _mac="$(detect_mac_router "$_ip")"
+        if [ -z "$_mac" ] || [ "$_mac" = "FAILED" ]; then
+            log_warn "$_host ($_ip) sin MAC detectable — omitido"
+            SKIPPED=$((SKIPPED + 1))
+            continue
+        fi
+        if reserve_entry "$_host" "$_mac" "$_ip"; then
+            log_ok "Reserva aplicada: $_host  $_mac → $_ip"
+            RESERVED=$((RESERVED + 1))
+        else
+            log_warn "No se pudo reservar $_host ($_ip) — omitido"
+            SKIPPED=$((SKIPPED + 1))
+        fi
+    done <<EOF
+$RASPI4B_HOSTNAME|$RASPI4B_IP
+$RASPI3B_HOSTNAME|$RASPI3B_IP
+$PORTAL_NODE_HOSTNAME|$PORTAL_NODE_IP
+$AP_EXTENDER_HOSTNAME|$AP_EXTENDER_IP
+EOF
+
+    router_ssh "/etc/init.d/dnsmasq reload 2>/dev/null || /etc/init.d/dnsmasq restart" >/dev/null 2>&1 || true
+    log_ok "Batch terminado. Reservadas: $RESERVED | Omitidas: $SKIPPED"
+    if [ "$RESERVED" -eq 0 ]; then
+        die "No se pudo reservar ninguna IP (ningún equipo detectable en red)."
+    fi
+    exit 0
+fi
 
 # =============================================================================
 # PASO 1: Obtener la MAC
@@ -138,21 +246,7 @@ else
     # -------------------------------------------------------------------------
     log_info "Detectando MAC desde el router (ARP/leases)..."
 
-    RASPI_MAC=$(router_ssh \
-        "ip neigh show $RASPI_IP 2>/dev/null | awk '{print \$5}' | head -1" 2>/dev/null)
-
-    if [ -z "$RASPI_MAC" ] || [ "$RASPI_MAC" = "FAILED" ]; then
-        log_warn "ARP sin resultado — buscando en /tmp/dhcp.leases..."
-        RASPI_MAC=$(router_ssh \
-            "awk '\$3==\"$RASPI_IP\"{print \$2}' /tmp/dhcp.leases 2>/dev/null | head -1" \
-            2>/dev/null)
-    fi
-
-    if [ -z "$RASPI_MAC" ]; then
-        log_warn "dhcp.leases sin resultado — intentando arp -n..."
-        RASPI_MAC=$(router_ssh \
-            "arp -n $RASPI_IP 2>/dev/null | awk 'NR==2{print \$3}'" 2>/dev/null)
-    fi
+    RASPI_MAC=$(detect_mac_router "$RASPI_IP")
 
     if [ -z "$RASPI_MAC" ]; then
         die "No se pudo detectar la MAC de $RASPI_IP desde el router.
