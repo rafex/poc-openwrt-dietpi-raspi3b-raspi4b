@@ -120,6 +120,11 @@ KEYS_DIR="/opt/keys"
 ENV_FILE="/etc/ai-analyzer.env"
 SYSTEMD_BACKEND="/etc/systemd/system/ai-analyzer.service"
 SYSTEMD_WEB="/etc/systemd/system/ai-analyzer-web.service"
+HOST_LOG_DIR="/var/log/ai-analyzer"
+BACKEND_CONTAINER_LOG="${HOST_LOG_DIR}/ai-analyzer.container.log"
+WEB_CONTAINER_LOG="${HOST_LOG_DIR}/ai-analyzer-web.container.log"
+BACKEND_SERVICE_LOG="${HOST_LOG_DIR}/ai-analyzer.service.log"
+WEB_SERVICE_LOG="${HOST_LOG_DIR}/ai-analyzer-web.service.log"
 
 PI_IP="${AI_IP:-${RASPI4B_IP:-192.168.1.167}}"
 
@@ -293,6 +298,12 @@ log_ok "${ENV_FILE} escrito (chmod 600)"
 run_cmd mkdir -p "$DATA_DIR" "$KEYS_DIR"
 log_ok "Directorios: $DATA_DIR  $KEYS_DIR"
 
+run_cmd mkdir -p "$HOST_LOG_DIR"
+run_cmd chmod 755 "$HOST_LOG_DIR"
+run_cmd touch "$BACKEND_CONTAINER_LOG" "$WEB_CONTAINER_LOG" "$BACKEND_SERVICE_LOG" "$WEB_SERVICE_LOG"
+run_cmd chmod 644 "$BACKEND_CONTAINER_LOG" "$WEB_CONTAINER_LOG" "$BACKEND_SERVICE_LOG" "$WEB_SERVICE_LOG"
+log_ok "Logs de contenedores en host: $HOST_LOG_DIR"
+
 # ── 6. Desplegar backend ──────────────────────────────────────────────────────
 _pull_image_with_fallback() {
     local image_name="$1"
@@ -418,6 +429,8 @@ Opciones:
         --name  "$CONTAINER_BACKEND" \
         --restart unless-stopped \
         --network host \
+        --log-driver k8s-file \
+        --log-opt "path=${BACKEND_CONTAINER_LOG}" \
         --env-file "$ENV_FILE" \
         -v "${DATA_DIR}:/data:z" \
         -v "${KEYS_DIR}:/opt/keys:ro,z" \
@@ -440,6 +453,8 @@ RemainAfterExit=yes
 ExecStart=/usr/bin/podman start ${CONTAINER_BACKEND}
 ExecStop=/usr/bin/podman stop -t 10 ${CONTAINER_BACKEND}
 Restart=no
+StandardOutput=append:${BACKEND_SERVICE_LOG}
+StandardError=append:${BACKEND_SERVICE_LOG}
 
 [Install]
 WantedBy=multi-user.target
@@ -517,6 +532,8 @@ _deploy_web() {
         --name  "$CONTAINER_WEB" \
         --restart unless-stopped \
         --network host \
+        --log-driver k8s-file \
+        --log-opt "path=${WEB_CONTAINER_LOG}" \
         "$image_name"
 
     run_cmd $PODMAN_BIN start "$CONTAINER_WEB"
@@ -535,6 +552,8 @@ RemainAfterExit=yes
 ExecStart=/usr/bin/podman start ${CONTAINER_WEB}
 ExecStop=/usr/bin/podman stop -t 10 ${CONTAINER_WEB}
 Restart=no
+StandardOutput=append:${WEB_SERVICE_LOG}
+StandardError=append:${WEB_SERVICE_LOG}
 
 [Install]
 WantedBy=multi-user.target
@@ -643,6 +662,12 @@ printf "  Gestión de contenedores:\n"
 ! $SKIP_BACKEND && printf "    podman restart %s\n"    "$CONTAINER_BACKEND"
 ! $SKIP_WEB     && printf "    podman logs -f %s\n"    "$CONTAINER_WEB"
 ! $SKIP_WEB     && printf "    podman restart %s\n"    "$CONTAINER_WEB"
+printf "\n"
+printf "  Logs en host:\n"
+! $SKIP_BACKEND && printf "    %s\n" "$BACKEND_CONTAINER_LOG"
+! $SKIP_BACKEND && printf "    %s\n" "$BACKEND_SERVICE_LOG"
+! $SKIP_WEB     && printf "    %s\n" "$WEB_CONTAINER_LOG"
+! $SKIP_WEB     && printf "    %s\n" "$WEB_SERVICE_LOG"
 printf "\n"
 printf "  Imágenes desplegadas:\n"
 ! $SKIP_BACKEND && printf "    podman images | grep poc-ai-analyzer\n"
