@@ -418,6 +418,44 @@ portal-reset:
 # LLM — llama.cpp
 # =============================================================================
 
+# Compila llama.cpp desde fuentes en Pi4B y lo instala en /usr/local/bin/.
+# Clona en /opt/repository/llama.cpp y optimiza para Cortex-A72 (ARMv8-A + NEON + CRC32).
+# Tarda ~20-40 min en la primera compilación; las siguientes son incrementales.
+# Uso: just llm-build                    (compila si no hay binarios)
+#      just llm-build host=192.168.1.167 (Pi4B alternativa)
+[group('llm')]
+llm-build host=PI4B_IP:
+    @echo "→ Compilando llama.cpp en {{host}} (Cortex-A72)"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       bash scripts/setup-raspi4b-llama-build.sh"
+
+# Recompila llama.cpp desde cero (--force: actualiza repo + reconstruye)
+# Útil después de un nuevo release de llama.cpp o para aplicar cambios de flags
+[group('llm')]
+llm-build-force host=PI4B_IP:
+    @echo "→ Recompilando llama.cpp (force) en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       bash scripts/setup-raspi4b-llama-build.sh --force"
+
+# Compila llama.cpp de una rama/tag específico de upstream
+# Uso: just llm-build-branch branch=b4946
+[group('llm')]
+llm-build-branch branch host=PI4B_IP:
+    @echo "→ Compilando llama.cpp rama '{{branch}}' en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       bash scripts/setup-raspi4b-llama-build.sh --force --branch={{branch}}"
+
+# Dry-run: muestra los pasos de compilación sin ejecutarlos
+[group('llm')]
+llm-build-dry-run host=PI4B_IP:
+    @echo "→ Dry-run compilación llama.cpp en {{host}}"
+    ssh {{SSH_USER_PI}}@{{host}} \
+      "cd /opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b && \
+       bash scripts/setup-raspi4b-llama-build.sh --dry-run"
+
 # Estado de llama.cpp en Pi4B
 [group('llm')]
 llm-status host=PI4B_IP:
