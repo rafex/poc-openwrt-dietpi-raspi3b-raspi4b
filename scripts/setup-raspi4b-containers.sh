@@ -308,7 +308,7 @@ _pull_image_with_fallback() {
     log_info "Pulling $image_name ..."
     if run_cmd podman pull --platform linux/arm64 "$image_name"; then
         log_ok "Pull completado: $image_name"
-        printf '%s' "$selected"
+        PULLED_IMAGE="$selected"
         return 0
     fi
 
@@ -319,7 +319,7 @@ _pull_image_with_fallback() {
         if run_cmd podman pull --platform linux/arm64 "$fallback"; then
             log_ok "Pull completado con fallback: $fallback"
             log_warn "Se está usando 'preview' porque 'latest' no existe para ${repo_path}"
-            printf '%s' "$fallback"
+            PULLED_IMAGE="$fallback"
             return 0
         fi
 
@@ -341,7 +341,7 @@ _pull_image_with_fallback() {
                 log_info "Intentando tag seleccionado: $chosen_image"
                 if run_cmd podman pull --platform linux/arm64 "$chosen_image"; then
                     log_ok "Pull completado: $chosen_image"
-                    printf '%s' "$chosen_image"
+                    PULLED_IMAGE="$chosen_image"
                     return 0
                 fi
                 log_warn "Falló el pull del tag seleccionado: $chosen_tag"
@@ -374,7 +374,8 @@ _deploy_backend() {
     if [[ "$build_mode" == "local" ]]; then
         _build_java_local "$image_name"
     elif ! $NO_PULL; then
-        image_name="$(_pull_image_with_fallback "$image_name")"
+        _pull_image_with_fallback "$image_name"
+        image_name="$PULLED_IMAGE"
     fi
 
     log_info "Creando contenedor $CONTAINER_BACKEND ..."
@@ -472,7 +473,8 @@ _deploy_web() {
     fi
 
     if ! $NO_PULL; then
-        image_name="$(_pull_image_with_fallback "$image_name")"
+        _pull_image_with_fallback "$image_name"
+        image_name="$PULLED_IMAGE"
     fi
 
     log_info "Creando contenedor $CONTAINER_WEB ..."
