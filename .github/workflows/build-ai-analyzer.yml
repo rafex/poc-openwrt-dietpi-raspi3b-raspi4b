@@ -51,6 +51,15 @@ jobs:
             exit 1
           }
 
+      - name: Validar símbolos ABI de libanalyzer_db (rule_upsert)
+        working-directory: backend/java
+        run: |
+          set -euo pipefail
+          nm -D libanalyzer_db-linux-arm64.so | grep -E ' rule_upsert$' || {
+            echo "ERROR: libanalyzer_db-linux-arm64.so no exporta rule_upsert"
+            exit 1
+          }
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
