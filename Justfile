@@ -588,10 +588,33 @@ tag-force:
 # Uso: just version-set 0.5.0
 [group('release')]
 version-set version:
-    @echo "{{version}}" > VERSION
-    @echo "→ VERSION actualizado a {{version}}"
-    @echo "  Próximo tag en develop : v{{version}}-preview"
-    @echo "  Próximo tag en main    : v{{version}}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    if [ "$BRANCH" = "HEAD" ]; then
+      echo "ERROR: HEAD detached. Cambia a una rama antes de usar version-set."
+      exit 1
+    fi
+
+    echo "{{version}}" > VERSION
+    echo "→ VERSION actualizado a {{version}}"
+    echo "  Próximo tag en develop : v{{version}}-preview"
+    echo "  Próximo tag en main    : v{{version}}"
+
+    git add VERSION
+    if git diff --cached --quiet; then
+      echo "ℹ VERSION ya estaba en {{version}}; no hay commit que crear."
+      exit 0
+    fi
+
+    COMMIT_MSG="chore(release): bump version to {{version}}"
+    echo "→ Commit: ${COMMIT_MSG}"
+    git commit -m "${COMMIT_MSG}"
+
+    echo "→ Push rama actual: ${BRANCH}"
+    git push origin "${BRANCH}"
+    echo "✓ Version actualizada, commit y push completados en ${BRANCH}"
 
 # Muestra la versión actual y el tag que se generaría en la rama actual
 [group('release')]
