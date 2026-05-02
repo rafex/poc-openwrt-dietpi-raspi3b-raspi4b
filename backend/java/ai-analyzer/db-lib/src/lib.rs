@@ -49,9 +49,32 @@ mod error;
 mod handle;
 mod init;
 mod misc;
+mod rules;
 mod util;
 
 pub use handle::DbHandle;
+
+// Mantener vivos los símbolos C ABI al compilar cdylib con LTO/strip.
+// Sin estas referencias públicas, algunos toolchains eliminan funciones
+// FFI "no usadas" internamente y desaparecen de la tabla dinámica.
+#[allow(unused_imports)]
+pub use analyses::*;
+#[allow(unused_imports)]
+pub use alerts::*;
+#[allow(unused_imports)]
+pub use batches::*;
+#[allow(unused_imports)]
+pub use chat::*;
+#[allow(unused_imports)]
+pub use domains::*;
+#[allow(unused_imports)]
+pub use error::*;
+#[allow(unused_imports)]
+pub use handle::*;
+#[allow(unused_imports)]
+pub use misc::*;
+#[allow(unused_imports)]
+pub use rules::*;
 
 // ─── db_open ─────────────────────────────────────────────────────────────────
 
