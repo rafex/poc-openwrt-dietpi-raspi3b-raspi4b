@@ -76,7 +76,7 @@ jobs:
         working-directory: backend/java/ai-analyzer
         run: |
           set -euo pipefail
-          nm -D libanalyzer_db-linux-arm64.so | grep -E ' rule_upsert$' || {
+          nm -D libanalyzer_db-linux-arm64.so | grep -w 'rule_upsert' || {
             echo "ERROR: libanalyzer_db-linux-arm64.so no exporta rule_upsert"
             exit 1
           }
@@ -272,7 +272,7 @@ jobs:
       - name: Validar símbolos ABI en artefacto staged (rule_upsert)
         run: |
           set -euo pipefail
-          nm -D _docker_staging/libanalyzer_db-linux-arm64.so | grep -E ' rule_upsert$' || {
+          nm -D _docker_staging/libanalyzer_db-linux-arm64.so | grep -w 'rule_upsert' || {
             echo "ERROR: Artefacto staged no exporta rule_upsert"
             exit 1
           }
