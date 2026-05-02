@@ -438,6 +438,23 @@ Opciones:
         fi
     fi
 
+    # Validación ABI temprana para backend Java (sobre la imagen, no sobre
+    # contenedor en ejecución) para evitar falsos positivos si el contenedor cae.
+    if [[ "$BACKEND" == "java" ]]; then
+        log_info "Validando ABI Java↔Rust en imagen..."
+        if ! $PODMAN_BIN run --rm --entrypoint sh "$image_name" -lc \
+            'test -f /opt/ai-analyzer/lib/libanalyzer_db.so && grep -a -q "rule_upsert" /opt/ai-analyzer/lib/libanalyzer_db.so'; then
+            die "ABI incompatible detectada en imagen: la librería Rust no exporta 'rule_upsert'.
+Esto indica desalineación entre el binario Java y libanalyzer_db.so.
+
+Acciones recomendadas:
+  1) Usar tag explícito alineado (no mutable):
+     bash scripts/setup-raspi4b-containers.sh --backend=java --release=vX.Y.Z-preview
+  2) Re-publicar release/image asegurando que Java + lib Rust se construyan en el mismo run."
+        fi
+        log_ok "ABI Java↔Rust OK en imagen (símbolo rule_upsert presente)"
+    fi
+
     log_info "Creando contenedor $CONTAINER_BACKEND ..."
     run_cmd $PODMAN_BIN create \
         --name  "$CONTAINER_BACKEND" \
@@ -453,21 +470,12 @@ Opciones:
     run_cmd $PODMAN_BIN start "$CONTAINER_BACKEND"
     log_ok "Contenedor $CONTAINER_BACKEND iniciado"
 
-    # Validación ABI temprana para backend Java:
-    # evita loops de crash cuando la lib Rust no coincide con el binario Java.
-    if [[ "$BACKEND" == "java" ]]; then
-        log_info "Validando ABI Java↔Rust dentro del contenedor..."
-        if ! $PODMAN_BIN exec "$CONTAINER_BACKEND" sh -lc \
-            'test -f /opt/ai-analyzer/lib/libanalyzer_db.so && grep -a -q "rule_upsert" /opt/ai-analyzer/lib/libanalyzer_db.so'; then
-            die "ABI incompatible detectada: la librería Rust no exporta 'rule_upsert'.
-Esto indica desalineación entre el binario Java y libanalyzer_db.so en la imagen.
-
-Acciones recomendadas:
-  1) Usar tag explícito alineado (no mutable):
-     bash scripts/setup-raspi4b-containers.sh --backend=java --release=vX.Y.Z-preview
-  2) Re-publicar release/image asegurando que Java + lib Rust se construyan en el mismo run."
-        fi
-        log_ok "ABI Java↔Rust OK (símbolo rule_upsert presente)"
+    # Si el contenedor no queda en estado running, mostrar diagnóstico directo.
+    if ! $PODMAN_BIN ps --format '{{.Names}}' | grep -qx "$CONTAINER_BACKEND"; then
+        log_warn "El contenedor ${CONTAINER_BACKEND} no quedó en estado running tras start."
+        log_info "Últimos logs del contenedor:"
+        $PODMAN_BIN logs --tail 80 "$CONTAINER_BACKEND" || true
+        die "Backend Java cayó al arrancar. Revisa logs anteriores para causa raíz."
     fi
 
     # Servicio systemd
