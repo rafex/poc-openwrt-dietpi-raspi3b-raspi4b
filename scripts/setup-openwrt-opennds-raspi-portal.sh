@@ -82,13 +82,17 @@ ensure_opennds_installed
 log_info "=== Configurando openNDS -> portal Raspi ==="
 log_info "portal=${PORTAL_IP}:${PORTAL_PORT}${PORTAL_PATH}"
 
-router_ssh "sh -s -- '$NDS_GATEWAY_IF' '$NDS_GATEWAY_NAME' '$PORTAL_IP' '$PORTAL_PORT' '$PORTAL_PATH'" <<'EOF'
+router_ssh "sh -s -- '$NDS_GATEWAY_IF' '$NDS_GATEWAY_NAME' '$PORTAL_IP' '$PORTAL_PORT' '$PORTAL_PATH' '$RASPI3B_MAC' '$RASPI4B_MAC' '$PORTAL_NODE_MAC' '$AP_EXTENDER_MAC'" <<'EOF'
 set -eu
 GW_IF="$1"
 GW_NAME="$2"
 P_IP="$3"
 P_PORT="$4"
 P_PATH="$5"
+MAC_R3="$6"
+MAC_R4="$7"
+MAC_P3B2="$8"
+MAC_APX="$9"
 
 uci set opennds.@opennds[0].enabled='1'
 uci set opennds.@opennds[0].gatewayinterface="$GW_IF"
@@ -103,6 +107,18 @@ for p in 8080 80 443; do
   v="allow tcp port $p to $P_IP"
   if ! uci show opennds | grep -F "opennds.@opennds[0].preauthenticated_users='$v'" >/dev/null 2>&1; then
     uci add_list opennds.@opennds[0].preauthenticated_users="$v"
+  fi
+done
+
+# Bypass permanente de nodos de infraestructura para que nunca caigan al portal.
+for m in "$MAC_R3" "$MAC_R4" "$MAC_P3B2" "$MAC_APX"; do
+  [ -n "$m" ] || continue
+  case "$m" in
+    *:*:*:*:*:*) ;;
+    *) continue ;;
+  esac
+  if ! uci show opennds | grep -Fi "opennds.@opennds[0].trustedmac='$m'" >/dev/null 2>&1; then
+    uci add_list opennds.@opennds[0].trustedmac="$m"
   fi
 done
 
