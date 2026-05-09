@@ -146,6 +146,34 @@ WAN_ZONE="$(uci show firewall | sed -n "s/^\(firewall\.[^.]*\)\.name='wan'$/\1/p
 if [ -n "$WAN_ZONE" ]; then
     uci -q del_list "$WAN_ZONE.network=wwan" || true
     uci add_list "$WAN_ZONE.network=wwan"
+    uci set "$WAN_ZONE.masq='1'"
+    uci set "$WAN_ZONE.mtu_fix='1'"
+fi
+
+# LAN forward sane + forwarding lan->wan (evita valor escapado roto)
+LAN_ZONE="$(uci show firewall | sed -n "s/^\(firewall\.[^.]*\)\.name='lan'$/\1/p" | head -1)"
+if [ -n "$LAN_ZONE" ]; then
+    uci set "$LAN_ZONE.forward='ACCEPT'"
+fi
+
+# Dejar un solo forwarding src=lan dest=wan
+LAN_WAN_COUNT=0
+i=0
+while uci get firewall.@forwarding[$i] >/dev/null 2>&1; do
+    src="$(uci -q get firewall.@forwarding[$i].src || true)"
+    dst="$(uci -q get firewall.@forwarding[$i].dest || true)"
+    if [ "$src" = "lan" ] && [ "$dst" = "wan" ]; then
+        LAN_WAN_COUNT=$((LAN_WAN_COUNT + 1))
+        if [ "$LAN_WAN_COUNT" -gt 1 ]; then
+            uci delete firewall.@forwarding[$i]
+        fi
+    fi
+    i=$((i + 1))
+done
+if [ "$LAN_WAN_COUNT" -eq 0 ]; then
+    uci add firewall forwarding >/dev/null
+    uci set firewall.@forwarding[-1].src='lan'
+    uci set firewall.@forwarding[-1].dest='wan'
 fi
 
 uci commit network
@@ -159,8 +187,12 @@ ifup wwan >/dev/null 2>&1 || true
 
 echo "[router] ifstatus wwan:"
 ifstatus wwan 2>/dev/null || true
+echo "[router] firewall lan/wan sanity:"
+uci -q get firewall.@zone[0].forward 2>/dev/null || true
+uci show firewall | grep -n "forwarding" || true
+echo "[router] nft forward chain excerpt:"
+nft list ruleset 2>/dev/null | grep -n "chain forward\|br-lan\|forward_lan" || true
 EOF
 
 log_ok "WiFi configurado: uplink 2.4GHz + AP 5GHz"
 log_info "Validación sugerida: ssh root@$ROUTER_IP 'ifstatus wwan; iwinfo'"
-
