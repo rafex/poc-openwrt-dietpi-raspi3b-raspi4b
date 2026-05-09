@@ -6,6 +6,7 @@
 #   - OpenWrt: openNDS apuntando al portal en Raspi3B:8080/portal/
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+set -eu
 
 UPLINK_SSID="${UPLINK_SSID:-netup}"
 UPLINK_PASS="${UPLINK_PASS:-123}"
@@ -63,4 +64,3 @@ echo "[OK]    Modo aplicado."
 echo "[INFO]  Validación recomendada:"
 echo "  ssh root@192.168.1.1 'ifstatus wwan; uci show opennds | grep fas'"
 echo "  curl -I http://${PORTAL_IP}:${PORTAL_PORT}${PORTAL_PATH}"
-

@@ -47,7 +47,37 @@ validate_ip "$PORTAL_IP" || die "IP portal inválida: $PORTAL_IP"
 
 check_ssh_key
 test_router_ssh
-router_ssh "test -f /etc/config/opennds" || die "No existe /etc/config/opennds en router"
+
+ensure_opennds_installed() {
+    if router_ssh "test -f /etc/config/opennds"; then
+        log_ok "openNDS ya está instalado"
+        return 0
+    fi
+
+    log_warn "No existe /etc/config/opennds — instalando openNDS..."
+    router_ssh "sh -s" <<'EOF'
+set -eu
+if command -v apk >/dev/null 2>&1; then
+    apk update
+    apk add opennds
+elif command -v opkg >/dev/null 2>&1; then
+    opkg update
+    opkg install opennds
+else
+    echo "No hay gestor de paquetes soportado (apk/opkg)" >&2
+    exit 1
+fi
+
+# Inicializar config/defaults si el paquete no la creó automáticamente
+/etc/init.d/opennds enable >/dev/null 2>&1 || true
+/etc/init.d/opennds restart >/dev/null 2>&1 || true
+test -f /etc/config/opennds
+EOF
+    [ "$?" -eq 0 ] || die "No se pudo instalar/activar openNDS"
+    log_ok "openNDS instalado y activo"
+}
+
+ensure_opennds_installed
 
 log_info "=== Configurando openNDS -> portal Raspi ==="
 log_info "portal=${PORTAL_IP}:${PORTAL_PORT}${PORTAL_PATH}"
@@ -83,4 +113,3 @@ EOF
 log_ok "openNDS configurado para portal en Raspi"
 log_info "Resumen:"
 router_ssh "uci show opennds | grep -E 'enabled|gatewayinterface|gatewayname|fasremoteip|fasport|faspath|fas_secure_enabled|preauthenticated_users'" || true
-
