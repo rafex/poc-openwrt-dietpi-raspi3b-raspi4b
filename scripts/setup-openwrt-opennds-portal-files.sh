@@ -66,8 +66,20 @@ scp \
     "$PORTAL_SRC_DIR"/*.html root@"$ROUTER_IP":"$ROUTER_PORTAL_DIR"/ \
     >/dev/null 2>&1 || die "Falló la copia SCP de HTML al router"
 
+if [ -d "$PORTAL_SRC_DIR/blocked-art" ]; then
+    log_info "Copiando blocked-art al router..."
+    router_ssh "mkdir -p /www/blocked-art" || die "No se pudo crear /www/blocked-art"
+    scp \
+        -i "$SSH_KEY" \
+        -o StrictHostKeyChecking=no \
+        -o UserKnownHostsFile=/dev/null \
+        -o ConnectTimeout=10 \
+        "$PORTAL_SRC_DIR"/blocked-art/*.svg root@"$ROUTER_IP":/www/blocked-art/ \
+        >/dev/null 2>&1 || die "Falló la copia SCP de blocked-art al router"
+fi
+
 log_info "Aplicando permisos..."
-router_ssh "chmod 755 /www '$ROUTER_PORTAL_DIR' && chmod 644 '$ROUTER_PORTAL_DIR'/*.html" \
+router_ssh "chmod 755 /www '$ROUTER_PORTAL_DIR' /www/blocked-art 2>/dev/null || true; chmod 644 '$ROUTER_PORTAL_DIR'/*.html; chmod 644 /www/blocked-art/*.svg 2>/dev/null || true" \
     || die "No se pudieron aplicar permisos en $ROUTER_PORTAL_DIR"
 
 log_info "Configurando uhttpd.home=/www..."
@@ -77,4 +89,3 @@ router_ssh "uci set uhttpd.main.home='/www' && uci commit uhttpd && /etc/init.d/
 log_ok "Portal HTML desplegado en OpenWrt."
 log_info "Prueba sugerida:"
 log_info "  wget -O- http://$ROUTER_IP/portal/portal.html | head"
-
