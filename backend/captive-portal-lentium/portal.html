@@ -325,6 +325,17 @@
 (function(){
   const REDIRECT_URL = 'https://theworldofrafex.blog/';
   const REDIRECT_DELAY_MS = 3000;
+  const ROUTER_HOST_FALLBACK = '192.168.1.1';
+  const ROUTER_API_FALLBACK = 'http://192.168.1.181:5000';
+  const qs = new URLSearchParams(window.location.search);
+  const fasTok = qs.get('tok') || '';
+  const fasRedir = qs.get('redir') || '';
+  const fasAuthAction = qs.get('authaction') || '';
+  const apiBaseRaw =
+    qs.get('api_base') ||
+    qs.get('backend') ||
+    (window.location.hostname === ROUTER_HOST_FALLBACK ? ROUTER_API_FALLBACK : '');
+  const API_BASE = (apiBaseRaw || '').replace(/\/+$/, '');
   const dynamic   = document.getElementById('dynamicContent');
   const tabC      = document.getElementById('tabCliente');
   const tabI      = document.getElementById('tabInvitado');
@@ -349,13 +360,38 @@
     btn.textContent = text;
   }
 
-  function scheduleRedirect(msgBox, btn, okText) {
+  function apiUrl(path) {
+    return API_BASE ? (API_BASE + path) : path;
+  }
+
+  function buildOpenNDSAuthUrl() {
+    if (!fasTok) return '';
+    const redir = fasRedir || REDIRECT_URL;
+    const authAction =
+      fasAuthAction ||
+      `http://${window.location.hostname || ROUTER_HOST_FALLBACK}:2050/opennds_auth/`;
+    try {
+      const u = new URL(authAction, window.location.href);
+      u.searchParams.set('tok', fasTok);
+      u.searchParams.set('redir', redir);
+      return u.toString();
+    } catch (e) {
+      return `${authAction}?tok=${encodeURIComponent(fasTok)}&redir=${encodeURIComponent(redir)}`;
+    }
+  }
+
+  function postAuthDestination() {
+    const nds = buildOpenNDSAuthUrl();
+    return nds || REDIRECT_URL;
+  }
+
+  function scheduleRedirect(msgBox, btn, okText, destinationUrl) {
     const t0 = Date.now();
     function renderTick() {
       const leftMs = Math.max(0, REDIRECT_DELAY_MS - (Date.now() - t0));
       const leftS = Math.ceil(leftMs / 1000);
       showMsg(msgBox, 'ok', `${okText} Redirigiendo en ${leftS}s...`);
-      if (leftMs <= 0) window.location.href = REDIRECT_URL;
+      if (leftMs <= 0) window.location.href = destinationUrl || REDIRECT_URL;
     }
     setBtn(btn, true, '⏳ Redirigiendo...');
     renderTick();
@@ -456,7 +492,7 @@
 
   // ── POST helper ───────────────────────────────────────────────────────────
   function postJSON(path, data) {
-    return fetch(path, {
+    return fetch(apiUrl(path), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -464,7 +500,7 @@
   }
 
   function loadPortalContext(){
-    fetch('/api/portal/context', { cache: 'no-store' })
+    fetch(apiUrl('/api/portal/context'), { cache: 'no-store' })
       .then(r => r.json())
       .then(ctx => {
         if (ctx && ctx.warning && ctx.warning_message) {
@@ -544,7 +580,7 @@
     })
     .then(data => {
       if (data.ok) {
-        scheduleRedirect(msg, btn, '✔ ¡Conectado!');
+        scheduleRedirect(msg, btn, '✔ ¡Conectado!', postAuthDestination());
       } else {
         showMsg(msg, 'fail', data.error || 'Error al autorizar. Intenta de nuevo.');
         setBtn(btn, false, 'Conectar ahora 🐢');
@@ -661,7 +697,7 @@
     })
     .then(data => {
       if (data.ok) {
-        scheduleRedirect(msg, btn, '✔ Registro exitoso.');
+        scheduleRedirect(msg, btn, '✔ Registro exitoso.', postAuthDestination());
       } else {
         showMsg(msg, 'fail', data.error || 'Error al registrar. Intenta de nuevo.');
         setBtn(btn, false, 'Registrarme y Conectar 🌐');
