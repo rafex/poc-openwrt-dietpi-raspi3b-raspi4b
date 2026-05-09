@@ -280,6 +280,129 @@ bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182 
 
 ---
 
+## openwrt-install-usb-overlay.sh
+
+**Propósito:** mover el `overlay` de OpenWrt a una USB `ext4` para ganar persistencia/espacio.  
+**Idempotente:** Sí (reconfigura `fstab` y vuelve a sincronizar overlay).
+
+```bash
+bash scripts/openwrt-install-usb-overlay.sh
+bash scripts/openwrt-install-usb-overlay.sh --device /dev/sda1
+bash scripts/openwrt-install-usb-overlay.sh --uuid 191c8ec4-d5cc-4fb1-af5f-2ba1b0bcc58b
+bash scripts/openwrt-install-usb-overlay.sh --no-reboot
+```
+
+Qué hace:
+1. Detecta UUID (`block info`) o usa `--uuid`.
+2. Valida `TYPE=ext4`.
+3. Respalda `/etc/config/fstab`.
+4. Escribe mount UCI para `target '/overlay'`.
+5. Monta USB en `/mnt/usb` y copia `/overlay` actual con `tar | tar`.
+6. `sync` + `reboot` (salvo `--no-reboot`).
+
+Validación post-reboot:
+
+```bash
+ssh root@192.168.1.1 "mount | grep -E 'overlay|/dev/sda1'"
+ssh root@192.168.1.1 "df -h /overlay"
+```
+
+---
+
+## openwrt-push-admin-pubkeys.sh
+
+**Propósito:** copiar al OpenWrt las llaves públicas de administración para SSH de automatización.  
+**Llaves:** `captive-portal.pub` + `sensor.pub`  
+**Idempotente:** Sí
+
+```bash
+bash scripts/openwrt-push-admin-pubkeys.sh
+bash scripts/openwrt-push-admin-pubkeys.sh --captive-pub /ruta/a.pub --sensor-pub /ruta/b.pub
+```
+
+---
+
+## setup-openwrt-opennds-portal-files.sh
+
+**Propósito:** desplegar HTML del portal directamente en el router (`/www/portal`) y reiniciar `uhttpd`.  
+**Idempotente:** Sí
+
+```bash
+bash scripts/setup-openwrt-opennds-portal-files.sh
+```
+
+También copia `blocked-art/*.svg` a `/www/blocked-art`.
+
+---
+
+## setup-openwrt-opennds-config.sh
+
+**Propósito:** configurar `opennds` para portal local/FAS (gateway, `faspath`, `fasremoteip`, etc.).  
+**Idempotente:** Sí
+
+```bash
+bash scripts/setup-openwrt-opennds-config.sh
+bash scripts/setup-openwrt-opennds-config.sh --fas-path "/portal/portal.html?api_base=http://192.168.1.181:5000"
+```
+
+---
+
+## setup-openwrt-opennds-exceptions.sh
+
+**Propósito:** agregar excepciones `users_to_router` y `preauthenticated_users` para que clientes no autenticados alcancen backend/API del portal.  
+**Idempotente:** Sí
+
+```bash
+bash scripts/setup-openwrt-opennds-exceptions.sh --backend-ip 192.168.1.181
+```
+
+---
+
+## setup-openwrt-router-portal-mode.sh
+
+**Propósito:** orquestador del modo alternativo "portal en OpenWrt + openNDS + backend en Raspi3B-sensor".  
+**Idempotente:** Sí
+
+```bash
+sudo bash scripts/setup-openwrt-router-portal-mode.sh --backend-ip=192.168.1.181
+```
+
+Ejecuta en cadena:
+1. `openwrt-push-admin-pubkeys.sh`
+2. `setup-openwrt-opennds-portal-files.sh`
+3. `setup-openwrt-opennds-config.sh`
+4. `setup-openwrt-opennds-exceptions.sh`
+
+---
+
+## cleanup-raspi3b-sensor-for-captive-backend.sh
+
+**Propósito:** limpiar la Raspi3B-sensor del rol de captura (`network-sensor`, `tshark`, `/opt/sensor`, promisc persistente) y dejar base para backend cautivo.
+
+```bash
+sudo bash scripts/cleanup-raspi3b-sensor-for-captive-backend.sh
+sudo bash scripts/cleanup-raspi3b-sensor-for-captive-backend.sh --dry-run
+sudo bash scripts/cleanup-raspi3b-sensor-for-captive-backend.sh --purge-sensor-packages
+```
+
+---
+
+## setup-raspi3b-sensor-captive-backend.sh
+
+**Propósito:** desplegar backend cautivo Lentium en la Raspi3B-sensor con Podman.  
+**Persistencia SQLite host:** `/opt/captive-portal/lentium-data/lentium.db`
+
+```bash
+sudo bash scripts/setup-raspi3b-sensor-captive-backend.sh
+```
+
+Levanta:
+- contenedor `captive-backend-sensor`
+- backend en `http://127.0.0.1:5000`
+- servicio `systemd` `captive-backend-sensor.service` para autostart
+
+---
+
 ## setup-sensor-raspi3b.sh
 
 **Propósito:** instalación del sensor de red en RafexPi3B.  

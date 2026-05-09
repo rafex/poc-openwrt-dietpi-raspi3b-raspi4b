@@ -114,6 +114,57 @@ sudo bash scripts/setup-topology.sh --topology=legacy
 sudo bash scripts/setup-topology.sh --topology=split_portal --portal-host=192.168.1.182
 ```
 
+### 2.3 — Modo alternativo: portal en OpenWrt + openNDS + backend en Raspi3B-sensor
+
+Este modo **no reemplaza** `legacy` ni `split_portal`; es una opción adicional.
+
+Arquitectura de este modo:
+- OpenWrt sirve el HTML del portal en `/www/portal` (uhttpd + openNDS/FAS).
+- El backend de registro vive en la Raspi3B-sensor (Podman, puerto `5000`).
+- SQLite persiste en la Raspi3B-sensor: `/opt/captive-portal/lentium-data/lentium.db`.
+
+Pasos:
+
+```bash
+# 1) En Raspi3B-sensor: limpiar rol sensor (si aplica) y preparar backend
+sudo bash scripts/cleanup-raspi3b-sensor-for-captive-backend.sh
+
+# 2) En Raspi3B-sensor: desplegar backend cautivo
+sudo bash scripts/setup-raspi3b-sensor-captive-backend.sh
+
+# 3) En admin/Raspi con acceso SSH al router: configurar OpenWrt en modo router-portal
+sudo bash scripts/setup-openwrt-router-portal-mode.sh --backend-ip=192.168.1.181
+```
+
+Qué configura el paso 3:
+- Publica portal HTML en `http://192.168.1.1/portal/portal.html`.
+- Configura `opennds` con FAS (`tok`, `authaction`, `redir`).
+- Ajusta `faspath` con `api_base` al backend remoto (`http://192.168.1.181:5000`).
+- Aplica excepciones `preauthenticated_users` para que el portal pueda llamar al backend.
+
+### 2.4 — OpenWrt con overlay en USB (opcional recomendado)
+
+Si el overlay interno del router es muy pequeño, puedes moverlo a USB `ext4`:
+
+```bash
+bash scripts/openwrt-install-usb-overlay.sh
+```
+
+Opciones útiles:
+
+```bash
+bash scripts/openwrt-install-usb-overlay.sh --device /dev/sda1
+bash scripts/openwrt-install-usb-overlay.sh --uuid <UUID_USB>
+bash scripts/openwrt-install-usb-overlay.sh --no-reboot
+```
+
+Validar después del reboot:
+
+```bash
+ssh root@192.168.1.1 "mount | grep -E 'overlay|/dev/sda1'"
+ssh root@192.168.1.1 "df -h /overlay"
+```
+
 ---
 
 ## Paso 3 — Setup completo de RafexPi4B (recomendado)

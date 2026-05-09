@@ -52,6 +52,23 @@ graph TD
 
 PoC educativo de seguridad en redes públicas que combina hardware real (Raspberry Pi 3B + 4B + router OpenWrt) con un LLM local. El sistema captura tráfico de red real, lo analiza con TinyLlama en batches y lo presenta en dashboards en vivo.
 
+## Modo alternativo adicional (OpenWrt + openNDS + backend en Raspi3B-sensor)
+
+Además de `legacy` y `split_portal`, existe un tercer modo operativo:
+
+- El portal HTML vive en OpenWrt (`uhttpd`, ruta `/portal/portal.html`).
+- `opennds` gestiona captive portal y autorización vía FAS (`tok/authaction/redir`).
+- El backend de registro/autorización vive en la Raspi3B-sensor con Podman (`:5000`).
+- SQLite persiste en la Raspi3B-sensor (`/opt/captive-portal/lentium-data/lentium.db`).
+
+Flujo resumido:
+
+1. Cliente cae al portal de OpenWrt.
+2. `portal.html` llama al backend remoto (`api_base=http://192.168.1.181:5000`).
+3. Backend guarda registro en SQLite y valida credenciales.
+4. Frontend redirige a `opennds_auth` con `tok`/`redir`.
+5. OpenNDS habilita navegación del cliente.
+
 ```
 Internet
     │
