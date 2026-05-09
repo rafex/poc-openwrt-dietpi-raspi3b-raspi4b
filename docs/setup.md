@@ -165,6 +165,31 @@ ssh root@192.168.1.1 "mount | grep -E 'overlay|/dev/sda1'"
 ssh root@192.168.1.1 "df -h /overlay"
 ```
 
+### 2.5 — Modo offload adicional: OpenWrt ligero + portal completo en Raspi3B
+
+Objetivo de este modo:
+- OpenWrt solo hace routing/DHCP/DNS/firewall/openNDS.
+- Uplink por **2.4GHz** hacia `netup`.
+- AP para clientes por **5GHz**.
+- Portal (frontend + backend) en Raspi3B (`192.168.1.181:8080`).
+
+Script orquestador:
+
+```bash
+bash scripts/setup-openwrt-mode-raspi-portal-offload.sh \
+  --uplink-ssid netup \
+  --uplink-pass 123 \
+  --ap-ssid "Rafex Portal 5G" \
+  --portal-ip 192.168.1.181 \
+  --portal-port 8080 \
+  --portal-path /portal/
+```
+
+Este orquestador ejecuta:
+1. `setup-openwrt-wifi-uplink24-ap5.sh`
+2. `setup-openwrt-reserve-core-nodes.sh`
+3. `setup-openwrt-opennds-raspi-portal.sh`
+
 ---
 
 ## Paso 3 — Setup completo de RafexPi4B (recomendado)

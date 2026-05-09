@@ -69,6 +69,22 @@ Flujo resumido:
 4. Frontend redirige a `opennds_auth` con `tok`/`redir`.
 5. OpenNDS habilita navegación del cliente.
 
+## Modo offload WiFi/portal (nuevo)
+
+Variante recomendada cuando se busca bajar carga del router:
+
+- OpenWrt:
+  - Router/DHCP/DNS/firewall/openNDS
+  - STA uplink por 2.4GHz (`netup`)
+  - AP de clientes por 5GHz
+- Raspi3B:
+  - Frontend y backend del portal (ejemplo `:8080/portal/`)
+  - Sensor pesado (DPI)
+- Raspi4B:
+  - LLM/AI stack
+
+OpenWrt intercepta y redirige; portal y backend viven fuera del router.
+
 ```
 Internet
     │

@@ -309,6 +309,68 @@ ssh root@192.168.1.1 "df -h /overlay"
 
 ---
 
+## setup-openwrt-wifi-uplink24-ap5.sh
+
+**Propósito:** configurar OpenWrt con uplink por WiFi 2.4GHz (STA) y AP por 5GHz.
+
+```bash
+bash scripts/setup-openwrt-wifi-uplink24-ap5.sh
+bash scripts/setup-openwrt-wifi-uplink24-ap5.sh --uplink-ssid netup --uplink-pass 123 --ap-ssid "Rafex Portal 5G"
+```
+
+---
+
+## setup-openwrt-reserve-core-nodes.sh
+
+**Propósito:** reservas DHCP estáticas para nodos core:
+- Raspi3B sensor (`RASPI3B_IP`/`RASPI3B_MAC`)
+- Raspi4B llm (`RASPI4B_IP`/`RASPI4B_MAC`)
+
+```bash
+bash scripts/setup-openwrt-reserve-core-nodes.sh
+```
+
+---
+
+## setup-openwrt-opennds-raspi-portal.sh
+
+**Propósito:** configurar openNDS para usar portal externo en Raspi3B.
+
+Defaults:
+- `fasremoteip=192.168.1.181`
+- `fasport=8080`
+- `faspath=/portal/`
+- `fas_secure_enabled=0`
+
+```bash
+bash scripts/setup-openwrt-opennds-raspi-portal.sh --portal-ip 192.168.1.181 --portal-port 8080 --portal-path /portal/
+```
+
+También agrega `preauthenticated_users` para puertos `8080/80/443` al host del portal.
+
+---
+
+## setup-openwrt-mode-raspi-portal-offload.sh
+
+**Propósito:** orquestador del modo "OpenWrt ligero + portal completo en Raspi3B".
+
+```bash
+bash scripts/setup-openwrt-mode-raspi-portal-offload.sh \
+  --uplink-ssid netup \
+  --uplink-pass 123 \
+  --ap-ssid "Rafex Portal 5G" \
+  --portal-ip 192.168.1.181 \
+  --portal-port 8080 \
+  --portal-path /portal/
+```
+
+Orden interno:
+1. WiFi 2.4 uplink + AP 5
+2. Reservas DHCP core
+3. OpenNDS apuntando a Raspi portal
+
+---
+
 ## openwrt-push-admin-pubkeys.sh
 
 **Propósito:** copiar al OpenWrt las llaves públicas de administración para SSH de automatización.  
