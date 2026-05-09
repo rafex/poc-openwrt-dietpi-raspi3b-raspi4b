@@ -34,7 +34,7 @@ CFG
   fi
   log_ok "Configuración aplicada: $MOSQUITTO_CONF"
 
-  if command -v systemctl >/dev/null 2>&1 && systemctl status >/dev/null 2>&1; then
+  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     run_cmd systemctl enable mosquitto || true
     run_cmd systemctl restart mosquitto
   else

@@ -1,0 +1,25 @@
+[package]
+name    = "analyzer-db"
+version = "0.1.0"
+edition = "2021"
+description = "SQLite wrapper para ai-analyzer expuesto como C ABI (cdylib)"
+
+[lib]
+name  = "analyzer_db"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+rusqlite    = { version = "0.31", features = ["bundled"] }
+parking_lot = "0.12"
+serde       = { version = "1",    features = ["derive"] }
+serde_json  = "1"
+
+[profile.release]
+panic = "abort"      # No unwind across FFI boundary — undefined behavior otherwise
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+
+[profile.dev]
+panic = "abort"

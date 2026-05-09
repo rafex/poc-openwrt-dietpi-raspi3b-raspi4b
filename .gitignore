@@ -8,6 +8,25 @@ __pycache__/
 *.key
 /opt/keys/
 
+# age + sops — clave privada NUNCA al repo; solo va la pública en .sops.yaml
+*.age
+keys.txt
+secrets/*.plain.yaml
+secrets/*.dec.yaml
+# Archivos .env con credenciales reales (el .example SÍ va al repo)
+secrets/*.env
+!secrets/*.env.example
+
+# Rust build artifacts
+target/
+
+# IDE — Eclipse, VSCode
+.classpath
+.project
+.settings/
+*.swp
+*.swo
+
 # Logs
 *.log
 
@@ -24,3 +43,4 @@ output/*
 .opencode/worktrees.log
 .opencode/node_modules/
 session-ses_*.md
+.env

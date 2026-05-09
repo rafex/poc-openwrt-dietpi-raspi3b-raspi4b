@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>mx.rafex.analyzer</groupId>
+  <artifactId>ai-analyzer</artifactId>
+  <version>1.0.0</version>
+  <packaging>jar</packaging>
+  <name>AI Analyzer — Java 21 stdlib</name>
+  <description>Analizador de red con IA: MQTT, LLM local (llama.cpp) y Groq. Binario nativo GraalVM arm64.</description>
+  <url>https://github.com/rafex/presentaciones-cursos-talleres</url>
+
+  <properties>
+    <java.version>21</java.version>
+    <maven.compiler.source>21</maven.compiler.source>
+    <maven.compiler.target>21</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <mainClass>mx.rafex.analyzer.Main</mainClass>
+    <!-- Versiones de plugins de documentación y licencias -->
+    <maven-javadoc-plugin.version>3.7.0</maven-javadoc-plugin.version>
+    <license-maven-plugin.version>2.4.0</license-maven-plugin.version>
+  </properties>
+
+  <!--
+    Dependencias externas: UNA SOLA — el cliente MQTT Paho.
+    Todo lo demás es java.* stdlib:
+      - HTTP: com.sun.net.httpserver.HttpServer (JDK built-in)
+      - JSON: builder/parser propio (util/Json.java)
+      - HTTP cliente saliente: java.net.http.HttpClient
+      - Hilos: Thread.ofVirtual() (Project Loom, JDK 21)
+      - Panama FFI: java.lang.foreign.* (JDK 21)
+      - Tareas periódicas: ScheduledExecutorService
+  -->
+  <dependencies>
+    <!-- MQTT client (protocolo MQTT no está en stdlib de Java) -->
+    <dependency>
+      <groupId>org.eclipse.paho</groupId>
+      <artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+      <version>1.2.5</version>
+    </dependency>
+    <!-- API de Native Image para registrar FFM downcalls en build-time -->
+    <dependency>
+      <groupId>org.graalvm.sdk</groupId>
+      <artifactId>nativeimage</artifactId>
+      <version>25.0.2</version>
+      <scope>provided</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!-- Compilar Java 21: Panama FFI (java.lang.foreign.*) es estable en JDK 21,
+           no requiere incubator. La flag enable-preview aplica solo para text blocks
+           y otras features preview si se usan. -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <source>21</source>
+          <target>21</target>
+          <!-- Panama FFI (java.lang.foreign) es estable en JDK 21, sin flags extra -->
+          <compilerArgs>
+            <!-- Acceso a com.sun.net.httpserver (JDK interno pero siempre disponible) -->
+            <arg>--add-exports=jdk.httpserver/sun.net.httpserver=ALL-UNNAMED</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+
+      <!-- Fat JAR con todas las dependencias (shade plugin) -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals><goal>shade</goal></goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <finalName>ai-analyzer-fat</finalName>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>${mainClass}</mainClass>
+                </transformer>
+              </transformers>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- ─── Javadoc ────────────────────────────────────────────────────────── -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+        <version>${maven-javadoc-plugin.version}</version>
+        <configuration>
+          <!-- En CI usamos JDK 25: java.lang.foreign ya no es preview y javadoc
+               debe resolverse contra ese release para evitar errores de preview. -->
+          <source>25</source>
+          <release>25</release>
+          <doclint>none</doclint>
+          <quiet>true</quiet>
+          <failOnWarnings>false</failOnWarnings>
+        </configuration>
+        <executions>
+          <execution>
+            <id>attach-javadocs</id>
+            <goals>
+              <goal>jar</goal>
+            </goals>
+          </execution>
+          <execution>
+            <!-- javadoc:fix genera stubs deterministas en el código fuente.
+                 phase=none → no corre automáticamente; se invoca manualmente
+                 con: mvn javadoc:fix -->
+            <id>fix-javadoc-stubs</id>
+            <phase>none</phase>
+            <goals>
+              <goal>fix</goal>
+            </goals>
+            <configuration>
+              <fixTags>param,return,throws,link</fixTags>
+              <level>public</level>
+              <defaultAuthor>Raúl Eduardo González Argote</defaultAuthor>
+              <defaultSince>${project.version}</defaultSince>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!-- ─── Licencias MIT en cabeceras de archivos fuente ─────────────────── -->
+      <!--
+        Uso habitual:
+          mvn license:update-file-header    - agrega/actualiza cabeceras MIT
+          mvn license:update-project-license - escribe LICENSE en raíz del proyecto
+          mvn validate                       - verifica que todas las cabeceras existan
+        La fase generate-sources actualiza cabeceras automáticamente en cada build.
+      -->
+      <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>license-maven-plugin</artifactId>
+        <version>${license-maven-plugin.version}</version>
+        <configuration>
+          <licenseName>mit</licenseName>
+          <organizationName>Raúl Eduardo González Argote</organizationName>
+          <inceptionYear>2025</inceptionYear>
+          <projectName>${project.name}</projectName>
+          <!-- Limitar explícitamente a fuentes Java del proyecto -->
+          <roots>
+            <root>${project.basedir}/src/main/java</root>
+            <root>${project.basedir}/src/test/java</root>
+          </roots>
+          <includes>
+            <include>**/*.java</include>
+          </includes>
+          <excludes>
+            <exclude>**/generated/**</exclude>
+            <exclude>**/target/**</exclude>
+          </excludes>
+        </configuration>
+        <executions>
+          <execution>
+            <id>update-licenses</id>
+            <phase>generate-sources</phase>
+            <goals>
+              <goal>update-file-header</goal>
+              <goal>update-project-license</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>check-license</id>
+            <phase>validate</phase>
+            <goals>
+              <goal>check-file-header</goal>
+            </goals>
+            <configuration>
+              <failOnMissingHeader>true</failOnMissingHeader>
+            </configuration>
+          </execution>
+          <execution>
+            <id>add-license</id>
+            <phase>process-sources</phase>
+            <goals>
+              <goal>update-file-header</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <!--
+        GraalVM Native Image — compilar a binario arm64 en CI/CD.
+        Se activa con:  mvn -Pnative package
+
+        Compilador: GraalVM 25 (CI/CD) aunque el código fuente sea Java 21.
+        GraalVM 25 mejora el análisis estático, PGO y el footprint del binario
+        respecto a GraalVM 21, manteniendo compatibilidad con bytecode Java 21.
+
+        native-maven-plugin 0.10.3 es el mínimo compatible con GraalVM 25.
+      -->
+      <plugin>
+        <groupId>org.graalvm.buildtools</groupId>
+        <artifactId>native-maven-plugin</artifactId>
+        <version>0.10.3</version>
+        <extensions>true</extensions>
+        <configuration>
+          <mainClass>${mainClass}</mainClass>
+          <imageName>ai-analyzer</imageName>
+          <buildArgs>
+            <!--
+              -H:+ForeignAPISupport eliminado: Panama FFI (Foreign Function &amp; Memory API)
+              es estable desde JDK 22 y está habilitado por defecto en GraalVM 22+.
+              En GraalVM 25 el flag genera WARNING "obsolete option" y puede eliminarse.
+            -->
+            <!-- La clase DbLibrary inicializa MethodHandles en runtime, no en build time -->
+            <buildArg>--initialize-at-run-time=mx.rafex.analyzer.db.DbLibrary</buildArg>
+            <!-- Requerido para FFM (Panama) en Native Image -->
+            <buildArg>--enable-native-access=ALL-UNNAMED</buildArg>
+            <!-- Registro de descriptors FFM para downcalls -->
+            <buildArg>--features=mx.rafex.analyzer.db.DbForeignRegistrationFeature</buildArg>
+            <!--
+              Importante para Raspberry Pi 4B:
+              evita que Native Image genere binarios atados a extensiones de CPU
+              más nuevas (ej. LSE / ARMv8.1+) presentes en runners ARM modernos.
+              Con armv8-a el binario corre en Cortex-A72 (Pi4B).
+            -->
+            <buildArg>-march=armv8-a</buildArg>
+            <!-- Fallar si no se puede compilar (sin fallback a JVM interpretada) -->
+            <buildArg>--no-fallback</buildArg>
+            <!-- Stack traces completos en excepciones no capturadas -->
+            <buildArg>-H:+ReportExceptionStackTraces</buildArg>
+          </buildArgs>
+        </configuration>
+        <executions>
+          <execution>
+            <id>build-native</id>
+            <goals><goal>compile-no-fork</goal></goals>
+            <phase>package</phase>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <profiles>
+    <profile>
+      <id>native</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.graalvm.buildtools</groupId>
+            <artifactId>native-maven-plugin</artifactId>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
+</project>

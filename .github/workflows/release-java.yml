@@ -1,0 +1,342 @@
+name: Release — ai-analyzer Java (arm64)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Flujo de release para el backend Java:
+#   1. Compilar libanalyzer_db.so (Rust cdylib, aarch64)
+#   2. Compilar binario GraalVM Native Image (aarch64)
+#   3. Publicar artefactos como GitHub Release (tag semántico)
+#   4. Construir imagen Docker linux/arm64 y publicar en ghcr.io
+#
+# Triggers:
+#   • push de tag  v*.*.*          →  release producción  + :latest en ghcr.io
+#   • push de tag  v*.*.*-preview  →  pre-release (develop) — NO sobreescribe :latest
+#   • workflow_dispatch             →  release manual con versión explícita
+#
+# Tags de Docker publicados:
+#   v0.4.0          →  ghcr.io/…:0.4.0  ghcr.io/…:0.4  ghcr.io/…:latest
+#   v0.4.0-preview  →  ghcr.io/…:0.4.0-preview  ghcr.io/…:preview  (sin latest)
+# ─────────────────────────────────────────────────────────────────────────────
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-preview'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag de versión (ej: v1.2.3 o v1.2.3-preview)'
+        required: true
+        default: 'v0.0.0-dev'
+
+permissions:
+  contents: write   # crear GitHub Release y subir assets
+  packages: write   # publicar en ghcr.io
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/poc-ai-analyzer-java
+
+jobs:
+  # ─── 1. Compilar Rust → libanalyzer_db-linux-arm64.so ─────────────────────
+  build-rust-arm64:
+    name: "Rust cdylib (aarch64)"
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Caché Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            backend/java/ai-analyzer/db-lib/target
+          key: rust-arm64-${{ hashFiles('backend/java/ai-analyzer/db-lib/Cargo.lock') }}
+          restore-keys: rust-arm64-
+
+      - name: Build cdylib arm64 nativo
+        working-directory: backend/java/ai-analyzer/db-lib
+        run: |
+          cargo build --release
+          cp target/release/libanalyzer_db.so \
+             ../libanalyzer_db-linux-arm64.so
+          echo "Tamaño: $(du -sh ../libanalyzer_db-linux-arm64.so)"
+          file ../libanalyzer_db-linux-arm64.so
+          file ../libanalyzer_db-linux-arm64.so | grep -Eiq 'aarch64|arm64' || {
+            echo "ERROR: libanalyzer_db-linux-arm64.so no es ARM64"
+            exit 1
+          }
+
+      - name: Validar símbolos ABI de libanalyzer_db (rule_upsert)
+        working-directory: backend/java/ai-analyzer
+        run: |
+          set -euo pipefail
+          nm -D libanalyzer_db-linux-arm64.so | grep -w 'rule_upsert' || {
+            echo "ERROR: libanalyzer_db-linux-arm64.so no exporta rule_upsert"
+            exit 1
+          }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libanalyzer_db-linux-arm64
+          path: backend/java/ai-analyzer/libanalyzer_db-linux-arm64.so
+          retention-days: 7
+
+  # ─── 2. Compilar Java → GraalVM Native Image arm64 ────────────────────────
+  build-java-native-arm64:
+    name: "GraalVM Native Image (aarch64)"
+    runs-on: ubuntu-24.04-arm
+    needs: build-rust-arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GraalVM 25 compila código Java 21 (source/target en pom.xml se mantiene en 21)
+      # Mejoras vs GraalVM 21: mejor PGO, menor footprint, startup más rápido,
+      # mejor soporte de Panama FFI (estable desde JDK 22, sin flags extra)
+      - name: Instalar GraalVM CE 25 (compila código Java 21)
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dependencias de build Native Image
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y zlib1g-dev libstdc++-11-dev
+
+      - name: Caché Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: maven-${{ hashFiles('backend/java/ai-analyzer/pom.xml') }}
+          restore-keys: maven-
+
+      - name: Descargar libanalyzer_db
+        uses: actions/download-artifact@v4
+        with:
+          name: libanalyzer_db-linux-arm64
+          path: backend/java/ai-analyzer/
+
+      - name: Agregar cabeceras de licencia MIT
+        working-directory: backend/java/ai-analyzer
+        run: ./mvnw license:update-file-header -q
+
+      - name: Compilar fat JAR
+        working-directory: backend/java/ai-analyzer
+        run: ./mvnw -q package -DskipTests
+
+      - name: GraalVM Native Image arm64
+        working-directory: backend/java/ai-analyzer
+        run: |
+          # JAVA_HOME ya apunta a GraalVM 25 gracias a graalvm/setup-graalvm@v1
+          # source/target Java 21 — compilación nativa ARM64 al ejecutar en runner ARM
+          ./mvnw -q -Pnative package -DskipTests -Dnative.imageName=ai-analyzer
+          cp target/ai-analyzer ai-analyzer-linux-arm64
+          echo "Tamaño: $(du -sh ai-analyzer-linux-arm64)"
+          file ai-analyzer-linux-arm64
+          file ai-analyzer-linux-arm64 | grep -Eiq 'aarch64|arm64' || {
+            echo "ERROR: ai-analyzer-linux-arm64 no es ARM64"
+            exit 1
+          }
+
+      - name: Upload artifact — binario nativo
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-analyzer-linux-arm64
+          path: backend/java/ai-analyzer/ai-analyzer-linux-arm64
+          retention-days: 7
+
+      - name: Upload artifact — fat JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-analyzer-fat-jar
+          path: backend/java/ai-analyzer/target/ai-analyzer-fat.jar
+          retention-days: 7
+
+  # ─── 3. GitHub Release con artefactos ─────────────────────────────────────
+  github-release:
+    name: "GitHub Release"
+    runs-on: ubuntu-latest
+    needs: [build-rust-arm64, build-java-native-arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar todos los artefactos
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Determinar versión
+        id: version
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="${{ inputs.tag }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Publicando release: ${TAG}"
+
+      - name: Crear GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "AI Analyzer ${{ steps.version.outputs.tag }}"
+          prerelease: ${{ contains(steps.version.outputs.tag, '-preview') }}
+          make_latest: ${{ !contains(steps.version.outputs.tag, '-preview') }}
+          body: |
+            ## AI Analyzer ${{ steps.version.outputs.tag }}
+
+            ${{ contains(steps.version.outputs.tag, '-preview') && '> ⚠️ **Pre-release** — compilado desde rama `develop`. No usar en producción.' || '> ✅ **Release de producción** — compilado desde rama `main`.' }}
+
+            ### Artefactos para Raspberry Pi 4B (linux/arm64)
+
+            | Archivo | Descripción |
+            |---|---|
+            | `ai-analyzer-linux-arm64` | Binario nativo GraalVM — sin JVM, <80 MB RAM, startup <100ms |
+            | `libanalyzer_db-linux-arm64.so` | Librería Rust (SQLite embebido vía Panama FFI) |
+            | `ai-analyzer-fat.jar` | Fat JAR JVM (fallback, requiere Java 21) |
+
+            ### Imagen Docker (ghcr.io)
+
+            ```bash
+            # Pi4B — instalar stack completo vía podman
+            bash scripts/setup-raspi4b-containers.sh --release=${{ steps.version.outputs.tag }}
+
+            # O pull manual
+            podman pull ghcr.io/${{ github.repository_owner }}/poc-ai-analyzer-java:${{ steps.version.outputs.tag }}
+            ```
+
+            ### Deploy directo (sin podman)
+
+            ```bash
+            bash scripts/setup-raspi4b-ai-analyzer-java.sh --release=${{ steps.version.outputs.tag }}
+            ```
+          files: |
+            dist/ai-analyzer-linux-arm64/ai-analyzer-linux-arm64
+            dist/libanalyzer_db-linux-arm64/libanalyzer_db-linux-arm64.so
+            dist/ai-analyzer-fat-jar/ai-analyzer-fat.jar
+          fail_on_unmatched_files: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ─── 4. Docker image → ghcr.io ────────────────────────────────────────────
+  publish-java-image:
+    name: "Docker image → ghcr.io (linux/arm64)"
+    runs-on: ubuntu-latest
+    needs: [build-rust-arm64, build-java-native-arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar artefactos compilados
+        uses: actions/download-artifact@v4
+        with:
+          path: dist/
+
+      - name: Preparar contexto Docker
+        run: |
+          mkdir -p _docker_staging
+          cp dist/ai-analyzer-linux-arm64/ai-analyzer-linux-arm64        _docker_staging/
+          cp dist/libanalyzer_db-linux-arm64/libanalyzer_db-linux-arm64.so _docker_staging/
+          cp backend/java/ai-analyzer/Dockerfile                          _docker_staging/
+          echo "── Contexto Docker ──────────────────────────────"
+          ls -lh _docker_staging/
+
+      - name: Validar arquitectura de artefactos (debe ser ARM64)
+        run: |
+          set -euo pipefail
+          file _docker_staging/ai-analyzer-linux-arm64
+          file _docker_staging/libanalyzer_db-linux-arm64.so
+
+          # Binario GraalVM: debe ser AArch64
+          file _docker_staging/ai-analyzer-linux-arm64 | grep -Eiq 'aarch64|arm64' || {
+            echo "ERROR: ai-analyzer-linux-arm64 no es ARM64"
+            exit 1
+          }
+
+          # Librería Rust: debe ser AArch64
+          file _docker_staging/libanalyzer_db-linux-arm64.so | grep -Eiq 'aarch64|arm64' || {
+            echo "ERROR: libanalyzer_db-linux-arm64.so no es ARM64"
+            exit 1
+          }
+
+      - name: Validar símbolos ABI en artefacto staged (rule_upsert)
+        run: |
+          set -euo pipefail
+          nm -D _docker_staging/libanalyzer_db-linux-arm64.so | grep -w 'rule_upsert' || {
+            echo "ERROR: Artefacto staged no exporta rule_upsert"
+            exit 1
+          }
+
+      - name: Login ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up QEMU (para build arm64 en runner x86)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Metadatos de imagen (tags + labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-preview') }}
+            type=raw,value=preview,enable=${{ contains(github.ref, '-preview') }}
+            type=sha,prefix=dev-,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+          labels: |
+            org.opencontainers.image.title=AI Analyzer Java
+            org.opencontainers.image.description=Analizador de red con IA — backend Java GraalVM arm64
+            org.opencontainers.image.vendor=Rafex
+
+      - name: Build y push imagen arm64
+        id: buildpush
+        uses: docker/build-push-action@v5
+        with:
+          context: _docker_staging/
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verificar manifest publicado (debe incluir linux/arm64)
+        run: |
+          set -euo pipefail
+          FIRST_TAG="$(echo "${{ steps.meta.outputs.tags }}" | head -1)"
+          docker buildx imagetools inspect "$FIRST_TAG" | tee /tmp/imagetools-java.txt
+          grep -q "linux/arm64" /tmp/imagetools-java.txt || {
+            echo "ERROR: El manifest publicado no contiene linux/arm64"
+            exit 1
+          }
+
+      - name: Resumen
+        run: |
+          echo "## Imagen publicada" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Pull en Pi4B" >> "$GITHUB_STEP_SUMMARY"
+          echo '```bash' >> "$GITHUB_STEP_SUMMARY"
+          echo "podman pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"

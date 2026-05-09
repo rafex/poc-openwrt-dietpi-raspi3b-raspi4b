@@ -152,6 +152,32 @@ parse_common_flags() {
   REM_ARGS=("$@")
 }
 
+ensure_ai_analyzer_ready() {
+  # Verifica que el contenedor podman ai-analyzer está corriendo y responde
+  local waited=0
+  local max_s=60
+
+  if ! podman container exists ai-analyzer 2>/dev/null; then
+    die "Contenedor ai-analyzer no existe — ejecuta: bash scripts/setup-raspi4b-ai-analyzer.sh"
+  fi
+
+  local state
+  state="$(podman inspect --format '{{.State.Status}}' ai-analyzer 2>/dev/null || echo 'unknown')"
+  if [[ "$state" != "running" ]]; then
+    log_warn "Contenedor ai-analyzer no está corriendo (estado: $state) — arrancando..."
+    podman start ai-analyzer 2>/dev/null || die "No se pudo arrancar ai-analyzer"
+  fi
+
+  while ! curl -sf "http://127.0.0.1:5000/health" >/dev/null 2>&1 && [ "$waited" -lt "$max_s" ]; do
+    log_info "  [${waited}s/${max_s}s] Esperando ai-analyzer /health..."
+    sleep 5; waited=$((waited + 5))
+  done
+
+  curl -sf "http://127.0.0.1:5000/health" >/dev/null 2>&1 || \
+    die "ai-analyzer no responde en :5000 tras ${max_s}s"
+  log_ok "ai-analyzer listo en :5000"
+}
+
 ensure_k3s_ready() {
   local sock="/run/k3s/containerd/containerd.sock"
   local waited=0
