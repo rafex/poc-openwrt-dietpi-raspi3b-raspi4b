@@ -12,7 +12,7 @@
 | **Debian GNU/Linux 13 "Trixie"** | 13.x | Sistema operativo del equipo de desarrollo | GPL v2 + varios |
 | **VSCodium** | 1.x | Editor de código (VS Code sin telemetría de Microsoft) | MIT |
 | **Git** | 2.x | Control de versiones | GPL v2 |
-| **Docker** | 27.x | Build de imágenes de contenedor | Apache 2.0 |
+| **Podman** | 5.x | Build de imágenes de contenedor (estable en Debian 13) | Apache 2.0 |
 | **kubectl** | 1.34 | Administración del clúster k3s remoto | Apache 2.0 |
 | **OpenSSH client** | 9.x | Acceso SSH al router y a las Raspis | BSD |
 | **Python 3.13** | 3.13 | Scripts de automatización y desarrollo | PSF License |
@@ -43,7 +43,7 @@ graph TD
         Debian13["Debian GNU/Linux 13"]
         VSCodium["VSCodium — editor"]
         GitDev["Git"]
-        DockerDev["Docker client"]
+        PodmanDev["Podman"]
         KubectlDev["kubectl"]
     end
 
@@ -101,8 +101,8 @@ graph TD
 | **k3s** | Kubernetes ligero en Raspberry Pi 4B | Apache 2.0 | k3s.io |
 | **Traefik** | Ingress controller con preservación de IP real | MIT | traefik.io |
 | **containerd** | Runtime de contenedores (integrado en k3s) | Apache 2.0 | containerd.io |
-| **Alpine Linux** | Base de imágenes Docker del portal y nginx | MIT+GPL | alpinelinux.org |
-| **Docker** | Build de imágenes en la máquina de desarrollo | Apache 2.0 | docker.com |
+| **Alpine Linux** | Base de imágenes de contenedores del portal y nginx | MIT+GPL | alpinelinux.org |
+| **Podman** | Build de imágenes en la máquina de desarrollo (estable en Debian 13) | Apache 2.0 | podman.io |
 
 ### Mensajería y comunicación entre servicios
 
