@@ -82,7 +82,7 @@ ensure_opennds_installed
 log_info "=== Configurando openNDS -> portal Raspi ==="
 log_info "portal=${PORTAL_IP}:${PORTAL_PORT}${PORTAL_PATH}"
 
-router_ssh "sh -s -- '$NDS_GATEWAY_IF' '$NDS_GATEWAY_NAME' '$PORTAL_IP' '$PORTAL_PORT' '$PORTAL_PATH' '$RASPI3B_MAC' '$RASPI4B_MAC' '$PORTAL_NODE_MAC' '$AP_EXTENDER_MAC'" <<'EOF'
+router_ssh "sh -s -- '$NDS_GATEWAY_IF' '$NDS_GATEWAY_NAME' '$PORTAL_IP' '$PORTAL_PORT' '$PORTAL_PATH' '$RASPI3B_MAC' '$RASPI4B_MAC' '$PORTAL_NODE_MAC' '$AP_EXTENDER_MAC' '$ADMIN_MAC' '$ADMIN_IP'" <<'EOF'
 set -eu
 GW_IF="$1"
 GW_NAME="$2"
@@ -93,6 +93,8 @@ MAC_R3="$6"
 MAC_R4="$7"
 MAC_P3B2="$8"
 MAC_APX="$9"
+MAC_ADMIN="${10}"
+IP_ADMIN="${11}"
 
 uci set opennds.@opennds[0].enabled='1'
 uci set opennds.@opennds[0].gatewayinterface="$GW_IF"
@@ -111,7 +113,7 @@ for p in 8080 80 443; do
 done
 
 # Bypass permanente de nodos de infraestructura para que nunca caigan al portal.
-for m in "$MAC_R3" "$MAC_R4" "$MAC_P3B2" "$MAC_APX"; do
+for m in "$MAC_R3" "$MAC_R4" "$MAC_P3B2" "$MAC_APX" "$MAC_ADMIN"; do
   [ -n "$m" ] || continue
   case "$m" in
     *:*:*:*:*:*) ;;
@@ -122,10 +124,34 @@ for m in "$MAC_R3" "$MAC_R4" "$MAC_P3B2" "$MAC_APX"; do
   fi
 done
 
+# Bypass por IP para admin (además de trustedmac), útil si cambia temporalmente la MAC visible.
+if [ -n "$IP_ADMIN" ]; then
+  v="allow tcp port 1:65535 to $IP_ADMIN"
+  if ! uci show opennds | grep -F "opennds.@opennds[0].preauthenticated_users='$v'" >/dev/null 2>&1; then
+    uci add_list opennds.@opennds[0].preauthenticated_users="$v"
+  fi
+fi
+
 uci commit opennds
 /etc/init.d/opennds restart
 EOF
 
 log_ok "openNDS configurado para portal en Raspi"
 log_info "Resumen:"
-router_ssh "uci show opennds | grep -E 'enabled|gatewayinterface|gatewayname|fasremoteip|fasport|faspath|fas_secure_enabled|preauthenticated_users'" || true
+router_ssh "uci show opennds | grep -E 'enabled|gatewayinterface|gatewayname|fasremoteip|fasport|faspath|fas_secure_enabled|trustedmac|preauthenticated_users'" || true
+
+log_info "Verificando exenciones obligatorias (admin + Raspi3B + Raspi4B)..."
+for must_mac in "$ADMIN_MAC" "$RASPI3B_MAC" "$RASPI4B_MAC"; do
+    [ -n "$must_mac" ] || die "MAC obligatoria vacía en entorno/topología"
+    if router_ssh "uci show opennds | grep -Fi \"opennds.@opennds[0].trustedmac='$must_mac'\" >/dev/null"; then
+        log_ok "trustedmac OK: $must_mac"
+    else
+        die "Falta trustedmac obligatorio: $must_mac"
+    fi
+done
+
+if router_ssh "uci show opennds | grep -F \"opennds.@opennds[0].preauthenticated_users='allow tcp port 1:65535 to $ADMIN_IP'\" >/dev/null"; then
+    log_ok "preauthenticated_users admin IP OK: $ADMIN_IP"
+else
+    die "Falta exención preauthenticated_users para admin IP: $ADMIN_IP"
+fi
