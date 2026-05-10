@@ -47,7 +47,7 @@ SVC_BACKEND="/etc/systemd/system/captive-portal-nspawn-backend.service"
 SVC_FRONTEND="/etc/systemd/system/captive-portal-nspawn-frontend.service"
 BACKEND_SSH_KEY="/opt/keys/sensor"
 
-ensure_cmd systemctl systemd-nspawn debootstrap curl
+ensure_cmd systemctl curl
 [ -f "$APP_DIR/backend.py" ] || die "No encontrado: $APP_DIR/backend.py"
 
 log_info "--- setup-portal-raspi3b-nspawn ---"
@@ -55,6 +55,7 @@ log_info "rootfs=$ROOTFS portal_port=$PORTAL_PORT backend_port=$BACKEND_PORT rou
 
 if ! $ONLY_VERIFY; then
   apt_install_pkgs systemd-container debootstrap curl ca-certificates
+  ensure_cmd systemd-nspawn debootstrap
   run_cmd mkdir -p "$DB_DIR" /opt/captive-portal/nspawn /opt/keys
   if [[ ! -f "$BACKEND_SSH_KEY" && -f /opt/keys/captive-portal ]]; then
     BACKEND_SSH_KEY="/opt/keys/captive-portal"
