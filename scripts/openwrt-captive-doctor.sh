@@ -80,7 +80,12 @@ else
   check_warn "No se encontró regla DNAT hacia $PORTAL_IP:$PORTAL_PORT en chain prerouting"
 fi
 
+SEEN_IPS=""
 for ip in "$ADMIN_IP" "$RASPI4B_IP" "$RASPI3B_IP" "$PORTAL_IP"; do
+  case " $SEEN_IPS " in
+    *" $ip "*) continue ;;
+  esac
+  SEEN_IPS="$SEEN_IPS $ip"
   if router_ip_in_set "$ip"; then
     check_ok "IP permanente en set: $ip"
   else
