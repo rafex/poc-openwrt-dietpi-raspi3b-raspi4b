@@ -13,6 +13,7 @@ import time
 import os
 import socket
 import urllib.request
+import urllib.parse
 import mimetypes
 from pathlib import Path
 
@@ -742,6 +743,11 @@ setInterval(() => refresh().catch(()=>{}), 5000);
 # HTTP Handler
 # =============================================================================
 class Handler(http.server.BaseHTTPRequestHandler):
+    def _path_only(self) -> str:
+        try:
+            return urllib.parse.urlparse(self.path).path or "/"
+        except Exception:
+            return self.path or "/"
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -810,30 +816,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        path = self._path_only()
         log.info(f"GET {self.path}  peer={self.client_address[0]}")
 
-        if self.path in ("/", "/portal", "/index.html"):
+        if path in ("/", "/portal", "/portal/", "/index.html"):
             self._serve_portal()
             return
 
-        if self.path in ("/services", "/services/"):
+        if path in ("/services", "/services/"):
             self._serve_static_html("services.html")
             return
 
-        if self.path in ("/blocked", "/blocked/"):
+        if path in ("/blocked", "/blocked/"):
             self._serve_static_html("blocked.html")
             return
 
-        if self.path.startswith("/blocked-art/"):
-            rel = self.path.lstrip("/")
+        if path.startswith("/blocked-art/"):
+            rel = path.lstrip("/")
             self._serve_static_file(rel)
             return
 
-        if self.path in ("/people", "/people/", "/demoDashboard", "/demoDashboard/"):
+        if path in ("/people", "/people/", "/demoDashboard", "/demoDashboard/"):
             self._serve_static_html("people.html")
             return
 
-        if self.path == "/health":
+        if path == "/health":
             rc, stdout, _ = _router_ssh("health-check", "echo pong")
             router_ok = (rc == 0 and stdout == "pong")
             self._respond(200 if router_ok else 503, {
@@ -843,7 +850,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             })
             return
 
-        if self.path == "/accepted":
+        if path == "/accepted":
             html = (
                 b"<!DOCTYPE html><html><head><meta charset='UTF-8'>"
                 b"<title>Conectado - Lentium</title>"
@@ -862,7 +869,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(html)
             return
 
-        if self.path == "/api/registros/clientes":
+        if path == "/api/registros/clientes":
             with _db_connect() as conn:
                 rows = conn.execute(
                     "SELECT id,telefono,pwd_plano,pwd_hash,ip,registrado_en,ultima_sesion FROM clientes ORDER BY id DESC"
@@ -870,7 +877,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(200, {"clientes": [dict(r) for r in rows]})
             return
 
-        if self.path == "/api/registros/invitados":
+        if path == "/api/registros/invitados":
             with _db_connect() as conn:
                 rows = conn.execute(
                     """SELECT id,nombre,apellido_paterno,apellido_materno,telefono,
@@ -886,15 +893,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(200, {"invitados": result})
             return
 
-        if self.path in ("/api/people/dashboard", "/api/demo/dashboard"):
+        if path in ("/api/people/dashboard", "/api/demo/dashboard"):
             self._respond(200, _build_demo_dashboard_payload())
             return
 
-        if self.path == "/api/services/status":
+        if path == "/api/services/status":
             self._respond(200, _service_status())
             return
 
-        if self.path == "/api/portal/context":
+        if path == "/api/portal/context":
             client_ip = get_client_ip(self)
             warned = _is_warned_ip(client_ip)
             ai_risk = _fetch_ai_risk_message(client_ip)
@@ -911,6 +918,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._respond(404, {"error": "not found"})
 
     def do_POST(self):
+        path = self._path_only()
         log.info(f"POST {self.path}  peer={self.client_address[0]}")
         data = self._read_json()
 
@@ -918,7 +926,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Flujo de uso:
         #   Primera vez → registrarse como Invitado (/api/register/guest)
         #   Siguiente visita → entrar como Cliente con teléfono + contraseña
-        if self.path == "/api/register/client":
+        if path == "/api/register/client":
             err = _require_fields(data, ["telefono", "password"])
             if err:
                 self._respond(400, {"ok": False, "error": err}); return
@@ -969,7 +977,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         # ── Registro de invitado ─────────────────────────────────────────────
-        if self.path in ("/api/register/guest", "/api/register/quest"):
+        if path in ("/api/register/guest", "/api/register/quest"):
             err = _require_fields(data, ["nombre","apellido_paterno","apellido_materno","telefono","password"])
             if err:
                 self._respond(400, {"ok": False, "error": err}); return
@@ -984,7 +992,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(200 if ok else 500, {"ok": ok, "ip": client_ip})
             return
 
-        if self.path == "/api/services/action":
+        if path == "/api/services/action":
             service = str(data.get("service", "")).strip()
             action = str(data.get("action", "")).strip()
             if not service or not action:
@@ -1002,7 +1010,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         # ── Compatibilidad con portal anterior (/accept) ─────────────────────
-        if self.path == "/accept":
+        if path == "/accept":
             client_ip = get_client_ip(self)
             ok = authorize_client(client_ip)
             self._respond(200 if ok else 500, {"ok": ok, "ip": client_ip})
