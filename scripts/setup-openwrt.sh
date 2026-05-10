@@ -144,9 +144,16 @@ log_ok "Espacio disponible en overlay: ${AVAIL_KB}KB"
 # Verificar que la interfaz AP existe en el router
 log_info "Verificando interfaz $AP_IFACE en el router..."
 if ! router_ssh "ip link show $AP_IFACE > /dev/null 2>&1"; then
-    log_warn "Interfaz $AP_IFACE no encontrada. Interfaces disponibles:"
-    router_ssh "ip link show | grep -E '^[0-9]+:' | awk '{print \$2}'"
-    die "Ajusta AP_IFACE en lib/common.sh con el nombre correcto de la interfaz AP WiFi"
+    log_warn "Interfaz $AP_IFACE no encontrada. Intentando autodetectar AP iface..."
+    AUTO_AP_IFACE="$(router_ssh "ip -o link show | awk -F': ' '{print \$2}' | sed 's/@.*//' | grep -E '^phy[0-9]+-ap[0-9]+$' | head -1" 2>/dev/null || true)"
+    if [ -n "$AUTO_AP_IFACE" ]; then
+        AP_IFACE="$AUTO_AP_IFACE"
+        log_ok "Autodetect AP_IFACE: $AP_IFACE"
+    else
+        log_warn "No se pudo autodetectar interfaz AP. Interfaces disponibles:"
+        router_ssh "ip link show | grep -E '^[0-9]+:' | awk '{print \$2}'"
+        die "Ajusta AP_IFACE en lib/common.sh con el nombre correcto de la interfaz AP WiFi"
+    fi
 fi
 log_ok "Interfaz $AP_IFACE presente en el router"
 
