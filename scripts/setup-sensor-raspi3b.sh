@@ -77,6 +77,7 @@ step()  { echo -e "\n${BOLD}── $* ──${NC}"; }
 # ─── Argumentos ───────────────────────────────────────────────────────────────
 SETUP_SSH=true
 DRY_RUN=false
+AUTO_SSH_COPY=false      # evita bloqueos interactivos por defecto
 WAIT_PI4B=true           # esperar que Pi4B esté operativa antes de iniciar el servicio
 WAIT_MQTT_S=180          # segundos máximos esperando broker MQTT (Pi4B puede tardar en levantar k3s)
 WAIT_HTTP_S=120          # segundos máximos esperando analizador HTTP
@@ -86,13 +87,15 @@ for arg in "$@"; do
     case "$arg" in
         --no-ssh)     SETUP_SSH=false  ;;
         --dry-run)    DRY_RUN=true     ;;
+        --ssh-copy-auto) AUTO_SSH_COPY=true ;;
         --no-wait)    WAIT_PI4B=false  ;;
         --wait-mqtt=*)  WAIT_MQTT_S="${arg#*=}" ;;
         --wait-http=*)  WAIT_HTTP_S="${arg#*=}" ;;
         --help|-h)
-            echo "Uso: $0 [--no-ssh] [--dry-run] [--no-wait] [--wait-mqtt=N] [--wait-http=N]"
+            echo "Uso: $0 [--no-ssh] [--dry-run] [--ssh-copy-auto] [--no-wait] [--wait-mqtt=N] [--wait-http=N]"
             echo "  --no-ssh          Omitir configuración SSH"
             echo "  --dry-run         Solo mostrar qué haría"
+            echo "  --ssh-copy-auto   Intentar ssh-copy-id automático (con timeout, no bloqueante)"
             echo "  --no-wait         No esperar a que Pi4B esté operativa"
             echo "  --wait-mqtt=N     Segundos máximos esperando broker MQTT (default: 180)"
             echo "  --wait-http=N     Segundos máximos esperando analizador HTTP (default: 120)"
@@ -435,13 +438,18 @@ if $SETUP_SSH; then
         echo "  ssh-copy-id -i $SSH_KEY root@$ROUTER_IP"
         echo ""
 
-        # Intentar agregar automáticamente si tenemos acceso con contraseña
-        info "Intentando agregar llave automáticamente (puede pedir contraseña)..."
-        if ssh-copy-id -i "${SSH_KEY}.pub" -o StrictHostKeyChecking=no \
-            "root@$ROUTER_IP" 2>/dev/null; then
-            ok "Llave copiada automáticamente al router"
+        if $AUTO_SSH_COPY; then
+            info "Intentando agregar llave automáticamente (timeout 20s, no bloqueante)..."
+            if timeout 20 ssh-copy-id -i "${SSH_KEY}.pub" \
+                -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                "root@$ROUTER_IP" < /dev/null >/dev/null 2>&1; then
+                ok "Llave copiada automáticamente al router"
+            else
+                warn "No se pudo copiar automáticamente (timeout/error) — agrega la llave manualmente"
+            fi
         else
-            warn "No se pudo copiar automáticamente — agrega la llave manualmente"
+            info "Auto-copia SSH desactivada por defecto para evitar bloqueos."
+            info "Si quieres intentarla automáticamente usa: --ssh-copy-auto"
         fi
     fi
 else
