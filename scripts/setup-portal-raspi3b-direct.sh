@@ -85,7 +85,15 @@ EOF
 fi
 
 if ! $DRY_RUN; then
-  CODE="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 10 "http://127.0.0.1:${PORT}/portal" 2>/dev/null || echo 000)"
+  CODE="000"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    CODE="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 \
+      "http://127.0.0.1:${PORT}/portal" 2>/dev/null || echo 000)"
+    case "$CODE" in
+      200|301|302|307|308) break ;;
+    esac
+    sleep 1
+  done
   case "$CODE" in
     200|301|302|307|308) log_ok "Portal directo local OK: /portal (HTTP $CODE)" ;;
     *)
@@ -98,4 +106,3 @@ if ! $DRY_RUN; then
 fi
 
 log_ok "setup-portal-raspi3b-direct completado"
-
