@@ -409,18 +409,25 @@ def get_client_ip(handler) -> str:
 
     log.info(f"IP headers — X-Real-IP={x_real_ip!r} X-Forwarded-For={x_forwarded!r} peer={peer_ip}")
 
-    if x_real_ip and x_real_ip.startswith("192.168.") and x_real_ip != PORTAL_IP:
+    reserved_ips = {PORTAL_IP, ROUTER_IP, ADMIN_IP, RASPI3B_IP, RASPI4B_IP}
+
+    if x_real_ip and x_real_ip.startswith("192.168.") and x_real_ip not in reserved_ips:
         return x_real_ip
     if x_forwarded:
         first = x_forwarded.split(",")[0].strip()
-        if first.startswith("192.168.") and first != PORTAL_IP:
+        if first.startswith("192.168.") and first not in reserved_ips:
             return first
+
+    # En modo directo (sin proxy intermedio) peer_ip suele ser la IP LAN real del cliente.
+    if peer_ip.startswith("192.168.") and peer_ip not in reserved_ips:
+        log.info(f"Usando peer IP LAN como cliente: {peer_ip}")
+        return peer_ip
 
     log.warning("Headers sin IP LAN válida — fallback conntrack")
     rc, stdout, _ = _router_ssh(
         "conntrack-get-ip",
         "cat /proc/net/nf_conntrack"
-        " | grep dport=80 | grep ESTABLISHED"
+        f" | grep -E 'dport=({PORT}|80)' | grep ESTABLISHED"
         " | awk '{print $7}' | sed 's/src=//'"
         f" | grep '192.168.1.' | grep -v '{PORTAL_IP}' | head -1"
     )
