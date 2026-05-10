@@ -1,6 +1,9 @@
 #!/bin/sh
 # setup-openwrt-reserve-core-nodes.sh
-# Reserva IPs estáticas (DHCP) para Raspi3B-sensor y Raspi4B-LLM.
+# Reserva IPs estáticas (DHCP) para nodos core:
+#   - Laptop admin
+#   - Raspi3B-sensor
+#   - Raspi4B-LLM.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib/common.sh"
@@ -11,9 +14,13 @@ R3_MAC="${R3_MAC:-$RASPI3B_MAC}"
 R4_HOST="${R4_HOST:-$RASPI4B_HOSTNAME}"
 R4_IP="${R4_IP:-$RASPI4B_IP}"
 R4_MAC="${R4_MAC:-$RASPI4B_MAC}"
+ADMIN_HOST="${ADMIN_HOST:-$ADMIN_HOSTNAME}"
+ADMIN_RES_IP="${ADMIN_RES_IP:-$ADMIN_IP}"
+ADMIN_RES_MAC="${ADMIN_RES_MAC:-$ADMIN_MAC}"
 
 validate_ip "$R3_IP" || die "IP inválida R3: $R3_IP"
 validate_ip "$R4_IP" || die "IP inválida R4: $R4_IP"
+validate_ip "$ADMIN_RES_IP" || die "IP inválida admin: $ADMIN_RES_IP"
 
 check_ssh_key
 test_router_ssh
@@ -52,6 +59,12 @@ EOF
 }
 
 log_info "=== Reservando IPs core en OpenWrt ==="
+if [ -n "$ADMIN_RES_MAC" ]; then
+    reserve_one "$ADMIN_HOST" "$ADMIN_RES_MAC" "$ADMIN_RES_IP" || die "Falló reserva $ADMIN_HOST"
+    log_ok "Reserva OK: $ADMIN_HOST $ADMIN_RES_MAC -> $ADMIN_RES_IP"
+else
+    log_warn "ADMIN_MAC vacío: se omite reserva de laptop admin"
+fi
 reserve_one "$R3_HOST" "$R3_MAC" "$R3_IP" || die "Falló reserva $R3_HOST"
 log_ok "Reserva OK: $R3_HOST $R3_MAC -> $R3_IP"
 reserve_one "$R4_HOST" "$R4_MAC" "$R4_IP" || die "Falló reserva $R4_HOST"
@@ -62,4 +75,3 @@ log_ok "dnsmasq recargado"
 
 log_info "Reservas actuales (resumen):"
 router_ssh "uci show dhcp | grep '=host' -n; uci show dhcp | grep -E '\\.name=|\\.mac=|\\.ip=|\\.leasetime='"
-
