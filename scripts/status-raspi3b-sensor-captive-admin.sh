@@ -17,6 +17,7 @@ PI3_IP="${RASPI3B_IP:-192.168.1.181}"
 PORTAL_PORT="${PORTAL_PORT:-8080}"
 SSH_KEY="${SSH_KEY:-/opt/keys/captive-portal}"
 ROUTER_KEY="${ROUTER_KEY:-/opt/keys/captive-portal}"
+CAPTIVE_MODE="${CAPTIVE_MODE:-auto}"  # auto|classic|opennds
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -25,6 +26,7 @@ while [ $# -gt 0 ]; do
     --portal-port) PORTAL_PORT="$2"; shift 2;;
     --ssh-key) SSH_KEY="$2"; shift 2;;
     --router-key) ROUTER_KEY="$2"; shift 2;;
+    --mode) CAPTIVE_MODE="$2"; shift 2;;
     --help|-h)
       cat <<EOF
 Uso: $0 [opciones]
@@ -33,6 +35,7 @@ Uso: $0 [opciones]
   --portal-port <n>    Puerto backend/frontend portal (default: $PORTAL_PORT)
   --ssh-key <path>     Llave SSH para Raspi3B
   --router-key <path>  Llave SSH para OpenWrt
+  --mode <m>           auto|classic|opennds (default: auto)
 EOF
       exit 0;;
     *) echo "Argumento desconocido: $1"; exit 2;;
@@ -71,16 +74,33 @@ else
 fi
 
 if [ "$FAIL" -eq 0 ]; then
-  info "--- OpenWrt / openNDS ---"
-  O_NDS="$(ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "uci -q get opennds.@opennds[0].enabled 2>/dev/null || true")"
-  [ "$O_NDS" = "1" ] && ok "openNDS enabled=1" || warn "openNDS enabled=$O_NDS"
+  info "--- OpenWrt captive mode ---"
+  if [ "$CAPTIVE_MODE" = "auto" ]; then
+    if ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "test -f /etc/config/opennds"; then
+      CAPTIVE_MODE="opennds"
+    else
+      CAPTIVE_MODE="classic"
+    fi
+  fi
 
-  FAS_IP="$(ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "uci -q get opennds.@opennds[0].fasremoteip 2>/dev/null || true")"
-  FAS_PORT="$(ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "uci -q get opennds.@opennds[0].fasport 2>/dev/null || true")"
-  FAS_PATH="$(ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "uci -q get opennds.@opennds[0].faspath 2>/dev/null || true")"
-  [ "$FAS_IP" = "$PI3_IP" ] && ok "fasremoteip=$FAS_IP" || fail "fasremoteip=$FAS_IP (esperado $PI3_IP)"
-  [ "$FAS_PORT" = "$PORTAL_PORT" ] && ok "fasport=$FAS_PORT" || warn "fasport=$FAS_PORT (esperado $PORTAL_PORT)"
-  [ -n "$FAS_PATH" ] && ok "faspath=$FAS_PATH" || warn "faspath vacío"
+  if [ "$CAPTIVE_MODE" = "opennds" ]; then
+    O_NDS="$(ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "uci -q get opennds.@opennds[0].enabled 2>/dev/null || true")"
+    [ "$O_NDS" = "1" ] && ok "openNDS enabled=1" || warn "openNDS enabled=$O_NDS"
+
+    FAS_IP="$(ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "uci -q get opennds.@opennds[0].fasremoteip 2>/dev/null || true")"
+    FAS_PORT="$(ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "uci -q get opennds.@opennds[0].fasport 2>/dev/null || true")"
+    FAS_PATH="$(ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "uci -q get opennds.@opennds[0].faspath 2>/dev/null || true")"
+    [ "$FAS_IP" = "$PI3_IP" ] && ok "fasremoteip=$FAS_IP" || fail "fasremoteip=$FAS_IP (esperado $PI3_IP)"
+    [ "$FAS_PORT" = "$PORTAL_PORT" ] && ok "fasport=$FAS_PORT" || warn "fasport=$FAS_PORT (esperado $PORTAL_PORT)"
+    [ -n "$FAS_PATH" ] && ok "faspath=$FAS_PATH" || warn "faspath vacío"
+  else
+    ok "Modo classic detectado (sin openNDS)"
+    if ssh "${SSH_OPTS_ROUTER[@]}" "root@$ROUTER_IP" "nft list table ip captive >/dev/null 2>&1"; then
+      ok "nft table ip captive presente"
+    else
+      fail "nft table ip captive ausente"
+    fi
+  fi
 fi
 
 info "--- Raspi3B servicios ---"
