@@ -84,9 +84,11 @@ fi
 
 if ! $DRY_RUN; then
   log_info "Verificación rápida local..."
-  curl -sS -o /dev/null -w '  /portal -> HTTP %{http_code}\n' http://127.0.0.1/portal || true
-  curl -sS -o /dev/null -w '  /services -> HTTP %{http_code}\n' http://127.0.0.1/services || true
-  curl -sS -o /dev/null -w '  /api/portal/context -> HTTP %{http_code}\n' http://127.0.0.1/api/portal/context || true
+  LOCAL_PORT="8080"
+  [[ "$PORTAL_MODE" == "podman" ]] && LOCAL_PORT="80"
+  curl -sS -o /dev/null -w '  /portal -> HTTP %{http_code}\n' "http://127.0.0.1:${LOCAL_PORT}/portal" || true
+  curl -sS -o /dev/null -w '  /services -> HTTP %{http_code}\n' "http://127.0.0.1:${LOCAL_PORT}/services" || true
+  curl -sS -o /dev/null -w '  /api/portal/context -> HTTP %{http_code}\n' "http://127.0.0.1:${LOCAL_PORT}/api/portal/context" || true
 fi
 
 log_ok "setup-raspi3b-sensor-captive-full completado"
