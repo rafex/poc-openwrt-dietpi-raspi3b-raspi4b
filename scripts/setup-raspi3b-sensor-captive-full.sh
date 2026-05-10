@@ -19,7 +19,7 @@ SKIP_SENSOR=false
 SKIP_PORTAL=false
 SENSOR_NO_SSH=false
 SENSOR_NO_WAIT=false
-PORTAL_MODE="direct"   # direct|podman
+PORTAL_MODE="direct"   # direct|podman|nspawn
 
 parse_common_flags "$@"
 ARGS=("${REM_ARGS[@]}")
@@ -33,7 +33,7 @@ for a in "${ARGS[@]}"; do
     --portal-mode=*) PORTAL_MODE="${a#*=}" ;;
     --portal-mode)
       # consume next argument via REM_ARGS parser style:
-      die "Usa --portal-mode=direct o --portal-mode=podman"
+      die "Usa --portal-mode=direct o --portal-mode=podman o --portal-mode=nspawn"
       ;;
     *) REM_ARGS+=("$a") ;;
   esac
@@ -41,8 +41,8 @@ done
 [ "${#REM_ARGS[@]}" -eq 0 ] || die "Argumentos no soportados: ${REM_ARGS[*]}"
 
 case "$PORTAL_MODE" in
-  direct|podman) ;;
-  *) die "--portal-mode inválido: $PORTAL_MODE (usar direct|podman)" ;;
+  direct|podman|nspawn) ;;
+  *) die "--portal-mode inválido: $PORTAL_MODE (usar direct|podman|nspawn)" ;;
 esac
 
 init_log_dir "raspi3b-full"
@@ -72,6 +72,8 @@ if ! $SKIP_PORTAL; then
   $ONLY_VERIFY && PORTAL_ARGS+=(--only-verify)
   if [[ "$PORTAL_MODE" == "direct" ]]; then
     env -u SETUP_LOG_INITIALIZED bash "$SCRIPT_DIR/setup-portal-raspi3b-direct.sh" "${PORTAL_ARGS[@]}"
+  elif [[ "$PORTAL_MODE" == "nspawn" ]]; then
+    env -u SETUP_LOG_INITIALIZED bash "$SCRIPT_DIR/setup-portal-raspi3b-nspawn.sh" "${PORTAL_ARGS[@]}"
   else
     env -u SETUP_LOG_INITIALIZED bash "$SCRIPT_DIR/setup-portal-raspi3b.sh" "${PORTAL_ARGS[@]}"
   fi
