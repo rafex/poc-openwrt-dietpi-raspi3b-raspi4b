@@ -428,14 +428,21 @@ router_ssh "nft -f /tmp/captive-portal.nft" || \
 # CRITICO: Re-confirmar IPs permanentes (timeout 0s).
 # Admin, portal y ambas Raspis nunca deben expirar — sin importar los reinicios.
 log_info "Re-confirmando IPs permanentes en el set (timeout 0s)..."
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0s }" || \
-    die "No se pudo asegurar $ADMIN_IP como permanente"
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI4B_IP timeout 0s }" 2>/dev/null || true
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI3B_IP timeout 0s }" 2>/dev/null || true
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_NODE_IP timeout 0s }" 2>/dev/null || true
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $AP_EXTENDER_IP timeout 0s }" 2>/dev/null || true
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" 2>/dev/null || true
-log_ok "Permanentes: admin=$ADMIN_IP ai/4B=$RASPI4B_IP sensor/3B=$RASPI3B_IP portal/3B2=$PORTAL_NODE_IP ap-ext=$AP_EXTENDER_IP portal-activo=$PORTAL_IP (timeout 0s)"
+SEEN_PERM_IPS=""
+for ip in "$ADMIN_IP" "$RASPI4B_IP" "$RASPI3B_IP" "$PORTAL_NODE_IP" "$AP_EXTENDER_IP" "$PORTAL_IP"; do
+    [ -n "$ip" ] || continue
+    case " $SEEN_PERM_IPS " in
+        *" $ip "*) continue ;;
+    esac
+    SEEN_PERM_IPS="$SEEN_PERM_IPS $ip"
+    if [ "$ip" = "$ADMIN_IP" ]; then
+        router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip timeout 0s }" || \
+            die "No se pudo asegurar $ADMIN_IP como permanente"
+    else
+        router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip timeout 0s }" 2>/dev/null || true
+    fi
+done
+log_ok "Permanentes aplicadas (únicas):${SEEN_PERM_IPS} (timeout 0s)"
 
 # Limpiar conntrack para que el bloqueo sea efectivo inmediatamente
 # (conexiones ESTABLISHED bypasean el hook forward)
