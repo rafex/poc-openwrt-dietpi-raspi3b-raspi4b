@@ -815,9 +815,53 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
+    def _redirect_portal(self):
+        self.send_response(302)
+        self.send_header("Location", "/portal")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.end_headers()
+
+    def do_HEAD(self):
+        path = self._path_only()
+        log.info(f"HEAD {self.path}  peer={self.client_address[0]}")
+        captive_probe_paths = {
+            "/generate_204",
+            "/hotspot-detect.html",
+            "/connecttest.txt",
+            "/redirect",
+            "/ncsi.txt",
+            "/fwlink",
+        }
+        if path in captive_probe_paths:
+            self._redirect_portal()
+            return
+        if path in ("/", "/portal", "/portal/", "/index.html"):
+            portal_path = Path(__file__).parent / "portal.html"
+            if portal_path.exists():
+                size = portal_path.stat().st_size
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(size))
+                self.end_headers()
+                return
+        self.send_response(404)
+        self.end_headers()
+
     def do_GET(self):
         path = self._path_only()
         log.info(f"GET {self.path}  peer={self.client_address[0]}")
+
+        captive_probe_paths = {
+            "/generate_204",
+            "/hotspot-detect.html",
+            "/connecttest.txt",
+            "/redirect",
+            "/ncsi.txt",
+            "/fwlink",
+        }
+        if path in captive_probe_paths:
+            self._redirect_portal()
+            return
 
         if path in ("/", "/portal", "/portal/", "/index.html"):
             self._serve_portal()
