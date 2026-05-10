@@ -70,8 +70,8 @@ if ! $ONLY_VERIFY; then
     run_cmd debootstrap --variant=minbase --arch="$ARCH" "$RELEASE" "$ROOTFS" "$MIRROR"
   fi
 
-  log_info "Instalando paquetes dentro del rootfs nspawn..."
-  run_cmd systemd-nspawn -q -D "$ROOTFS" /bin/sh -lc \
+  log_info "Instalando paquetes dentro del rootfs (chroot, sin dependencia de bus)..."
+  run_cmd chroot "$ROOTFS" /bin/sh -lc \
     "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3 nginx ca-certificates openssh-client && apt-get clean"
 
   cat > "$BACKEND_ENV_HOST" <<EOF
@@ -118,9 +118,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/systemd-nspawn -q --machine=${MACHINE_BACKEND} --directory=${ROOTFS} --network-host --as-pid2 \\
+  --register=no \\
   --bind=${APP_DIR}:/opt/app --bind=${DB_DIR}:/data --bind=/opt/keys:/opt/keys --bind=${BACKEND_ENV_HOST}:/run/backend.env \\
   /bin/sh -lc 'set -a; . /run/backend.env; set +a; exec /usr/bin/python3 /opt/app/backend.py'
-ExecStop=/usr/bin/machinectl terminate ${MACHINE_BACKEND}
+ExecStop=/bin/sh -lc "pkill -f 'machine=${MACHINE_BACKEND}' || true"
 Restart=always
 RestartSec=2
 
@@ -137,9 +138,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/systemd-nspawn -q --machine=${MACHINE_FRONTEND} --directory=${ROOTFS} --network-host --as-pid2 \\
+  --register=no \\
   --bind=${APP_DIR}:/opt/app --bind=${NGINX_CONF_HOST}:/etc/nginx/conf.d/default.conf \\
   /usr/sbin/nginx -g 'daemon off;'
-ExecStop=/usr/bin/machinectl terminate ${MACHINE_FRONTEND}
+ExecStop=/bin/sh -lc "pkill -f 'machine=${MACHINE_FRONTEND}' || true"
 Restart=always
 RestartSec=2
 
