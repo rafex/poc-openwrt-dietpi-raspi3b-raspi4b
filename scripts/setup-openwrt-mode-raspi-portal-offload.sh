@@ -65,6 +65,7 @@ echo "[INFO]  4/4 Configurando captive clásico (nft + dnsmasq)..."
 bash "$SCRIPT_DIR/setup-openwrt.sh" \
   --topology split_portal \
   --portal-ip "$PORTAL_IP" \
+  --portal-port "$PORTAL_PORT" \
   --ai-ip "$AI_IP"
 
 echo "[OK]    Modo aplicado."
