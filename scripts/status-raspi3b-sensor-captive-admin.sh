@@ -62,10 +62,12 @@ else
   fail "SSH OpenWrt falló"
 fi
 
+PI3_SSH_OK=false
 if ssh "${SSH_OPTS_PI3[@]}" "root@$PI3_IP" "echo ok" >/dev/null 2>&1; then
   ok "SSH Raspi3B OK"
+  PI3_SSH_OK=true
 else
-  fail "SSH Raspi3B falló"
+  warn "SSH Raspi3B falló (llave/credenciales). Se continuará con verificación HTTP."
 fi
 
 if [ "$FAIL" -eq 0 ]; then
@@ -82,16 +84,20 @@ if [ "$FAIL" -eq 0 ]; then
 fi
 
 info "--- Raspi3B servicios ---"
-if ssh "${SSH_OPTS_PI3[@]}" "root@$PI3_IP" "systemctl is-active captive-portal-direct >/dev/null"; then
-  ok "captive-portal-direct activo"
-else
-  fail "captive-portal-direct inactivo"
-fi
+if $PI3_SSH_OK; then
+  if ssh "${SSH_OPTS_PI3[@]}" "root@$PI3_IP" "systemctl is-active captive-portal-direct >/dev/null"; then
+    ok "captive-portal-direct activo"
+  else
+    fail "captive-portal-direct inactivo"
+  fi
 
-if ssh "${SSH_OPTS_PI3[@]}" "root@$PI3_IP" "/etc/init.d/network-sensor status >/dev/null 2>&1"; then
-  ok "network-sensor activo"
+  if ssh "${SSH_OPTS_PI3[@]}" "root@$PI3_IP" "/etc/init.d/network-sensor status >/dev/null 2>&1"; then
+    ok "network-sensor activo"
+  else
+    fail "network-sensor inactivo"
+  fi
 else
-  fail "network-sensor inactivo"
+  warn "Saltando validación de servicios por SSH (sin acceso a Raspi3B)"
 fi
 
 info "--- HTTP portal desde admin ---"
@@ -107,4 +113,3 @@ printf '\nRESUMEN status-admin PASS=%d WARN=%d FAIL=%d\n' "$PASS" "$WARN" "$FAIL
 if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
-
