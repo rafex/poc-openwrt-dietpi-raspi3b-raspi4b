@@ -75,6 +75,7 @@ Uso:
 Opciones:
   --topology legacy|split_portal   Selecciona topología.
   --portal-ip <ip>                 Fuerza IP de destino del portal.
+  --portal-port <port>             Puerto HTTP del portal (default: 80).
   --ai-ip <ip>                     IP del nodo IA (Raspi4B normalmente).
   -h, --help                       Muestra esta ayuda.
 EOF
@@ -90,6 +91,11 @@ while [ "$#" -gt 0 ]; do
         --portal-ip)
             [ -n "${2:-}" ] || die "Falta valor para --portal-ip"
             PORTAL_IP="$2"
+            shift 2
+            ;;
+        --portal-port)
+            [ -n "${2:-}" ] || die "Falta valor para --portal-port"
+            PORTAL_PORT="$2"
             shift 2
             ;;
         --ai-ip)
@@ -119,16 +125,25 @@ AI_IP="${AI_IP:-$RASPI4B_IP}"
 
 validate_ip "$PORTAL_IP" || die "IP de portal inválida: $PORTAL_IP"
 validate_ip "$AI_IP" || die "IP de AI inválida: $AI_IP"
+case "$PORTAL_PORT" in
+    ''|*[!0-9]*) die "PORTAL_PORT inválido: $PORTAL_PORT" ;;
+esac
 
 CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex.dev}"
 CAPTIVE_DOMAIN2="${CAPTIVE_DOMAIN2:-captive.localhost.com}"
 PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.localhost.com}"
+PORTAL_URL_SUFFIX="/portal"
+if [ "$PORTAL_PORT" = "80" ]; then
+    PORTAL_URL_BASE="http://$CAPTIVE_DOMAIN"
+else
+    PORTAL_URL_BASE="http://$CAPTIVE_DOMAIN:$PORTAL_PORT"
+fi
 
 # =============================================================================
 # Pre-flight checks
 # =============================================================================
 log_info "=== Setup de OpenWrt para Captive Portal ==="
-log_info "Topología: $TOPOLOGY (portal_ip=$PORTAL_IP ai_ip=$AI_IP)"
+log_info "Topología: $TOPOLOGY (portal_ip=$PORTAL_IP portal_port=$PORTAL_PORT ai_ip=$AI_IP)"
 
 check_ssh_key
 test_router_ssh
@@ -275,7 +290,7 @@ router_ssh "
     # Option 114 (RFC 8910): URL del captive portal que el OS usa directamente.
     # Se usa el dominio propio (captive.rafex.dev) en lugar de la IP para que
     # la URL sea legible y coincida con lo que dnsmasq resuelve a $PORTAL_IP.
-    uci add_list dhcp.lan.dhcp_option='114,http://$CAPTIVE_DOMAIN/portal'
+    uci add_list dhcp.lan.dhcp_option='114,${PORTAL_URL_BASE}${PORTAL_URL_SUFFIX}'
     uci commit dhcp
 " && log_ok "DHCP lease time = 120m configurado" || \
     log_warn "No se pudo configurar DHCP lease time via UCI (puede que la interfaz no se llame 'lan')"
@@ -338,7 +353,7 @@ table ip captive {
         ip saddr @$NFT_SET accept
 
         # Redirigir HTTP de la LAN que no está autorizado al portal
-        ip saddr $LAN_SUBNET tcp dport 80 dnat to $PORTAL_IP:80
+        ip saddr $LAN_SUBNET tcp dport 80 dnat to $PORTAL_IP:$PORTAL_PORT
     }
 
     # Control de forward: bloquear trafico de clientes no autorizados
@@ -600,27 +615,27 @@ check_dns_redirect "$PEOPLE_DOMAIN"   "$PORTAL_IP"
 # Verificar DHCP option 114 (URL del portal)
 log_info "Verificando DHCP option 114..."
 OPT114="$(router_ssh "uci -q get dhcp.lan.dhcp_option 2>/dev/null | tr ' ' '\n' | grep '^114,' | tail -1" 2>/dev/null || echo "")"
-if printf '%s' "$OPT114" | grep -q "114,http://$CAPTIVE_DOMAIN/portal"; then
+if printf '%s' "$OPT114" | grep -q "114,${PORTAL_URL_BASE}${PORTAL_URL_SUFFIX}"; then
     log_ok "DHCP option 114 correcta: $OPT114"
 else
-    log_warn "DHCP option 114 no coincide (actual: ${OPT114:-<vacía>}, esperado: 114,http://$CAPTIVE_DOMAIN/portal)"
+    log_warn "DHCP option 114 no coincide (actual: ${OPT114:-<vacía>}, esperado: 114,${PORTAL_URL_BASE}${PORTAL_URL_SUFFIX})"
 fi
 
 # Verificar regla DNAT hacia portal
 log_info "Verificando regla DNAT hacia portal..."
-DNAT_RULE="$(router_ssh "nft list chain ip captive prerouting 2>/dev/null | grep -F 'dnat to $PORTAL_IP:80' | head -1" 2>/dev/null || echo "")"
+DNAT_RULE="$(router_ssh "nft list chain ip captive prerouting 2>/dev/null | grep -F 'dnat to $PORTAL_IP:$PORTAL_PORT' | head -1" 2>/dev/null || echo "")"
 if [ -n "$DNAT_RULE" ]; then
     log_ok "Regla DNAT detectada: $DNAT_RULE"
 else
-    log_warn "No se encontró DNAT a $PORTAL_IP:80 en chain prerouting"
+    log_warn "No se encontró DNAT a $PORTAL_IP:$PORTAL_PORT en chain prerouting"
 fi
 
 # Reachability HTTP del portal desde el router
 log_info "Verificando reachability HTTP al portal desde OpenWrt..."
-if router_ssh "uclient-fetch -T 5 -qO- http://$PORTAL_IP/portal >/dev/null 2>&1"; then
-    log_ok "OpenWrt alcanza http://$PORTAL_IP/portal"
+if router_ssh "uclient-fetch -T 5 -qO- http://$PORTAL_IP:$PORTAL_PORT/portal >/dev/null 2>&1"; then
+    log_ok "OpenWrt alcanza http://$PORTAL_IP:$PORTAL_PORT/portal"
 else
-    log_warn "OpenWrt NO alcanza http://$PORTAL_IP/portal"
+    log_warn "OpenWrt NO alcanza http://$PORTAL_IP:$PORTAL_PORT/portal"
 fi
 
 # Resumen final
@@ -639,8 +654,13 @@ printf '  Admin (libre): %s — permanente\n' "$ADMIN_IP"
 printf '  AP interface:  %s\n' "$AP_IFACE"
 printf '  Portal timeout: %s (acceso WiFi invitados)\n' "$PORTAL_TIMEOUT"
 printf '  DHCP leasetime: 120m\n'
-printf '  Portal (demo):    http://%s/portal\n' "$CAPTIVE_DOMAIN"
-printf '  Portal (local):   http://%s/portal\n' "$CAPTIVE_DOMAIN2"
+if [ "$PORTAL_PORT" = "80" ]; then
+  printf '  Portal (demo):    http://%s/portal\n' "$CAPTIVE_DOMAIN"
+  printf '  Portal (local):   http://%s/portal\n' "$CAPTIVE_DOMAIN2"
+else
+  printf '  Portal (demo):    http://%s:%s/portal\n' "$CAPTIVE_DOMAIN" "$PORTAL_PORT"
+  printf '  Portal (local):   http://%s:%s/portal\n' "$CAPTIVE_DOMAIN2" "$PORTAL_PORT"
+fi
 printf '  Dashboard people: http://%s/people\n' "$PEOPLE_DOMAIN"
 printf '\n'
 log_info "Comandos utiles:"
