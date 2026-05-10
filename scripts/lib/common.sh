@@ -31,6 +31,7 @@ NFT_SET="${NFT_SET:-allowed_clients}"
 NFT_FILE="${NFT_FILE:-/etc/captive-portal.nft}"
 DNSMASQ_CONF="${DNSMASQ_CONF:-/etc/dnsmasq.d/captive-portal.conf}"
 AP_IFACE="${AP_IFACE:-phy0-ap0}"            # solo usado en pre-flight check de interfaz WiFi
+PORTAL_PORT="${PORTAL_PORT:-80}"            # puerto HTTP del portal cautivo (80 o 8080)
 
 # Raspberry Pi — IPs y MACs permanentes (bypass total del portal + reserva DHCP)
 RASPI4B_IP="${RASPI4B_IP:-192.168.1.167}"     # Raspi 4B (IA + k3s)
