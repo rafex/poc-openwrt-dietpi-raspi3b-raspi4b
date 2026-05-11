@@ -26,7 +26,8 @@ LEASES="/tmp/dhcp.leases"
 TMP_WIFI_MACS="/tmp/.wifi-macs.$$"
 TMP_WIFI_ASSOC="/tmp/.wifi-assoc.$$"
 TMP_LEASES="/tmp/.leases.$$"
-trap 'rm -f "$TMP_WIFI_MACS" "$TMP_WIFI_ASSOC" "$TMP_LEASES"' EXIT
+TMP_ALLOWED_IPS="/tmp/.allowed-ips.$$"
+trap 'rm -f "$TMP_WIFI_MACS" "$TMP_WIFI_ASSOC" "$TMP_LEASES" "$TMP_ALLOWED_IPS"' EXIT
 
 # ── 1) Recolectar MACs WiFi asociadas ───────────────────────────────────────
 touch "$TMP_WIFI_MACS" "$TMP_WIFI_ASSOC"
@@ -37,6 +38,14 @@ if command -v iwinfo >/dev/null 2>&1; then
   done
 fi
 sort -u "$TMP_WIFI_MACS" -o "$TMP_WIFI_MACS" 2>/dev/null || true
+
+# ── 1.1) Recolectar IPs autorizadas en nft set allowed_clients ───────────────
+touch "$TMP_ALLOWED_IPS"
+if nft list set ip captive allowed_clients >/dev/null 2>&1; then
+  nft list set ip captive allowed_clients 2>/dev/null \
+    | grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' \
+    | sort -u > "$TMP_ALLOWED_IPS" || true
+fi
 
 # ── 2) Leer leases DHCP ──────────────────────────────────────────────────────
 awk '
@@ -50,22 +59,26 @@ awk '
 COUNT="$(wc -l < "$TMP_LEASES" | tr -d ' ')"
 echo "[INFO]  Leases DHCP activos: $COUNT"
 echo
-printf '%-16s  %-17s  %-9s  %-10s  %s\n' "IP" "MAC" "MEDIO" "EXPIRA" "HOSTNAME"
-printf '%-16s  %-17s  %-9s  %-10s  %s\n' "----------------" "-----------------" "---------" "----------" "----------------"
+printf '%-16s  %-17s  %-9s  %-11s  %-10s  %s\n' "IP" "MAC" "MEDIO" "AUTORIZADO" "EXPIRA" "HOSTNAME"
+printf '%-16s  %-17s  %-9s  %-11s  %-10s  %s\n' "----------------" "-----------------" "---------" "-----------" "----------" "----------------"
 
-while IFS='|' read -r exp mac ip host; do
+while IFS='|' read -r lease_exp mac ip host; do
   [ -n "$ip" ] || continue
   medio="ethernet"
   if grep -qx "$mac" "$TMP_WIFI_MACS" 2>/dev/null; then
     medio="wifi"
   fi
+  autorizado="no"
+  if grep -qx "$ip" "$TMP_ALLOWED_IPS" 2>/dev/null; then
+    autorizado="yes"
+  fi
   now="$(date +%s)"
-  if [ "$exp" -gt "$now" ] 2>/dev/null; then
-    left="$((exp-now))s"
+  if [ "$lease_exp" -gt "$now" ] 2>/dev/null; then
+    left="$((lease_exp-now))s"
   else
     left="expired"
   fi
-  printf '%-16s  %-17s  %-9s  %-10s  %s\n' "$ip" "$mac" "$medio" "$left" "$host"
+  printf '%-16s  %-17s  %-9s  %-11s  %-10s  %s\n' "$ip" "$mac" "$medio" "$autorizado" "$left" "$host"
 done < "$TMP_LEASES"
 
 echo
