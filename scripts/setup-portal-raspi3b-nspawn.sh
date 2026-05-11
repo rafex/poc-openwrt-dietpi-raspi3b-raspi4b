@@ -149,6 +149,18 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
 
+  # Evita conflicto con modo directo (python en :8080) si estaba instalado antes.
+  if systemctl list-unit-files | grep -q '^captive-portal-direct\.service'; then
+    log_info "Desactivando servicio legacy captive-portal-direct para evitar conflicto de puertos..."
+    run_cmd systemctl stop captive-portal-direct.service || true
+    run_cmd systemctl disable captive-portal-direct.service || true
+  fi
+
+  # Limpieza best-effort de nspawn previos.
+  run_cmd machinectl terminate "${MACHINE_BACKEND}" || true
+  run_cmd machinectl terminate "${MACHINE_FRONTEND}" || true
+  sleep 1
+
   run_cmd systemctl daemon-reload
   run_cmd systemctl enable captive-portal-nspawn-backend.service
   run_cmd systemctl enable captive-portal-nspawn-frontend.service
@@ -157,6 +169,14 @@ EOF
 fi
 
 if ! $DRY_RUN; then
+  # Verifica que el backend nspawn pueda abrir su puerto interno.
+  for _ in 1 2 3 4 5; do
+    if ss -ltnp 2>/dev/null | grep -q ":${BACKEND_PORT} "; then
+      break
+    fi
+    sleep 1
+  done
+
   CODE="000"
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     CODE="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 2 --max-time 5 \
@@ -172,6 +192,9 @@ if ! $DRY_RUN; then
       log_error "Portal nspawn no responde: HTTP $CODE"
       systemctl status captive-portal-nspawn-backend.service --no-pager -l 2>/dev/null | tail -80 || true
       systemctl status captive-portal-nspawn-frontend.service --no-pager -l 2>/dev/null | tail -80 || true
+      journalctl -u captive-portal-nspawn-backend.service -n 80 --no-pager 2>/dev/null || true
+      journalctl -u captive-portal-nspawn-frontend.service -n 80 --no-pager 2>/dev/null || true
+      ss -ltnp 2>/dev/null | grep -E ":(${PORTAL_PORT}|${BACKEND_PORT}) " || true
       die "Fallo verificación portal nspawn"
       ;;
   esac
