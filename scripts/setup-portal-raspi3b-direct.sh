@@ -36,6 +36,22 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 log_info "--- setup-portal-raspi3b-direct ---"
 log_info "app_dir=$APP_DIR port=$PORT db=$DB_PATH router=$ROUTER_IP ai=$AI_IP"
 
+kill_port_listeners() {
+  local p="$1"
+  local pids
+  pids="$(ss -ltnp 2>/dev/null | awk -v port=":${p}" '$4 ~ port"$" {print $NF}' | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | sort -u)"
+  [ -n "$pids" ] || return 0
+  log_warn "Liberando puerto ${p} (PIDs: $pids)"
+  # shellcheck disable=SC2086
+  kill -TERM $pids 2>/dev/null || true
+  sleep 1
+  pids="$(ss -ltnp 2>/dev/null | awk -v port=":${p}" '$4 ~ port"$" {print $NF}' | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | sort -u)"
+  if [ -n "$pids" ]; then
+    # shellcheck disable=SC2086
+    kill -KILL $pids 2>/dev/null || true
+  fi
+}
+
 if ! $ONLY_VERIFY; then
   apt_install_pkgs python3 curl ca-certificates openssh-client
   run_cmd mkdir -p "$DB_DIR" /opt/keys
@@ -46,9 +62,16 @@ if ! $ONLY_VERIFY; then
   fi
   [ -f "$BACKEND_SSH_KEY" ] || die "No hay llave SSH para autorizar clientes en OpenWrt (/opt/keys/sensor o /opt/keys/captive-portal)."
 
-  if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-    run_cmd systemctl stop "$SERVICE_NAME"
-  fi
+  # Limpieza proactiva de instalaciones previas para evitar choques entre modos.
+  run_cmd systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+  run_cmd systemctl stop captive-portal-nspawn-backend.service 2>/dev/null || true
+  run_cmd systemctl stop captive-portal-nspawn-frontend.service 2>/dev/null || true
+  run_cmd systemctl disable captive-portal-nspawn-backend.service 2>/dev/null || true
+  run_cmd systemctl disable captive-portal-nspawn-frontend.service 2>/dev/null || true
+  command -v machinectl >/dev/null 2>&1 && run_cmd machinectl terminate captive-portal-backend 2>/dev/null || true
+  command -v machinectl >/dev/null 2>&1 && run_cmd machinectl terminate captive-portal-frontend 2>/dev/null || true
+  kill_port_listeners "$PORT"
+  kill_port_listeners "5000"
 
   cat > "$SERVICE_FILE" <<EOF
 [Unit]
