@@ -103,7 +103,7 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
     │    }
     │  dnsmasq:
     │    • dominios captive portal → 192.168.1.167
-    │    • captive.localhost.com → 192.168.1.167
+    │    • captive.local → 192.168.1.167
     │    • DHCP option 114 → http://192.168.1.167/portal
     │    • DHCP lease time: 120m
     │    • Reservas permanentes:

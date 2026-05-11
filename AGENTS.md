@@ -19,7 +19,7 @@ Estado al **22 de abril de 2026**:
 - Detección captive mejorada:
   - dnsmasq con dominios de detección en `/etc/dnsmasq.conf`
   - DHCP option `114` (`http://192.168.1.167/portal`)
-  - dominio fallback `captive.localhost.com` y subdominio `people.localhost.com`
+  - dominio fallback `captive.local` y subdominio `people.local`
 - Scripts `setup-*` con logging persistente por componente en `/var/log/demo-openwrt/<componente>` (fallback `/tmp/demo-openwrt/<componente>`).
 - Script operativo para apagar/encender LLM (`scripts/llm-control.sh`) y reducir CPU.
 
@@ -33,7 +33,7 @@ Router OpenWrt (192.168.1.1)   ath79/mips_24kc
     │    • allowed_clients timeout 120m (clientes WiFi)
     │    • permanentes (timeout 0s): admin, RafexPi4B, RafexPi3B
     │  dnsmasq: dominios captive portal → 192.168.1.167
-    │           captive.localhost.com → 192.168.1.167
+    │           captive.local → 192.168.1.167
     │           DHCP option 114 → http://192.168.1.167/portal
     │           lease 120m
     │  DHCP reservas: RafexPi4B=192.168.1.167, RafexPi3B=192.168.1.181
@@ -190,7 +190,7 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 - [x] `allowed_clients` timeout **120m** (subido de 30m)
 - [x] Permanentes (timeout 0s): admin `192.168.1.113`, RafexPi4B `192.168.1.167`, RafexPi3B `192.168.1.181`
 - [x] dnsmasq: dominios de detección de captive portal → 192.168.1.167
-- [x] Dominio fallback: `captive.localhost.com` → 192.168.1.167
+- [x] Dominio fallback: `captive.local` → 192.168.1.167
 - [x] DHCP option `114`: `http://192.168.1.167/portal`
 - [x] DHCP option `6`: DNS del router (`192.168.1.1`) para clientes LAN
 - [x] DHCP lease time: **120m** (UCI `dhcp.lan.leasetime=120m`)
@@ -259,8 +259,8 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 | `/rulez` | `backend/ai-analyzer/rulez.html` | Editor de reglas/prompts IA en SQLite |
 
 Dominios relevantes:
-- `captive.localhost.com` → abrir portal (`/portal`)
-- `people.localhost.com` → dashboard de personas (`/people`)
+- `captive.local` → abrir portal (`/portal`)
+- `people.local` → dashboard de personas (`/people`)
 
 ## Constantes globales (lib/common.sh)
 
@@ -354,7 +354,7 @@ ssh-ed25519 AAAAC3... sensor@raspi3b
 - Configurar por UCI en `dhcp.lan.dhcp_option`:
   - `6,192.168.1.1` (DNS del router)
   - `114,http://192.168.1.167/portal` (RFC 7710/8910)
-- Mantener dominio fallback `captive.localhost.com` apuntando al portal
+- Mantener dominio fallback `captive.local` apuntando al portal
 
 ### DietPi (ambas Raspis)
 - **No usar `systemctl` directamente** — DietPi no usa systemd como PID 1

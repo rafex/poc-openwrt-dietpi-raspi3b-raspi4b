@@ -142,7 +142,7 @@ Checklist rápido en router:
 ```bash
 # 1) DNS de detección captive debe resolver al portal
 nslookup connectivitycheck.gstatic.com 127.0.0.1
-nslookup captive.localhost.com 127.0.0.1
+nslookup captive.local 127.0.0.1
 # ambos deben devolver 192.168.1.167
 
 # 2) DHCP debe anunciar option 6 (DNS router) y 114 (URL captive)
@@ -165,7 +165,7 @@ bash scripts/setup-openwrt.sh
 En el móvil:
 1. "Olvidar red" y reconectar (forzar nuevo lease DHCP).
 2. Desactivar DNS privado / DoH / VPN.
-3. Probar manual: `http://captive.localhost.com/portal`.
+3. Probar manual: `http://captive.local/portal`.
 
 Si el popup sigue sin salir en iPhone:
 - activar/desactivar WiFi,
@@ -308,7 +308,7 @@ ssh -i /opt/keys/captive-portal root@192.168.1.1 \
 
 # Si no resuelve:
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
-  "cat /etc/dnsmasq.conf | grep -E '192.168.1.167|captive.localhost.com|dhcp-option=114'"
+  "cat /etc/dnsmasq.conf | grep -E '192.168.1.167|captive.local|dhcp-option=114'"
 # Debe haber líneas address=/.../192.168.1.167
 
 # Recargar dnsmasq
