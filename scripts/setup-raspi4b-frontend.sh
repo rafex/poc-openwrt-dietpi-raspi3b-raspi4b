@@ -47,6 +47,7 @@ BACKEND_HOST="${BACKEND_HOST:-host.containers.internal}"
 BACKEND_PORT="${BACKEND_PORT:-5000}"
 
 FRONTEND_DIR="$REPO_DIR/frontend"
+NGINX_DIR="$REPO_DIR/nginx"
 NGINX_FRONTEND_DIR="$REPO_DIR/nginx/frontend"
 NGINX_PROXY_DIR="$REPO_DIR/nginx/proxy"
 
@@ -55,6 +56,8 @@ CTR_FRONTEND="ai-analyzer-frontend"
 CTR_PROXY="ai-analyzer-proxy"
 IMG_FRONTEND="ai-analyzer-frontend:latest"
 IMG_PROXY="ai-analyzer-proxy:latest"
+CTR_WEB="ai-analyzer-web"
+IMG_WEB="ai-analyzer-web:latest"
 
 log_info "--- setup-raspi4b-frontend ---"
 
@@ -100,25 +103,30 @@ if $DRY_RUN; then
     exit 0
 fi
 
-# ── 2. Copiar dist/ junto al Dockerfile del frontend ─────────────────────────
-log_info "Preparando contexto de imagen frontend..."
-run_cmd rm -rf  "$NGINX_FRONTEND_DIR/dist"
-run_cmd cp -r   "$FRONTEND_DIR/dist" "$NGINX_FRONTEND_DIR/dist"
-
-# ── 3. Construir imágenes ─────────────────────────────────────────────────────
-log_info "Construyendo imagen $IMG_FRONTEND ..."
-run_cmd podman build -t "$IMG_FRONTEND" "$NGINX_FRONTEND_DIR"
-
-log_info "Construyendo imagen $IMG_PROXY ..."
-run_cmd podman build -t "$IMG_PROXY" "$NGINX_PROXY_DIR"
-
-# ── 4. Red podman ─────────────────────────────────────────────────────────────
-if ! podman network inspect "$NET_NAME" &>/dev/null; then
-    log_info "Creando red podman $NET_NAME ..."
-    run_cmd podman network create "$NET_NAME"
+UNIFIED_NGINX=false
+if [[ -f "$NGINX_DIR/Dockerfile" && -f "$NGINX_DIR/nginx.conf" && ! -d "$NGINX_FRONTEND_DIR" && ! -d "$NGINX_PROXY_DIR" ]]; then
+    UNIFIED_NGINX=true
 fi
 
-# ── 5. Contenedor frontend ────────────────────────────────────────────────────
+# ── 2/3. Build y deploy según estructura de nginx ────────────────────────────
+if $UNIFIED_NGINX; then
+    log_info "Detectado nginx unificado (nginx/Dockerfile + nginx/nginx.conf)"
+    log_info "Construyendo imagen $IMG_WEB ..."
+    run_cmd podman build -f "$NGINX_DIR/Dockerfile" -t "$IMG_WEB" "$REPO_DIR"
+else
+    # Estructura legacy: frontend/proxy separados
+    log_info "Preparando contexto de imagen frontend..."
+    run_cmd rm -rf  "$NGINX_FRONTEND_DIR/dist"
+    run_cmd cp -r   "$FRONTEND_DIR/dist" "$NGINX_FRONTEND_DIR/dist"
+
+    log_info "Construyendo imagen $IMG_FRONTEND ..."
+    run_cmd podman build -t "$IMG_FRONTEND" "$NGINX_FRONTEND_DIR"
+
+    log_info "Construyendo imagen $IMG_PROXY ..."
+    run_cmd podman build -t "$IMG_PROXY" "$NGINX_PROXY_DIR"
+fi
+
+# ── 4. Red podman ─────────────────────────────────────────────────────────────
 _stop_rm() {
     local name="$1"
     if podman ps -a --format '{{.Names}}' | grep -q "^${name}$"; then
@@ -128,37 +136,60 @@ _stop_rm() {
     fi
 }
 
-_stop_rm "$CTR_FRONTEND"
-log_info "Iniciando $CTR_FRONTEND ..."
-run_cmd podman run -d \
-    --name "$CTR_FRONTEND" \
-    --network "$NET_NAME" \
-    --restart unless-stopped \
-    "$IMG_FRONTEND"
+if $UNIFIED_NGINX; then
+    _stop_rm "$CTR_WEB"
+    _stop_rm "$CTR_FRONTEND"
+    _stop_rm "$CTR_PROXY"
+    log_info "Iniciando $CTR_WEB (nginx unificado, host network) ..."
+    run_cmd podman run -d \
+        --name "$CTR_WEB" \
+        --network host \
+        --restart unless-stopped \
+        "$IMG_WEB"
+else
+    if ! podman network inspect "$NET_NAME" &>/dev/null; then
+        log_info "Creando red podman $NET_NAME ..."
+        run_cmd podman network create "$NET_NAME"
+    fi
 
-# ── 6. Contenedor proxy ───────────────────────────────────────────────────────
-_stop_rm "$CTR_PROXY"
-log_info "Iniciando $CTR_PROXY ..."
-run_cmd podman run -d \
-    --name "$CTR_PROXY" \
-    --network "$NET_NAME" \
-    --network host \
-    --restart unless-stopped \
-    -e "BACKEND_HOST=${BACKEND_HOST}" \
-    -e "BACKEND_PORT=${BACKEND_PORT}" \
-    -e "FRONTEND_HOST=${CTR_FRONTEND}" \
-    -e "FRONTEND_PORT=3000" \
-    -p 80:80 \
-    "$IMG_PROXY"
+    _stop_rm "$CTR_FRONTEND"
+    log_info "Iniciando $CTR_FRONTEND ..."
+    run_cmd podman run -d \
+        --name "$CTR_FRONTEND" \
+        --network "$NET_NAME" \
+        --restart unless-stopped \
+        "$IMG_FRONTEND"
+
+    _stop_rm "$CTR_PROXY"
+    log_info "Iniciando $CTR_PROXY ..."
+    run_cmd podman run -d \
+        --name "$CTR_PROXY" \
+        --network "$NET_NAME" \
+        --network host \
+        --restart unless-stopped \
+        -e "BACKEND_HOST=${BACKEND_HOST}" \
+        -e "BACKEND_PORT=${BACKEND_PORT}" \
+        -e "FRONTEND_HOST=${CTR_FRONTEND}" \
+        -e "FRONTEND_PORT=3000" \
+        -p 80:80 \
+        "$IMG_PROXY"
+fi
 
 # ── 7. Verificar ─────────────────────────────────────────────────────────────
 log_info "Esperando que nginx arranque..."
 WAIT=0
-until curl -sf "http://127.0.0.1:80/proxy-ping" >/dev/null 2>&1; do
+CHECK_PATH="/proxy-ping"
+$UNIFIED_NGINX && CHECK_PATH="/nginx-health"
+until curl -sf "http://127.0.0.1:80${CHECK_PATH}" >/dev/null 2>&1; do
     sleep 2; WAIT=$((WAIT + 2))
     [[ $WAIT -ge 20 ]] && {
-        podman logs "$CTR_PROXY" 2>&1 | tail -20
-        die "proxy nginx no respondió en 20s"
+        if $UNIFIED_NGINX; then
+            podman logs "$CTR_WEB" 2>&1 | tail -20
+            die "nginx web no respondió en 20s"
+        else
+            podman logs "$CTR_PROXY" 2>&1 | tail -20
+            die "proxy nginx no respondió en 20s"
+        fi
     }
 done
 log_ok "nginx proxy responde en :80 (${WAIT}s)"
@@ -186,6 +217,10 @@ printf "    http://%s/health     → Health API\n" "$PI_IP"
 printf "\n"
 printf "  Gestión:\n"
 printf "    podman ps\n"
-printf "    podman logs -f %s\n" "$CTR_PROXY"
-printf "    podman logs -f %s\n" "$CTR_FRONTEND"
+if $UNIFIED_NGINX; then
+  printf "    podman logs -f %s\n" "$CTR_WEB"
+else
+  printf "    podman logs -f %s\n" "$CTR_PROXY"
+  printf "    podman logs -f %s\n" "$CTR_FRONTEND"
+fi
 printf "\n"
