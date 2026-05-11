@@ -346,8 +346,10 @@ table ip captive {
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
 
-        # No redirigir tráfico que ya va al portal
-        ip daddr $PORTAL_IP accept
+        # No redirigir tráfico que ya va al puerto real del portal.
+        # Importante: si el portal corre en :8080, NO debemos aceptar :80 aquí
+        # porque impediría el DNAT 80 -> 8080 para las URLs de captive detection.
+        ip daddr $PORTAL_IP tcp dport $PORTAL_PORT accept
 
         # Clientes autorizados: no redirigir
         ip saddr @$NFT_SET accept
