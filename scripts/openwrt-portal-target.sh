@@ -6,8 +6,8 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib/common.sh"
 
-CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.local}"
-PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.local}"
+CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex.dev}"
+PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.rafex.dev}"
 
 log_info "=== Portal target en OpenWrt ==="
 log_info "Topología esperada: ${TOPOLOGY:-legacy}"

@@ -18,9 +18,9 @@
 #       nft delete table ip captive
 #
 # Variables opcionales:
-#   CAPTIVE_DOMAIN=captive.rafex    # dominio principal del portal (DHCP opt114 + dnsmasq)
-#   CAPTIVE_DOMAIN2=captive.local   # dominio secundario (fallback offline)
-#   PEOPLE_DOMAIN=people.local  # subdominio para dashboard de registros/conectados
+#   CAPTIVE_DOMAIN=captive.rafex.dev    # dominio principal del portal (DHCP opt114 + dnsmasq)
+#   CAPTIVE_DOMAIN2=portal.rafex.dev    # dominio secundario (fallback)
+#   PEOPLE_DOMAIN=people.rafex.dev  # subdominio para dashboard de registros/conectados
 #   TOPOLOGY_FILE=/etc/demo-openwrt/topology.env
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -129,9 +129,9 @@ case "$PORTAL_PORT" in
     ''|*[!0-9]*) die "PORTAL_PORT inválido: $PORTAL_PORT" ;;
 esac
 
-CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex}"
-CAPTIVE_DOMAIN2="${CAPTIVE_DOMAIN2:-captive.local}"
-PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.local}"
+CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex.dev}"
+CAPTIVE_DOMAIN2="${CAPTIVE_DOMAIN2:-portal.rafex.dev}"
+PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.rafex.dev}"
 PORTAL_URL_SUFFIX="/portal"
 if [ "$PORTAL_PORT" = "80" ]; then
     PORTAL_URL_BASE="http://$CAPTIVE_DOMAIN"
@@ -256,7 +256,7 @@ address=/nmcheck.gnome.org/$PORTAL_IP
 
 # ── Dominios propios del portal (acceso manual y DHCP option 114) ────────────
 # captive.rafex  — URL pública de la demo (fácil de comunicar a asistentes)
-# captive.local  — fallback sin dominio externo (funciona offline)
+# captive.rafex.dev  — fallback sin dominio externo (funciona offline)
 address=/$CAPTIVE_DOMAIN/$PORTAL_IP
 address=/$CAPTIVE_DOMAIN2/$PORTAL_IP
 address=/$PEOPLE_DOMAIN/$PORTAL_IP

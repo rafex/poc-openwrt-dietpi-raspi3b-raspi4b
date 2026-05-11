@@ -37,8 +37,8 @@ load_topology() {
     fi
   fi
 
-  CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.local}"
-  PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.local}"
+  CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex.dev}"
+  PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.rafex.dev}"
 }
 
 ensure_topology_value() {
