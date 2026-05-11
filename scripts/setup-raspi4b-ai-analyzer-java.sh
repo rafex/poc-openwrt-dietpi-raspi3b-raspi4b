@@ -74,7 +74,10 @@ ENV_FILE="/etc/ai-analyzer.env"
 SYSTEMD_UNIT="/etc/systemd/system/ai-analyzer.service"
 PI_IP="${AI_IP:-${RASPI4B_IP:-192.168.1.167}}"
 
-GITHUB_REPO="rafex/presentaciones-cursos-talleres"  # ajustar si es diferente
+# Repo de GitHub Releases para binarios nativos.
+# Override opcional:
+#   GITHUB_REPO=owner/repo bash scripts/setup-raspi4b-ai-analyzer-java.sh
+GITHUB_REPO="${GITHUB_REPO:-rafex/poc-openwrt-dietpi-raspi3b-raspi4b}"
 BIN_NAME="ai-analyzer-linux-arm64"
 LIB_NAME="libanalyzer_db-linux-arm64.so"
 
