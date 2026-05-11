@@ -323,6 +323,7 @@ bash scripts/setup-openwrt-wifi-uplink24-ap5.sh --uplink-ssid netup --uplink-pas
 ## setup-openwrt-reserve-core-nodes.sh
 
 **Propósito:** reservas DHCP estáticas para nodos core:
+- Laptop admin (`ADMIN_IP`/`ADMIN_MAC`)
 - Raspi3B sensor (`RASPI3B_IP`/`RASPI3B_MAC`)
 - Raspi4B llm (`RASPI4B_IP`/`RASPI4B_MAC`)
 
@@ -335,6 +336,7 @@ bash scripts/setup-openwrt-reserve-core-nodes.sh
 ## setup-openwrt-opennds-raspi-portal.sh
 
 **Propósito:** configurar openNDS para usar portal externo en Raspi3B.
+**Estado:** legado (no recomendado en TL-WDR3600/OpenWrt 25.x por crash loop de `opennds`).
 
 Defaults:
 - `fasremoteip=192.168.1.181`
@@ -367,7 +369,18 @@ bash scripts/setup-openwrt-mode-raspi-portal-offload.sh \
 Orden interno:
 1. WiFi 2.4 uplink + AP 5
 2. Reservas DHCP core
-3. OpenNDS apuntando a Raspi portal
+3. Desactiva openNDS (`openwrt-disable-opennds.sh`)
+4. Configura captive clásico con `setup-openwrt.sh --topology split_portal --portal-port ...`
+
+---
+
+## openwrt-disable-opennds.sh
+
+**Propósito:** desactivar y limpiar `opennds` para operar en modo classic (`nftables + dnsmasq`).
+
+```bash
+bash scripts/openwrt-disable-opennds.sh
+```
 
 ---
 
@@ -423,6 +436,7 @@ bash scripts/setup-openwrt-opennds-exceptions.sh --backend-ip 192.168.1.181
 ## setup-openwrt-router-portal-mode.sh
 
 **Propósito:** orquestador del modo alternativo "portal en OpenWrt + openNDS + backend en Raspi3B-sensor".  
+**Estado:** legado (solo para pruebas específicas de FAS/openNDS).  
 **Idempotente:** Sí
 
 ```bash
@@ -465,6 +479,30 @@ Levanta:
 
 ---
 
+## setup-portal-raspi3b-direct.sh
+
+**Propósito:** desplegar backend+frontend del portal cautivo directamente en la Raspi3B (sin Podman), en `:8080`.
+
+```bash
+sudo bash scripts/setup-portal-raspi3b-direct.sh
+sudo bash scripts/setup-portal-raspi3b-direct.sh --port 8080
+```
+
+---
+
+## setup-portal-raspi3b-nspawn.sh
+
+**Propósito:** variante en contenedor ligero con `systemd-nspawn`.
+
+```bash
+sudo bash scripts/setup-portal-raspi3b-nspawn.sh
+```
+
+Requisito:
+- `systemd-nspawn` instalado (`apt install systemd-container`).
+
+---
+
 ## setup-sensor-raspi3b.sh
 
 **Propósito:** instalación del sensor de red en RafexPi3B.  
@@ -487,6 +525,24 @@ sudo bash scripts/setup-sensor-raspi3b.sh --dry-run
 | D | Genera llave SSH `/opt/keys/sensor` (ed25519), intenta copiar al router |
 | E | Genera y arranca `/etc/init.d/network-sensor` con todas las env vars |
 | F | Verifica PID, captura tshark 5s, conectividad MQTT |
+
+Nota:
+- `ssh-copy-id` automático viene desactivado por defecto para evitar bloqueos interactivos.
+- Se puede activar con `--ssh-copy-auto`.
+
+---
+
+## setup-raspi3b-sensor-captive-full.sh
+
+**Propósito:** instalación completa de Raspi3B para modo actual recomendado:
+- sensor de red
+- portal cautivo (direct o nspawn)
+
+```bash
+sudo bash scripts/setup-raspi3b-sensor-captive-full.sh
+sudo bash scripts/setup-raspi3b-sensor-captive-full.sh --portal-mode direct
+sudo bash scripts/setup-raspi3b-sensor-captive-full.sh --portal-mode nspawn
+```
 
 ---
 
@@ -581,6 +637,27 @@ bash scripts/openwrt-flush-clients.sh --force
 bash scripts/openwrt-reset-firewall.sh            # emergencia — desactiva todo
 ```
 
+Descubrimiento de clientes conectados:
+
+```bash
+bash scripts/openwrt-list-connected.sh
+```
+
+Diagnóstico classic captive:
+
+```bash
+bash scripts/openwrt-captive-doctor.sh --portal-ip 192.168.1.181 --portal-port 8080
+bash scripts/openwrt-wifi-ap-doctor.sh
+```
+
+Estado Raspi3B sensor + portal:
+
+```bash
+bash scripts/status-raspi3b-sensor-captive-admin.sh --pi3-ip 192.168.1.181 --portal-port 8080 --mode classic
+# en Raspi3B
+bash scripts/status-raspi3b-sensor-captive-local.sh
+```
+
 ---
 
 ## Demo DNS Poisoning
@@ -621,7 +698,7 @@ Constantes de red y helpers para scripts que interactúan con el router.
 | `ROUTER_IP` | 192.168.1.1 | Router OpenWrt |
 | `RASPI4B_IP` | 192.168.1.167 | RafexPi4B |
 | `RASPI3B_IP` | 192.168.1.181 | RafexPi3B |
-| `ADMIN_IP` | 192.168.1.113 | Laptop admin — nunca bloquear |
+| `ADMIN_IP` | 192.168.1.146 | Laptop admin — nunca bloquear |
 | `PORTAL_TIMEOUT` | 120m | Timeout nftables clientes WiFi |
 
 | Función | Descripción |

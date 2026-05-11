@@ -27,7 +27,7 @@ graph TD
     Sensor["sensor.py\ntshark eth0 promiscuo\n20 campos · batch 30s\nMQTT QoS=1"]
     SSH_Router["SSH al router\nconntrack · DHCP leases\ncaptive_allowed · ip_to_mac"]
 
-    Admin["💻 Laptop admin\n192.168.1.113\nallowlist timeout=0s"]
+    Admin["💻 Laptop admin\n192.168.1.146\nallowlist timeout=0s"]
 
     Internet -->|upstream WiFi 5GHz| WAN
     WAN --> Router
@@ -52,9 +52,9 @@ graph TD
 
 PoC educativo de seguridad en redes públicas que combina hardware real (Raspberry Pi 3B + 4B + router OpenWrt) con un LLM local. El sistema captura tráfico de red real, lo analiza con TinyLlama en batches y lo presenta en dashboards en vivo.
 
-## Modo alternativo adicional (OpenWrt + openNDS + backend en Raspi3B-sensor)
+## Modo alternativo adicional (legado) (OpenWrt + openNDS + backend en Raspi3B-sensor)
 
-Además de `legacy` y `split_portal`, existe un tercer modo operativo:
+Además de `legacy` y `split_portal`, existe un tercer modo operativo (legado/no recomendado en TL-WDR3600 con OpenWrt 25.x por inestabilidad de openNDS):
 
 - El portal HTML vive en OpenWrt (`uhttpd`, ruta `/portal/portal.html`).
 - `opennds` gestiona captive portal y autorización vía FAS (`tok/authaction/redir`).
@@ -74,7 +74,7 @@ Flujo resumido:
 Variante recomendada cuando se busca bajar carga del router:
 
 - OpenWrt:
-  - Router/DHCP/DNS/firewall/openNDS
+  - Router/DHCP/DNS/firewall (modo classic sin openNDS)
   - STA uplink por 2.4GHz (`netup`)
   - AP de clientes por 5GHz
 - Raspi3B:
@@ -96,7 +96,7 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
     │      flags dynamic, timeout
     │      timeout 120m                    ← clientes WiFi: 2 horas
     │      elements = {
-    │        192.168.1.113 timeout 0s,    ← admin: nunca expira
+    │        192.168.1.146 timeout 0s,    ← admin: nunca expira
     │        192.168.1.167 timeout 0s,    ← RafexPi4B: nunca expira
     │        192.168.1.181 timeout 0s,    ← RafexPi3B: nunca expira
     │      }
@@ -204,7 +204,7 @@ Router OpenWrt 25.12.2  (192.168.1.1)   ath79/mips_24kc
     │   /opt/keys/sensor  (SSH al router, opcional)         │
     └───────────────────────────────────────────────────────┘
 
-    Laptop admin  (192.168.1.113)
+    Laptop admin  (192.168.1.146)
       NUNCA bloqueada — timeout 0s permanente en allowed_clients
 ```
 
@@ -302,7 +302,7 @@ table ip captive {
         flags dynamic, timeout
         timeout 120m                        # clientes WiFi: 2 horas
         elements = {
-            192.168.1.113 timeout 0s,      # admin — nunca expira
+            192.168.1.146 timeout 0s,      # admin — nunca expira
             192.168.1.167 timeout 0s,      # RafexPi4B (portal) — nunca expira
             192.168.1.181 timeout 0s,      # RafexPi3B (sensor) — nunca expira
         }
@@ -320,7 +320,7 @@ table ip captive {
     chain forward_captive {
         type filter hook forward priority filter - 1; policy accept;
         ip saddr != 192.168.1.0/24 accept              # tráfico externo: pasar
-        ip saddr 192.168.1.113 accept                  # admin
+        ip saddr 192.168.1.146 accept                  # admin
         ip saddr 192.168.1.167 accept                  # RafexPi4B
         ip daddr 192.168.1.167 accept                  # hacia portal
         ip saddr 192.168.1.181 accept                  # RafexPi3B
@@ -435,7 +435,7 @@ Solución: copiar los HTML dentro de la imagen Docker y servirlos con `open().re
 | Router OpenWrt | — | 192.168.1.1 | — | OpenWrt 25.12.2 (ath79/mips_24kc) |
 | Raspberry Pi 4B | RafexPi4B | 192.168.1.167 | d8:3a:dd:4d:4b:ae | DietPi Debian trixie arm64 |
 | Raspberry Pi 3B | RafexPi3B | 192.168.1.181 | b8:27:eb:5a:ec:33 | DietPi Debian arm |
-| Laptop admin | — | 192.168.1.113 | — | — |
+| Laptop admin | RafexAdminLaptop | 192.168.1.146 | — | — |
 
 ---
 

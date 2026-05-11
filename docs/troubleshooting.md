@@ -215,7 +215,7 @@ automáticamente para `ADMIN_IP`, `RASPI4B_IP` y `RASPI3B_IP`.
 Si ocurre igualmente, forzar manualmente los tres permanentes:
 ```bash
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
-  "nft add element ip captive allowed_clients { 192.168.1.113 timeout 0s }"  # admin
+  "nft add element ip captive allowed_clients { 192.168.1.146 timeout 0s }"  # admin
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
   "nft add element ip captive allowed_clients { 192.168.1.167 timeout 0s }"  # RafexPi4B
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
@@ -250,7 +250,7 @@ El hook `forward` bloquea tráfico WiFi → internet, pero el hook `input`
 (acceso directo al router) no está afectado. Acceder siempre es posible:
 
 ```bash
-# Desde la laptop admin (192.168.1.113) — siempre funciona
+# Desde la laptop admin (192.168.1.146) — siempre funciona
 ssh root@192.168.1.1
 
 # En el router — eliminar tabla y restaurar internet a todos

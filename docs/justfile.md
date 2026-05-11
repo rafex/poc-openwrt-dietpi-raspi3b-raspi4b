@@ -30,7 +30,7 @@ just setup-java
 | `RASPI4B_IP` | `192.168.1.167` | IP de RafexPi4B |
 | `RASPI3B_IP` | `192.168.1.181` | IP de RafexPi3B |
 | `ROUTER_IP` | `192.168.1.1` | IP del router OpenWrt |
-| `ADMIN_IP` | `192.168.1.113` | IP de la máquina admin (laptop) |
+| `ADMIN_IP` | `192.168.1.146` | IP de la máquina admin (laptop) |
 | `RELEASE_TAG` | `latest` | Tag de GitHub Releases para despliegues |
 | `SSH_USER_PI` | `root` | Usuario SSH para Raspis |
 | `SSH_USER_ROUTER` | `root` | Usuario SSH para el router |

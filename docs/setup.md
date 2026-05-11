@@ -3,16 +3,45 @@
 > Stack actual (2026-04-28):  
 > **Java 21 (GraalVM nativo arm64)** · Rust SQLite (cdylib) · Vite/Pug/Sass/TS (frontend) · nginx (podman) · llama.cpp · Mosquitto
 
+## Actualización 2026-05-10 (estado recomendado)
+
+- Modo operativo recomendado: **classic captive** (`nftables + dnsmasq`) **sin openNDS**.
+- Portal cautivo en Raspi3B:
+  - IP: `192.168.1.181`
+  - Puerto: `8080`
+  - URL: `http://192.168.1.181:8080/portal`
+- Raspi4B (`192.168.1.167`) se mantiene para LLM + AI analyzer.
+- Script orquestador actualizado:
+  - `setup-openwrt-mode-raspi-portal-offload.sh` ahora desactiva openNDS y aplica `setup-openwrt.sh` clásico.
+- `setup-openwrt.sh` ahora soporta `--portal-port` (ej. `8080`).
+
+Flujo recomendado:
+
+```bash
+# En Raspi3B: sensor + portal completo
+sudo bash scripts/setup-raspi3b-sensor-captive-full.sh
+
+# En admin/Raspi4B: OpenWrt en modo clásico apuntando al portal :8080
+bash scripts/setup-openwrt.sh \
+  --topology split_portal \
+  --portal-ip 192.168.1.181 \
+  --portal-port 8080 \
+  --ai-ip 192.168.1.167
+
+# Diagnóstico
+bash scripts/openwrt-captive-doctor.sh --portal-ip 192.168.1.181 --portal-port 8080
+```
+
 ---
 
 ## Dispositivos y prerequisitos
 
 | Dispositivo | Hostname | IP | Sistema | Rol |
 |---|---|---|---|---|
-| Router OpenWrt | — | 192.168.1.1 | OpenWrt 25.x | Captive portal (nftables + dnsmasq) |
+| Router OpenWrt | — | 192.168.1.1 | OpenWrt 25.x | Captive portal (nftables + dnsmasq, modo classic) |
 | Raspberry Pi 4B | RafexPi4B | 192.168.1.167 | DietPi Bookworm | AI backend + MQTT + LLM + frontend |
 | Raspberry Pi 3B | RafexPi3B | 192.168.1.181 | DietPi Bookworm | Sensor de red (tshark → MQTT) |
-| Laptop admin | — | 192.168.1.113 | Cualquier SO | SSH, compilación local, despliegue |
+| Laptop admin | RafexAdminLaptop | 192.168.1.146 | Cualquier SO | SSH, compilación local, despliegue |
 
 ### Prerequisitos en la Pi 4B
 
@@ -114,9 +143,10 @@ sudo bash scripts/setup-topology.sh --topology=legacy
 sudo bash scripts/setup-topology.sh --topology=split_portal --portal-host=192.168.1.182
 ```
 
-### 2.3 — Modo alternativo: portal en OpenWrt + openNDS + backend en Raspi3B-sensor
+### 2.3 — Modo alternativo (legado): portal en OpenWrt + openNDS + backend en Raspi3B-sensor
 
 Este modo **no reemplaza** `legacy` ni `split_portal`; es una opción adicional.
+En OpenWrt 25.x sobre TL-WDR3600 se detectó inestabilidad (`openNDS` en crash loop), por lo que este modo queda como **legado/no recomendado**.
 
 Arquitectura de este modo:
 - OpenWrt sirve el HTML del portal en `/www/portal` (uhttpd + openNDS/FAS).
@@ -168,7 +198,7 @@ ssh root@192.168.1.1 "df -h /overlay"
 ### 2.5 — Modo offload adicional: OpenWrt ligero + portal completo en Raspi3B
 
 Objetivo de este modo:
-- OpenWrt solo hace routing/DHCP/DNS/firewall/openNDS.
+- OpenWrt solo hace routing/DHCP/DNS/firewall (modo classic, sin openNDS).
 - Uplink por **2.4GHz** hacia `netup`.
 - AP para clientes por **5GHz**.
 - Portal (frontend + backend) en Raspi3B (`192.168.1.181:8080`).
@@ -188,7 +218,8 @@ bash scripts/setup-openwrt-mode-raspi-portal-offload.sh \
 Este orquestador ejecuta:
 1. `setup-openwrt-wifi-uplink24-ap5.sh`
 2. `setup-openwrt-reserve-core-nodes.sh`
-3. `setup-openwrt-opennds-raspi-portal.sh`
+3. `openwrt-disable-opennds.sh`
+4. `setup-openwrt.sh --topology split_portal --portal-ip ... --portal-port ... --ai-ip ...`
 
 ---
 
