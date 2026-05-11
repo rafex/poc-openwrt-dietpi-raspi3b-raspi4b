@@ -8,12 +8,21 @@
 - Modo operativo recomendado: **classic captive** (`nftables + dnsmasq`) **sin openNDS**.
 - Portal cautivo en Raspi3B:
   - IP: `192.168.1.181`
-  - Puerto: `8080`
-  - URL: `http://192.168.1.181:8080/portal`
+  - Puerto recomendado para popup automático: `80`
+  - URL: `http://192.168.1.181/portal`
 - Raspi4B (`192.168.1.167`) se mantiene para LLM + AI analyzer.
 - Script orquestador actualizado:
   - `setup-openwrt-mode-raspi-portal-offload.sh` ahora desactiva openNDS y aplica `setup-openwrt.sh` clásico.
 - `setup-openwrt.sh` ahora soporta `--portal-port` (ej. `8080`).
+
+### Hallazgo de compatibilidad por dispositivo (validado en pruebas)
+
+- Con portal en `:8080`, varios equipos no muestran popup CNA automáticamente.
+- Con portal en `:80`, Android muestra popup correctamente.
+- Estado observado:
+  - Android: popup OK (funciona).
+  - Huawei: sin popup automático (requiere apertura manual del portal).
+  - iPhone: popup aparece pero vista puede quedar en blanco en algunos intentos.
 
 Flujo recomendado:
 
@@ -21,15 +30,15 @@ Flujo recomendado:
 # En Raspi3B: sensor + portal completo
 sudo bash scripts/setup-raspi3b-sensor-captive-full.sh
 
-# En admin/Raspi4B: OpenWrt en modo clásico apuntando al portal :8080
+# En admin/Raspi4B: OpenWrt en modo clásico apuntando al portal :80 (recomendado)
 bash scripts/setup-openwrt.sh \
   --topology split_portal \
   --portal-ip 192.168.1.181 \
-  --portal-port 8080 \
+  --portal-port 80 \
   --ai-ip 192.168.1.167
 
 # Diagnóstico
-bash scripts/openwrt-captive-doctor.sh --portal-ip 192.168.1.181 --portal-port 8080
+bash scripts/openwrt-captive-doctor.sh --portal-ip 192.168.1.181 --portal-port 80
 ```
 
 ---

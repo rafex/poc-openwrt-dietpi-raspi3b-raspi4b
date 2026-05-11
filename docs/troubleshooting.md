@@ -172,6 +172,29 @@ Si el popup sigue sin salir en iPhone:
 - abrir Safari en HTTP (`http://neverssl.com`),
 - confirmar que no hay perfil MDM/VPN forzando DNS externo.
 
+### Hallazgo confirmado de puerto (importante)
+
+En este PoC, para compatibilidad CNA/popup entre dispositivos:
+
+- `:80` en el portal (`http://<portal-ip>/portal`) funciona mejor para popup automático.
+- `:8080` puede funcionar manualmente, pero reduce drásticamente la aparición del popup en varios equipos.
+
+Recomendación operativa:
+
+```bash
+bash scripts/setup-openwrt.sh \
+  --topology split_portal \
+  --portal-ip 192.168.1.181 \
+  --portal-port 80 \
+  --ai-ip 192.168.1.167
+```
+
+### Estado observado por familia de dispositivos
+
+- Android: popup automático OK con portal en `:80`.
+- Huawei: puede no abrir popup automático; usar apertura manual HTTP.
+- iPhone: popup puede aparecer con vista en blanco; probar `http://neverssl.com` en Safari y reconexión de red.
+
 ---
 
 ## nftables: "File exists" / "Could not process rule" al ejecutar setup-openwrt.sh
