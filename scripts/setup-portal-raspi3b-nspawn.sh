@@ -20,6 +20,7 @@ ROOTFS="${ROOTFS:-/var/lib/machines/captive-portal}"
 MACHINE_BACKEND="${MACHINE_BACKEND:-captive-portal-backend}"
 MACHINE_FRONTEND="${MACHINE_FRONTEND:-captive-portal-frontend}"
 NSPAWN_NET_FLAG="${NSPAWN_NET_FLAG:-auto}"
+FALLBACK_DIRECT="${FALLBACK_DIRECT:-true}"
 
 parse_common_flags "$@"
 ARGS=("${REM_ARGS[@]}")
@@ -30,6 +31,7 @@ while [ "${#ARGS[@]}" -gt 0 ]; do
     --portal-port) PORTAL_PORT="${ARGS[1]:-}"; ARGS=("${ARGS[@]:2}") ;;
     --rootfs) ROOTFS="${ARGS[1]:-}"; ARGS=("${ARGS[@]:2}") ;;
     --nspawn-net-flag) NSPAWN_NET_FLAG="${ARGS[1]:-}"; ARGS=("${ARGS[@]:2}") ;;
+    --no-fallback-direct) FALLBACK_DIRECT="false"; ARGS=("${ARGS[@]:1}") ;;
     *) REM_ARGS+=("${ARGS[0]}"); ARGS=("${ARGS[@]:1}") ;;
   esac
 done
@@ -51,6 +53,15 @@ BACKEND_SSH_KEY="/opt/keys/sensor"
 
 ensure_cmd systemctl curl
 [ -f "$APP_DIR/backend.py" ] || die "No encontrado: $APP_DIR/backend.py"
+
+fallback_to_direct() {
+  if [[ "$FALLBACK_DIRECT" == "true" ]]; then
+    log_warn "nspawn no es viable en este host; aplicando fallback automático a modo direct."
+    env -u SETUP_LOG_INITIALIZED bash "$SCRIPT_DIR/setup-portal-raspi3b-direct.sh"
+    exit 0
+  fi
+  die "nspawn no es viable en este host y --no-fallback-direct está activo"
+}
 
 log_info "--- setup-portal-raspi3b-nspawn ---"
 log_info "rootfs=$ROOTFS portal_port=$PORTAL_PORT backend_port=$BACKEND_PORT router=$ROUTER_IP ai=$AI_IP"
@@ -74,6 +85,10 @@ kill_port_listeners() {
 if ! $ONLY_VERIFY; then
   apt_install_pkgs systemd-container debootstrap curl ca-certificates
   ensure_cmd systemd-nspawn debootstrap
+  if ! systemctl is-active --quiet dbus 2>/dev/null; then
+    log_warn "dbus no está activo en host."
+    fallback_to_direct
+  fi
   run_cmd mkdir -p "$DB_DIR" /opt/captive-portal/nspawn /opt/keys
   if [[ ! -f "$BACKEND_SSH_KEY" && -f /opt/keys/captive-portal ]]; then
     BACKEND_SSH_KEY="/opt/keys/captive-portal"
@@ -197,8 +212,10 @@ EOF
   fi
 
   # Limpieza best-effort de nspawn previos.
-  run_cmd machinectl terminate "${MACHINE_BACKEND}" || true
-  run_cmd machinectl terminate "${MACHINE_FRONTEND}" || true
+  if command -v machinectl >/dev/null 2>&1 && systemctl is-active --quiet systemd-machined 2>/dev/null; then
+    run_cmd machinectl terminate "${MACHINE_BACKEND}" || true
+    run_cmd machinectl terminate "${MACHINE_FRONTEND}" || true
+  fi
   sleep 1
   kill_port_listeners "$PORTAL_PORT"
   kill_port_listeners "$BACKEND_PORT"
@@ -237,7 +254,7 @@ if ! $DRY_RUN; then
       journalctl -u captive-portal-nspawn-backend.service -n 80 --no-pager 2>/dev/null || true
       journalctl -u captive-portal-nspawn-frontend.service -n 80 --no-pager 2>/dev/null || true
       ss -ltnp 2>/dev/null | grep -E ":(${PORTAL_PORT}|${BACKEND_PORT}) " || true
-      die "Fallo verificación portal nspawn"
+      fallback_to_direct
       ;;
   esac
 fi
