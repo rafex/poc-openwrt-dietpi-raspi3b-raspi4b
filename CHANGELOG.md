@@ -56,7 +56,7 @@ Todos los cambios significativos de este proyecto están documentados en este ar
   - Terminal en vivo con logs de análisis (`/terminal`)
   - Editor de reglas/prompts IA (`/rulez`)
 - **Deteción Mejorada de Captive Portal**: 
-  - Dominio fallback: `captive.local`
+  - Dominio fallback: `captive.rafex.dev`
   - DHCP option 114 (RFC 7710): `http://192.168.1.167/portal`
   - Bloqueo inteligente por subred en nftables
 

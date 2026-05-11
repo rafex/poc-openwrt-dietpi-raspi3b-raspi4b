@@ -273,7 +273,7 @@ bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182 
 |---|---|
 | Pre-flight | Verifica overlay, interfaz `phy0-ap0`, SSH |
 | A | Agrega llave pública a `/etc/dropbear/authorized_keys` |
-| B | Configura dnsmasq: lease `120m`, option `6`, option `114`, `captive.local` |
+| B | Configura dnsmasq: lease `120m`, option `6`, option `114`, `captive.rafex.dev` |
 | C | Tabla nftables `ip captive`: permanentes admin+Pi4B+Pi3B (timeout 0s), clientes 120m |
 | C.1 | Reservas DHCP UCI permanentes para ambas Raspis |
 | D | Verificación completa |
