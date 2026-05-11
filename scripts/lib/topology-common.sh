@@ -37,8 +37,8 @@ load_topology() {
     fi
   fi
 
-  CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.localhost.com}"
-  PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.localhost.com}"
+  CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.local}"
+  PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.local}"
 }
 
 ensure_topology_value() {

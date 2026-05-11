@@ -6,8 +6,8 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib/common.sh"
 
-CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.localhost.com}"
-PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.localhost.com}"
+CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.local}"
+PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.local}"
 PORTAL_PORT="${PORTAL_PORT:-80}"
 
 while [ "$#" -gt 0 ]; do

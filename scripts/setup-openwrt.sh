@@ -18,9 +18,9 @@
 #       nft delete table ip captive
 #
 # Variables opcionales:
-#   CAPTIVE_DOMAIN=captive.rafex.dev    # dominio principal del portal (DHCP opt114 + dnsmasq)
-#   CAPTIVE_DOMAIN2=captive.localhost.com   # dominio secundario (fallback offline)
-#   PEOPLE_DOMAIN=people.localhost.com  # subdominio para dashboard de registros/conectados
+#   CAPTIVE_DOMAIN=captive.rafex    # dominio principal del portal (DHCP opt114 + dnsmasq)
+#   CAPTIVE_DOMAIN2=captive.local   # dominio secundario (fallback offline)
+#   PEOPLE_DOMAIN=people.local  # subdominio para dashboard de registros/conectados
 #   TOPOLOGY_FILE=/etc/demo-openwrt/topology.env
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -129,9 +129,9 @@ case "$PORTAL_PORT" in
     ''|*[!0-9]*) die "PORTAL_PORT inválido: $PORTAL_PORT" ;;
 esac
 
-CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex.dev}"
-CAPTIVE_DOMAIN2="${CAPTIVE_DOMAIN2:-captive.localhost.com}"
-PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.localhost.com}"
+CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex}"
+CAPTIVE_DOMAIN2="${CAPTIVE_DOMAIN2:-captive.local}"
+PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.local}"
 PORTAL_URL_SUFFIX="/portal"
 if [ "$PORTAL_PORT" = "80" ]; then
     PORTAL_URL_BASE="http://$CAPTIVE_DOMAIN"
@@ -255,8 +255,8 @@ address=/network-test.debian.org/$PORTAL_IP
 address=/nmcheck.gnome.org/$PORTAL_IP
 
 # ── Dominios propios del portal (acceso manual y DHCP option 114) ────────────
-# captive.rafex.dev  — URL pública de la demo (fácil de comunicar a asistentes)
-# captive.localhost.com  — fallback sin dominio externo (funciona offline)
+# captive.rafex  — URL pública de la demo (fácil de comunicar a asistentes)
+# captive.local  — fallback sin dominio externo (funciona offline)
 address=/$CAPTIVE_DOMAIN/$PORTAL_IP
 address=/$CAPTIVE_DOMAIN2/$PORTAL_IP
 address=/$PEOPLE_DOMAIN/$PORTAL_IP
@@ -288,7 +288,7 @@ router_ssh "
     uci del dhcp.lan.dhcp_option 2>/dev/null || true
     uci add_list dhcp.lan.dhcp_option='6,$ROUTER_IP'
     # Option 114 (RFC 8910): URL del captive portal que el OS usa directamente.
-    # Se usa el dominio propio (captive.rafex.dev) en lugar de la IP para que
+    # Se usa el dominio propio (captive.rafex) en lugar de la IP para que
     # la URL sea legible y coincida con lo que dnsmasq resuelve a $PORTAL_IP.
     uci add_list dhcp.lan.dhcp_option='114,${PORTAL_URL_BASE}${PORTAL_URL_SUFFIX}'
     uci commit dhcp
