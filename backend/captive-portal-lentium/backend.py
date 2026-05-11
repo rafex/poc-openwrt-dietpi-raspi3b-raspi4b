@@ -832,6 +832,44 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.end_headers()
 
+    def _serve_captive_probe_page(self):
+        # Página mínima para asistentes cautivos (iOS CNA / Huawei) que a veces
+        # muestran blanco al seguir redirects hacia un portal con JS pesado.
+        portal_url = f"http://{PORTAL_IP}/portal"
+        html = (
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>Portal cautivo</title>"
+            "<meta http-equiv='refresh' content='0; url=/portal'>"
+            "<style>body{font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;"
+            "padding:24px;line-height:1.45;color:#111}a{display:inline-block;margin-top:12px}</style>"
+            "</head><body><h3>Iniciar sesión en red WiFi</h3>"
+            "<p>Si no abre automáticamente, toca continuar.</p>"
+            f"<a href='{portal_url}'>Continuar al portal</a>"
+            "</body></html>"
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Content-Length", str(len(html)))
+        self.end_headers()
+        self.wfile.write(html)
+
+    def _is_problematic_cna(self) -> bool:
+        ua = (self.headers.get("User-Agent") or "").lower()
+        host = (self.headers.get("Host") or "").lower()
+        # iOS/macOS CNA suele usar CaptiveNetworkSupport y host captive.apple.com.
+        # Algunos Huawei/Honor usan probes hicloud y pueden no seguir 302 bien.
+        if "captivenetworksupport" in ua:
+            return True
+        if "huawei" in ua or "honor" in ua:
+            return True
+        if "captive.apple.com" in host:
+            return True
+        if "hicloud.com" in host or "dbankcloud.cn" in host:
+            return True
+        return False
+
     def do_HEAD(self):
         path = self._path_only()
         log.info(f"HEAD {self.path}  peer={self.client_address[0]}")
@@ -844,7 +882,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "/fwlink",
         }
         if path in captive_probe_paths:
-            self._redirect_portal()
+            if self._is_problematic_cna():
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self._redirect_portal()
             return
         if path in ("/", "/portal", "/portal/", "/index.html"):
             portal_path = Path(__file__).parent / "portal.html"
@@ -871,7 +916,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             "/fwlink",
         }
         if path in captive_probe_paths:
-            self._redirect_portal()
+            if self._is_problematic_cna():
+                self._serve_captive_probe_page()
+            else:
+                self._redirect_portal()
             return
 
         if path in ("/", "/portal", "/portal/", "/index.html"):
