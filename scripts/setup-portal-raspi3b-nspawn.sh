@@ -19,6 +19,7 @@ PORTAL_PORT="${PORTAL_PORT:-8080}"
 ROOTFS="${ROOTFS:-/var/lib/machines/captive-portal}"
 MACHINE_BACKEND="${MACHINE_BACKEND:-captive-portal-backend}"
 MACHINE_FRONTEND="${MACHINE_FRONTEND:-captive-portal-frontend}"
+NSPAWN_NET_FLAG="${NSPAWN_NET_FLAG:-auto}"
 
 parse_common_flags "$@"
 ARGS=("${REM_ARGS[@]}")
@@ -28,6 +29,7 @@ while [ "${#ARGS[@]}" -gt 0 ]; do
     --backend-port) BACKEND_PORT="${ARGS[1]:-}"; ARGS=("${ARGS[@]:2}") ;;
     --portal-port) PORTAL_PORT="${ARGS[1]:-}"; ARGS=("${ARGS[@]:2}") ;;
     --rootfs) ROOTFS="${ARGS[1]:-}"; ARGS=("${ARGS[@]:2}") ;;
+    --nspawn-net-flag) NSPAWN_NET_FLAG="${ARGS[1]:-}"; ARGS=("${ARGS[@]:2}") ;;
     *) REM_ARGS+=("${ARGS[0]}"); ARGS=("${ARGS[@]:1}") ;;
   esac
 done
@@ -69,6 +71,30 @@ if ! $ONLY_VERIFY; then
     log_info "Creando rootfs nspawn ($ARCH, $RELEASE)..."
     run_cmd debootstrap --variant=minbase --arch="$ARCH" "$RELEASE" "$ROOTFS" "$MIRROR"
   fi
+
+  resolve_nspawn_net_flag() {
+    case "$NSPAWN_NET_FLAG" in
+      auto)
+        if systemd-nspawn --help 2>&1 | grep -q -- '--network-host'; then
+          echo "--network-host"
+          return 0
+        fi
+        if systemd-nspawn --help 2>&1 | grep -q -- '--private-network'; then
+          echo "--private-network=no"
+          return 0
+        fi
+        echo ""
+        ;;
+      none|"")
+        echo ""
+        ;;
+      *)
+        echo "$NSPAWN_NET_FLAG"
+        ;;
+    esac
+  }
+  NSPA_NET="$(resolve_nspawn_net_flag)"
+  log_info "Flag de red para nspawn: ${NSPA_NET:-<sin flag>}"
 
   log_info "Instalando paquetes dentro del rootfs (chroot, sin dependencia de bus)..."
   run_cmd chroot "$ROOTFS" /bin/sh -lc \
@@ -117,7 +143,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/systemd-nspawn -q --machine=${MACHINE_BACKEND} --directory=${ROOTFS} --network-host --as-pid2 \\
+ExecStart=/usr/bin/systemd-nspawn -q --machine=${MACHINE_BACKEND} --directory=${ROOTFS} ${NSPA_NET} --as-pid2 \\
   --register=no \\
   --bind=${APP_DIR}:/opt/app --bind=${DB_DIR}:/data --bind=/opt/keys:/opt/keys --bind=${BACKEND_ENV_HOST}:/run/backend.env \\
   /bin/sh -lc 'set -a; . /run/backend.env; set +a; exec /usr/bin/python3 /opt/app/backend.py'
@@ -137,7 +163,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/systemd-nspawn -q --machine=${MACHINE_FRONTEND} --directory=${ROOTFS} --network-host --as-pid2 \\
+ExecStart=/usr/bin/systemd-nspawn -q --machine=${MACHINE_FRONTEND} --directory=${ROOTFS} ${NSPA_NET} --as-pid2 \\
   --register=no \\
   --bind=${APP_DIR}:/opt/app --bind=${NGINX_CONF_HOST}:/etc/nginx/conf.d/default.conf \\
   /usr/sbin/nginx -g 'daemon off;'
