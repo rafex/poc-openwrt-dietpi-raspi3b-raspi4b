@@ -41,9 +41,9 @@ sort -u "$TMP_WIFI_MACS" -o "$TMP_WIFI_MACS" 2>/dev/null || true
 # ── 2) Leer leases DHCP ──────────────────────────────────────────────────────
 awk '
   {
-    exp=$1; mac=tolower($2); ip=$3; host=$4;
+    lease_exp=$1; mac=tolower($2); ip=$3; host=$4;
     if (host=="*") host="-";
-    print exp "|" mac "|" ip "|" host
+    print lease_exp "|" mac "|" ip "|" host
   }
 ' "$LEASES" > "$TMP_LEASES"
 
@@ -78,4 +78,3 @@ else
   echo "  (sin asociaciones WiFi activas)"
 fi
 EOF
-
