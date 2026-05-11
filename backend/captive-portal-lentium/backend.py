@@ -41,7 +41,7 @@ NFT_SET     = "ip captive allowed_clients"
 NFT_BLOCKED_SET = "ip captive blocked_macs"
 NFT_WARN_SET = "ip captive warned_clients"
 REDIRECT_URL = os.environ.get("REDIRECT_URL", "https://theworldofrafex.blog/")
-ADMIN_IP    = os.environ.get("ADMIN_IP", "192.168.1.113")
+ADMIN_IP    = os.environ.get("ADMIN_IP", "192.168.1.146")
 SENSOR_IP   = os.environ.get("SENSOR_IP", "192.168.1.181")
 R4_HOST     = os.environ.get("SERVICE_RASPI4_HOST", "192.168.1.167")
 R4_USER     = os.environ.get("SERVICE_RASPI4_USER", "root")
@@ -51,6 +51,10 @@ R3_USER     = os.environ.get("SERVICE_RASPI3_USER", "root")
 R3_KEY      = os.environ.get("SERVICE_RASPI3_SSH_KEY", "/opt/keys/sensor")
 REPO_PATH   = os.environ.get("REPO_PATH", "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b")
 AI_ANALYZER_URL = os.environ.get("AI_ANALYZER_URL", f"http://{R4_HOST}:5000")
+
+# Alias explícitos para validaciones de IP reservadas
+RASPI3B_IP = os.environ.get("RASPI3B_IP", R3_HOST)
+RASPI4B_IP = os.environ.get("RASPI4B_IP", R4_HOST)
 
 log.info("=== Lentium Portal Backend iniciando ===")
 log.info(f"ROUTER_IP={ROUTER_IP}  PORTAL_IP={PORTAL_IP}  DB_PATH={DB_PATH}  PORT={PORT}")
