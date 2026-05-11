@@ -63,6 +63,9 @@ check_dns_domain() {
 check_dns_domain connectivitycheck.gstatic.com
 check_dns_domain captive.apple.com
 check_dns_domain www.msftconnecttest.com
+check_dns_domain connectivitycheck.platform.hicloud.com
+check_dns_domain connectivitycheck.hicloud.com
+check_dns_domain neverssl.com
 check_dns_domain "$CAPTIVE_DOMAIN"
 check_dns_domain "$PEOPLE_DOMAIN"
 

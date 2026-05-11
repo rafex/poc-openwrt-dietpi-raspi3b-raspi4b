@@ -222,6 +222,8 @@ address=/clients3.google.com/$PORTAL_IP
 address=/connectivitycheck.platform.hicloud.com/$PORTAL_IP
 address=/connectivitycheck.hicloud.com/$PORTAL_IP
 address=/connectivitycheck.dbankcloud.cn/$PORTAL_IP
+address=/neverssl.com/$PORTAL_IP
+address=/www.neverssl.com/$PORTAL_IP
 
 # ── Xiaomi MIUI / HyperOS ────────────────────────────────────────────────────
 address=/connect.rom.miui.com/$PORTAL_IP
