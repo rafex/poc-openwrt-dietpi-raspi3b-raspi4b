@@ -95,8 +95,8 @@ data:
         }
 
         location = / {
-            if ($host = people.localhost.com) {
-                return 302 http://people.localhost.com/people;
+            if ($host = people.local) {
+                return 302 http://people.local/people;
             }
             return 302 http://192.168.1.167/portal;
         }

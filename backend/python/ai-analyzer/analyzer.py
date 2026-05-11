@@ -83,7 +83,7 @@ SOCIAL_MIN_HITS = int(os.environ.get("SOCIAL_MIN_HITS", "3"))
 PORN_BLOCK_ENABLED = os.environ.get("PORN_BLOCK_ENABLED", "true").lower() == "true"
 WHITELIST_DOMAINS_DEFAULT = os.environ.get(
     "WHITELIST_DOMAINS_DEFAULT",
-    "localhost.com,localhost.com.mx,microsoft.com,apple.com,google.com,openwrt.org",
+    "captive.local,people.local,microsoft.com,apple.com,google.com,openwrt.org",
 )
 FEATURE_HUMAN_EXPLAIN = os.environ.get("FEATURE_HUMAN_EXPLAIN", "true").lower() == "true"
 FEATURE_DOMAIN_CLASSIFIER = os.environ.get("FEATURE_DOMAIN_CLASSIFIER", "true").lower() == "true"
