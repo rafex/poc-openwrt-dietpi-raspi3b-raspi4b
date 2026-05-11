@@ -55,6 +55,22 @@ ensure_cmd systemctl curl
 log_info "--- setup-portal-raspi3b-nspawn ---"
 log_info "rootfs=$ROOTFS portal_port=$PORTAL_PORT backend_port=$BACKEND_PORT router=$ROUTER_IP ai=$AI_IP"
 
+kill_port_listeners() {
+  local p="$1"
+  local pids
+  pids="$(ss -ltnp 2>/dev/null | awk -v port=":${p}" '$4 ~ port"$" {print $NF}' | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | sort -u)"
+  [ -n "$pids" ] || return 0
+  log_warn "Liberando puerto ${p} (PIDs: $pids)"
+  # shellcheck disable=SC2086
+  kill -TERM $pids 2>/dev/null || true
+  sleep 1
+  pids="$(ss -ltnp 2>/dev/null | awk -v port=":${p}" '$4 ~ port"$" {print $NF}' | sed -n 's/.*pid=\([0-9]\+\).*/\1/p' | sort -u)"
+  if [ -n "$pids" ]; then
+    # shellcheck disable=SC2086
+    kill -KILL $pids 2>/dev/null || true
+  fi
+}
+
 if ! $ONLY_VERIFY; then
   apt_install_pkgs systemd-container debootstrap curl ca-certificates
   ensure_cmd systemd-nspawn debootstrap
@@ -175,9 +191,9 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
 
-  # Evita conflicto con modo directo (python en :8080) si estaba instalado antes.
+  # Limpieza proactiva de instalaciones previas para evitar choques entre modos.
   if systemctl list-unit-files | grep -q '^captive-portal-direct\.service'; then
-    log_info "Desactivando servicio legacy captive-portal-direct para evitar conflicto de puertos..."
+    log_info "Desactivando servicio legacy captive-portal-direct..."
     run_cmd systemctl stop captive-portal-direct.service || true
     run_cmd systemctl disable captive-portal-direct.service || true
   fi
@@ -186,6 +202,8 @@ EOF
   run_cmd machinectl terminate "${MACHINE_BACKEND}" || true
   run_cmd machinectl terminate "${MACHINE_FRONTEND}" || true
   sleep 1
+  kill_port_listeners "$PORTAL_PORT"
+  kill_port_listeners "$BACKEND_PORT"
 
   run_cmd systemctl daemon-reload
   run_cmd systemctl enable captive-portal-nspawn-backend.service
