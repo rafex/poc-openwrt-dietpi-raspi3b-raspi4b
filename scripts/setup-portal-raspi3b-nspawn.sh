@@ -95,10 +95,8 @@ if ! $ONLY_VERIFY; then
           echo "--network-host"
           return 0
         fi
-        if systemd-nspawn --help 2>&1 | grep -q -- '--private-network'; then
-          echo "--private-network=no"
-          return 0
-        fi
+        # En versiones viejas aparece --private-network pero no acepta '=no'.
+        # Para mantener red de host, preferimos no pasar bandera de red.
         echo ""
         ;;
       none|"")
