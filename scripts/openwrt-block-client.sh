@@ -37,6 +37,10 @@ if [ "$IP" = "$ADMIN_IP" ]; then
     die "SEGURIDAD: No se puede bloquear la IP de admin ($ADMIN_IP).
   Esta proteccion es permanente."
 fi
+if [ -n "$ADMIN2_IP" ] && [ "$IP" = "$ADMIN2_IP" ]; then
+    die "SEGURIDAD: No se puede bloquear la IP de admin2 ($ADMIN2_IP).
+  Esta proteccion es permanente."
+fi
 
 # Proteccion adicional: tampoco bloquear la IP del portal mismo
 if [ "$IP" = "$PORTAL_IP" ]; then

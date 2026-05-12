@@ -308,6 +308,17 @@ log_ok "dnsmasq recargado"
 # =============================================================================
 log_info "--- FASE C: Configurando nftables ---"
 
+ADMIN2_SET_ELEM=""
+ADMIN2_FORWARD_RULE=""
+ADMIN2_COMMENT=""
+if [ -n "$ADMIN2_IP" ] && validate_ip "$ADMIN2_IP"; then
+    ADMIN2_SET_ELEM=", $ADMIN2_IP timeout 0s"
+    ADMIN2_FORWARD_RULE="
+        # Admin secundario: acceso total siempre
+        ip saddr $ADMIN2_IP accept"
+    ADMIN2_COMMENT=", admin2 ($ADMIN2_IP)"
+fi
+
 # Contenido del archivo nft
 # IMPORTANTE: la tabla se elimina antes de aplicar este archivo (ver más abajo),
 # por lo que solo necesitamos 'add table' + la definición completa.
@@ -322,7 +333,7 @@ NFT_CONTENT="#!/usr/sbin/nft -f
 #   bridge br-lan y el hook forward ve br-lan, no la interfaz AP (phy0-ap0).
 #   Matching por subred LAN es más robusto y funciona con cualquier topología.
 #
-# SEGURIDAD: $ADMIN_IP (admin), $RASPI4B_IP (AI) y $PORTAL_IP (portal) NUNCA son bloqueadas.
+# SEGURIDAD: $ADMIN_IP (admin)$ADMIN2_COMMENT, $RASPI4B_IP (AI) y $PORTAL_IP (portal) NUNCA son bloqueadas.
 # Para resetear: nft delete table ip captive
 
 add table ip captive
@@ -333,14 +344,14 @@ table ip captive {
     # timeout 120m: las autorizaciones expiran solas (2 horas)
     #   → combinado con DHCP lease=120m: al reconectar pasan de nuevo por el portal
     #
-    # Admin ($ADMIN_IP), IA ($RASPI4B_IP), sensor ($RASPI3B_IP), portal node ($PORTAL_NODE_IP),
+    # Admin ($ADMIN_IP)$ADMIN2_COMMENT, IA ($RASPI4B_IP), sensor ($RASPI3B_IP), portal node ($PORTAL_NODE_IP),
     # AP extender ($AP_EXTENDER_IP) y portal activo ($PORTAL_IP):
     # timeout 0s = NUNCA expiran
     set $NFT_SET {
         type ipv4_addr
         flags dynamic, timeout
         timeout 120m
-        elements = { $ADMIN_IP timeout 0s, $RASPI4B_IP timeout 0s, $RASPI3B_IP timeout 0s, $PORTAL_NODE_IP timeout 0s, $AP_EXTENDER_IP timeout 0s, $PORTAL_IP timeout 0s }
+        elements = { $ADMIN_IP timeout 0s$ADMIN2_SET_ELEM, $RASPI4B_IP timeout 0s, $RASPI3B_IP timeout 0s, $PORTAL_NODE_IP timeout 0s, $AP_EXTENDER_IP timeout 0s, $PORTAL_IP timeout 0s }
     }
 
     # Redireccion HTTP: clientes de la LAN no autorizados → portal en $PORTAL_IP
@@ -370,6 +381,7 @@ table ip captive {
 
         # Admin: acceso total siempre (REGLA DE ORO — nunca bloquear)
         ip saddr $ADMIN_IP accept
+$ADMIN2_FORWARD_RULE
 
         # AI node (Raspi4B): siempre permitido (topología legacy/split)
         ip saddr $RASPI4B_IP accept
@@ -433,15 +445,15 @@ router_ssh "nft -f /tmp/captive-portal.nft" || \
 # Admin, portal y ambas Raspis nunca deben expirar — sin importar los reinicios.
 log_info "Re-confirmando IPs permanentes en el set (timeout 0s)..."
 SEEN_PERM_IPS=""
-for ip in "$ADMIN_IP" "$RASPI4B_IP" "$RASPI3B_IP" "$PORTAL_NODE_IP" "$AP_EXTENDER_IP" "$PORTAL_IP"; do
+for ip in "$ADMIN_IP" "$ADMIN2_IP" "$RASPI4B_IP" "$RASPI3B_IP" "$PORTAL_NODE_IP" "$AP_EXTENDER_IP" "$PORTAL_IP"; do
     [ -n "$ip" ] || continue
     case " $SEEN_PERM_IPS " in
         *" $ip "*) continue ;;
     esac
     SEEN_PERM_IPS="$SEEN_PERM_IPS $ip"
-    if [ "$ip" = "$ADMIN_IP" ]; then
+    if [ "$ip" = "$ADMIN_IP" ] || { [ -n "$ADMIN2_IP" ] && [ "$ip" = "$ADMIN2_IP" ]; }; then
         router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip timeout 0s }" || \
-            die "No se pudo asegurar $ADMIN_IP como permanente"
+            die "No se pudo asegurar $ip como permanente"
     else
         router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip timeout 0s }" 2>/dev/null || true
     fi
@@ -494,9 +506,9 @@ EOS
 router_ssh "rm -f /tmp/captive-portal.nft"
 
 # =============================================================================
-# FASE C.1: Reservas DHCP permanentes para las Raspberry Pi
+# FASE C.1: Reservas DHCP permanentes para core nodes (admin + Raspberry Pi)
 # =============================================================================
-log_info "--- FASE C.1: Reservas DHCP permanentes para RafexPi4B y RafexPi3B ---"
+log_info "--- FASE C.1: Reservas DHCP permanentes para core nodes ---"
 
 # Función interna: crea o actualiza una reserva DHCP via UCI en el router
 # Uso: reserve_raspi_dhcp <hostname> <mac> <ip>
@@ -539,6 +551,12 @@ reserve_raspi_dhcp() {
        log_warn "No se pudo configurar reserva DHCP para $NAME — hazlo manualmente con openwrt-reserve-raspi.sh"
 }
 
+reserve_raspi_dhcp "$ADMIN_HOSTNAME" "$ADMIN_MAC" "$ADMIN_IP"
+if [ -n "$ADMIN2_MAC" ] && [ -n "$ADMIN2_IP" ] && validate_ip "$ADMIN2_IP"; then
+    reserve_raspi_dhcp "$ADMIN2_HOSTNAME" "$ADMIN2_MAC" "$ADMIN2_IP"
+else
+    log_info "ADMIN2_MAC/IP no completos; no se creó reserva DHCP de admin secundario"
+fi
 reserve_raspi_dhcp "$RASPI4B_HOSTNAME" "$RASPI4B_MAC" "$RASPI4B_IP"
 reserve_raspi_dhcp "$RASPI3B_HOSTNAME" "$RASPI3B_MAC" "$RASPI3B_IP"
 if [ -n "$PORTAL_NODE_MAC" ] && validate_ip "$PORTAL_NODE_IP"; then
@@ -590,6 +608,14 @@ if router_ip_in_set "$ADMIN_IP"; then
 else
     log_warn "Admin $ADMIN_IP NO esta en $NFT_SET — agregando de emergencia..."
     router_add_ip "$ADMIN_IP"
+fi
+if [ -n "$ADMIN2_IP" ] && validate_ip "$ADMIN2_IP"; then
+    if router_ip_in_set "$ADMIN2_IP"; then
+        log_ok "Admin2 $ADMIN2_IP esta en $NFT_SET"
+    else
+        log_warn "Admin2 $ADMIN2_IP NO esta en $NFT_SET — agregando de emergencia..."
+        router_add_ip "$ADMIN2_IP"
+    fi
 fi
 
 # Verificar dnsmasq — función helper para no repetir el nslookup
@@ -662,6 +688,9 @@ printf '  Portal node 3B2 reservado: %s (%s)\n' "$PORTAL_NODE_IP" "$PORTAL_NODE_
 printf '  AP extender reservado:     %s (%s)\n' "$AP_EXTENDER_IP" "$AP_EXTENDER_HOSTNAME"
 printf '  Sensor/3B:     %s (%s) — permanente\n' "$RASPI3B_IP" "$RASPI3B_HOSTNAME"
 printf '  Admin (libre): %s — permanente\n' "$ADMIN_IP"
+if [ -n "$ADMIN2_IP" ]; then
+  printf '  Admin2 (libre): %s — permanente\n' "$ADMIN2_IP"
+fi
 printf '  AP interface:  %s\n' "$AP_IFACE"
 printf '  Portal timeout: %s (acceso WiFi invitados)\n' "$PORTAL_TIMEOUT"
 printf '  DHCP leasetime: 120m\n'

@@ -2,6 +2,7 @@
 # setup-openwrt-reserve-core-nodes.sh
 # Reserva IPs estáticas (DHCP) para nodos core:
 #   - Laptop admin
+#   - Admin secundario (opcional)
 #   - Raspi3B-sensor
 #   - Raspi4B-LLM.
 
@@ -17,10 +18,16 @@ R4_MAC="${R4_MAC:-$RASPI4B_MAC}"
 ADMIN_HOST="${ADMIN_HOST:-$ADMIN_HOSTNAME}"
 ADMIN_RES_IP="${ADMIN_RES_IP:-$ADMIN_IP}"
 ADMIN_RES_MAC="${ADMIN_RES_MAC:-$ADMIN_MAC}"
+ADMIN2_HOST="${ADMIN2_HOST:-$ADMIN2_HOSTNAME}"
+ADMIN2_RES_IP="${ADMIN2_RES_IP:-$ADMIN2_IP}"
+ADMIN2_RES_MAC="${ADMIN2_RES_MAC:-$ADMIN2_MAC}"
 
 validate_ip "$R3_IP" || die "IP inválida R3: $R3_IP"
 validate_ip "$R4_IP" || die "IP inválida R4: $R4_IP"
 validate_ip "$ADMIN_RES_IP" || die "IP inválida admin: $ADMIN_RES_IP"
+if [ -n "$ADMIN2_RES_IP" ]; then
+    validate_ip "$ADMIN2_RES_IP" || die "IP inválida admin2: $ADMIN2_RES_IP"
+fi
 
 check_ssh_key
 test_router_ssh
@@ -64,6 +71,12 @@ if [ -n "$ADMIN_RES_MAC" ]; then
     log_ok "Reserva OK: $ADMIN_HOST $ADMIN_RES_MAC -> $ADMIN_RES_IP"
 else
     log_warn "ADMIN_MAC vacío: se omite reserva de laptop admin"
+fi
+if [ -n "$ADMIN2_RES_MAC" ] && [ -n "$ADMIN2_RES_IP" ]; then
+    reserve_one "$ADMIN2_HOST" "$ADMIN2_RES_MAC" "$ADMIN2_RES_IP" || die "Falló reserva $ADMIN2_HOST"
+    log_ok "Reserva OK: $ADMIN2_HOST $ADMIN2_RES_MAC -> $ADMIN2_RES_IP"
+else
+    log_info "ADMIN2_MAC/IP vacío: se omite reserva de admin secundario"
 fi
 reserve_one "$R3_HOST" "$R3_MAC" "$R3_IP" || die "Falló reserva $R3_HOST"
 log_ok "Reserva OK: $R3_HOST $R3_MAC -> $R3_IP"

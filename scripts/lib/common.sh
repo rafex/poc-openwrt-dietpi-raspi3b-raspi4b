@@ -23,6 +23,9 @@ ROUTER_IP="${ROUTER_IP:-192.168.1.1}"
 ADMIN_IP="${ADMIN_IP:-192.168.1.113}"
 ADMIN_MAC="${ADMIN_MAC:-a8:60:b6:0f:f7:6a}"
 ADMIN_HOSTNAME="${ADMIN_HOSTNAME:-RafexAdminLaptop}"
+ADMIN2_IP="${ADMIN2_IP:-}"
+ADMIN2_MAC="${ADMIN2_MAC:-}"
+ADMIN2_HOSTNAME="${ADMIN2_HOSTNAME:-RafexAdminMacMini}"
 LAN_SUBNET="${LAN_SUBNET:-192.168.1.0/24}"    # subred LAN completa — usada en reglas nftables
 SSH_KEY="${SSH_KEY:-/opt/keys/captive-portal}"
 SSH_KEY_PUB="${SSH_KEY_PUB:-/opt/keys/captive-portal.pub}"
@@ -149,7 +152,8 @@ router_ip_in_set() {
 router_add_ip() {
     local ip="$1"
     local timeout_flag=""
-    if [ "$ip" = "$ADMIN_IP" ] || [ "$ip" = "$PORTAL_IP" ] || \
+    if [ "$ip" = "$ADMIN_IP" ] || [ -n "$ADMIN2_IP" ] && [ "$ip" = "$ADMIN2_IP" ] || \
+       [ "$ip" = "$PORTAL_IP" ] || \
        [ "$ip" = "$RASPI4B_IP" ] || [ "$ip" = "$RASPI3B_IP" ] || \
        [ "$ip" = "$PORTAL_NODE_IP" ] || [ "$ip" = "$AP_EXTENDER_IP" ]; then
         timeout_flag=" timeout 0s"

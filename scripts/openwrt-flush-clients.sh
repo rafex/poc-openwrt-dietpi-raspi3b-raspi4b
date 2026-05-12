@@ -56,7 +56,7 @@ CURRENT=$(router_ssh "nft list set $NFT_TABLE $NFT_SET 2>/dev/null" | \
 CLIENT_COUNT=0
 for ip in $CURRENT; do
     case "$ip" in
-        "$ADMIN_IP"|"$PORTAL_IP"|"$RASPI3B_IP") ;;
+        "$ADMIN_IP"|"$ADMIN2_IP"|"$PORTAL_IP"|"$RASPI3B_IP") ;;
         *) CLIENT_COUNT=$((CLIENT_COUNT + 1)) ;;
     esac
     printf '  %s\n' "$ip"
@@ -95,6 +95,10 @@ router_ssh "nft flush set $NFT_TABLE $NFT_SET" || \
 log_info "Restaurando IPs base permanentes (admin, portal y RafexPi3B)..."
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0s }" || \
     die "No se pudo restaurar $ADMIN_IP"
+if [ -n "$ADMIN2_IP" ] && validate_ip "$ADMIN2_IP"; then
+    router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN2_IP timeout 0s }" || \
+        die "No se pudo restaurar $ADMIN2_IP"
+fi
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" || \
     die "No se pudo restaurar $PORTAL_IP"
 router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI3B_IP timeout 0s }" || \
@@ -103,6 +107,10 @@ router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI3B_IP timeout 0s }" || \
 # Verificar que las IPs base estan presentes
 router_ip_in_set "$ADMIN_IP" || die "CRITICO: $ADMIN_IP no esta en el set tras el flush"
 log_ok "Admin $ADMIN_IP restaurado como permanente"
+if [ -n "$ADMIN2_IP" ] && validate_ip "$ADMIN2_IP"; then
+    router_ip_in_set "$ADMIN2_IP" || die "CRITICO: $ADMIN2_IP no esta en el set tras el flush"
+    log_ok "Admin2 $ADMIN2_IP restaurado como permanente"
+fi
 log_ok "Portal $PORTAL_IP restaurado como permanente"
 router_ip_in_set "$RASPI3B_IP" || die "CRITICO: $RASPI3B_IP no esta en el set tras el flush"
 log_ok "RafexPi3B $RASPI3B_IP restaurada como permanente"
