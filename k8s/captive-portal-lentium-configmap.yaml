@@ -95,8 +95,8 @@ data:
         }
 
         location = / {
-            if ($host = people.localhost.com) {
-                return 302 http://people.localhost.com/people;
+            if ($host = people.rafex.dev) {
+                return 302 http://people.rafex.dev/people;
             }
             return 302 http://192.168.1.167/portal;
         }

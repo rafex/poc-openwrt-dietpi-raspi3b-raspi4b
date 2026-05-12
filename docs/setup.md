@@ -3,16 +3,69 @@
 > Stack actual (2026-04-28):  
 > **Java 21 (GraalVM nativo arm64)** · Rust SQLite (cdylib) · Vite/Pug/Sass/TS (frontend) · nginx (podman) · llama.cpp · Mosquitto
 
+## Actualización 2026-05-10 (estado recomendado)
+
+- Modo operativo recomendado: **classic captive** (`nftables + dnsmasq`) **sin openNDS**.
+- Portal cautivo en Raspi3B:
+  - IP: `192.168.1.181`
+  - Puerto recomendado para popup automático: `80`
+  - URL: `http://192.168.1.181/portal`
+- Raspi4B (`192.168.1.167`) se mantiene para LLM + AI analyzer.
+- Script orquestador actualizado:
+  - `setup-openwrt-mode-raspi-portal-offload.sh` ahora desactiva openNDS y aplica `setup-openwrt.sh` clásico.
+- `setup-openwrt.sh` ahora soporta `--portal-port` (ej. `8080`).
+
+### Hallazgo de compatibilidad por dispositivo (validado en pruebas)
+
+- Con portal en `:8080`, varios equipos no muestran popup CNA automáticamente.
+- Con portal en `:80`, Android muestra popup correctamente.
+- Estado observado:
+  - Android: popup OK (funciona).
+  - Huawei: sin popup automático (requiere apertura manual del portal).
+  - iPhone: popup aparece pero vista puede quedar en blanco en algunos intentos.
+
+Flujo recomendado:
+
+```bash
+# En Raspi3B: sensor + portal completo
+sudo bash scripts/setup-raspi3b-sensor-captive-full.sh
+
+# En admin/Raspi4B: OpenWrt en modo clásico apuntando al portal :80 (recomendado)
+bash scripts/setup-openwrt.sh \
+  --topology split_portal \
+  --portal-ip 192.168.1.181 \
+  --portal-port 80 \
+  --ai-ip 192.168.1.167
+
+# Diagnóstico
+bash scripts/openwrt-captive-doctor.sh --portal-ip 192.168.1.181 --portal-port 80
+```
+
+## Actualización 2026-05-12 (homologación OpenWrt)
+
+- Se incorporó `ADMIN2`/bastión como nodo core:
+  - `ADMIN2_IP=192.168.1.138`
+  - `ADMIN2_MAC=0c:4d:e9:bf:6e:91`
+  - Reserva DHCP `infinite` + bypass permanente en `nftables`.
+- En esta topología `split_portal`, el portal activo vive en la misma Raspi del sensor:
+  - `PORTAL_IP=192.168.1.181`
+  - `AI_IP=192.168.1.167`
+- `setup-openwrt.sh` ahora aplica redirecciones captive DNS por UCI (`dhcp.@dnsmasq[0].address`),
+  no por edición directa de `/etc/dnsmasq.conf`, para compatibilidad con builds OpenWrt que
+  generan runtime config en `/var/etc/dnsmasq*.conf`.
+- Se añadió script para rotar contraseña de root del router:
+  - `bash scripts/openwrt-set-password.sh`
+
 ---
 
 ## Dispositivos y prerequisitos
 
 | Dispositivo | Hostname | IP | Sistema | Rol |
 |---|---|---|---|---|
-| Router OpenWrt | — | 192.168.1.1 | OpenWrt 25.x | Captive portal (nftables + dnsmasq) |
+| Router OpenWrt | — | 192.168.1.1 | OpenWrt 25.x | Captive portal (nftables + dnsmasq, modo classic) |
 | Raspberry Pi 4B | RafexPi4B | 192.168.1.167 | DietPi Bookworm | AI backend + MQTT + LLM + frontend |
 | Raspberry Pi 3B | RafexPi3B | 192.168.1.181 | DietPi Bookworm | Sensor de red (tshark → MQTT) |
-| Laptop admin | — | 192.168.1.113 | Cualquier SO | SSH, compilación local, despliegue |
+| Laptop admin | RafexAdminLaptop | 192.168.1.146 | Cualquier SO | SSH, compilación local, despliegue |
 
 ### Prerequisitos en la Pi 4B
 
@@ -86,7 +139,7 @@ bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182 
 |---|---|
 | Pre-flight | Verifica espacio en overlay, interfaz `phy0-ap0`, SSH al router |
 | A | Agrega llave pública a `/etc/dropbear/authorized_keys` |
-| B | Configura `dnsmasq`: lease `120m`, option `114` (URL captive), dominio `captive.localhost.com` |
+| B | Configura `dnsmasq`: lease `120m`, option `114` (URL captive), dominio `captive.rafex.dev` |
 | C | Crea tabla nftables `ip captive`: timeout **120m** para clientes, permanentes RafexPi4B/3B/admin |
 | C.1 | Reservas DHCP UCI permanentes para ambas Raspis (`leasetime=infinite`) |
 | D | Verificación completa |
@@ -113,6 +166,84 @@ sudo bash scripts/setup-topology.sh --topology=legacy
 # o
 sudo bash scripts/setup-topology.sh --topology=split_portal --portal-host=192.168.1.182
 ```
+
+### 2.3 — Modo alternativo (legado): portal en OpenWrt + openNDS + backend en Raspi3B-sensor
+
+Este modo **no reemplaza** `legacy` ni `split_portal`; es una opción adicional.
+En OpenWrt 25.x sobre TL-WDR3600 se detectó inestabilidad (`openNDS` en crash loop), por lo que este modo queda como **legado/no recomendado**.
+
+Arquitectura de este modo:
+- OpenWrt sirve el HTML del portal en `/www/portal` (uhttpd + openNDS/FAS).
+- El backend de registro vive en la Raspi3B-sensor (Podman, puerto `5000`).
+- SQLite persiste en la Raspi3B-sensor: `/opt/captive-portal/lentium-data/lentium.db`.
+
+Pasos:
+
+```bash
+# 1) En Raspi3B-sensor: limpiar rol sensor (si aplica) y preparar backend
+sudo bash scripts/cleanup-raspi3b-sensor-for-captive-backend.sh
+
+# 2) En Raspi3B-sensor: desplegar backend cautivo
+sudo bash scripts/setup-raspi3b-sensor-captive-backend.sh
+
+# 3) En admin/Raspi con acceso SSH al router: configurar OpenWrt en modo router-portal
+sudo bash scripts/setup-openwrt-router-portal-mode.sh --backend-ip=192.168.1.181
+```
+
+Qué configura el paso 3:
+- Publica portal HTML en `http://192.168.1.1/portal/portal.html`.
+- Configura `opennds` con FAS (`tok`, `authaction`, `redir`).
+- Ajusta `faspath` con `api_base` al backend remoto (`http://192.168.1.181:5000`).
+- Aplica excepciones `preauthenticated_users` para que el portal pueda llamar al backend.
+
+### 2.4 — OpenWrt con overlay en USB (opcional recomendado)
+
+Si el overlay interno del router es muy pequeño, puedes moverlo a USB `ext4`:
+
+```bash
+bash scripts/openwrt-install-usb-overlay.sh
+```
+
+Opciones útiles:
+
+```bash
+bash scripts/openwrt-install-usb-overlay.sh --device /dev/sda1
+bash scripts/openwrt-install-usb-overlay.sh --uuid <UUID_USB>
+bash scripts/openwrt-install-usb-overlay.sh --no-reboot
+```
+
+Validar después del reboot:
+
+```bash
+ssh root@192.168.1.1 "mount | grep -E 'overlay|/dev/sda1'"
+ssh root@192.168.1.1 "df -h /overlay"
+```
+
+### 2.5 — Modo offload adicional: OpenWrt ligero + portal completo en Raspi3B
+
+Objetivo de este modo:
+- OpenWrt solo hace routing/DHCP/DNS/firewall (modo classic, sin openNDS).
+- Uplink por **2.4GHz** hacia `netup`.
+- AP para clientes por **5GHz**.
+- Portal (frontend + backend) en Raspi3B (`192.168.1.181:8080`).
+
+Script orquestador:
+
+```bash
+bash scripts/setup-openwrt-mode-raspi-portal-offload.sh \
+  --uplink-ssid netup \
+  --uplink-pass 123 \
+  --ap-ssid "Rafex Portal 5G" \
+  --portal-ip 192.168.1.181 \
+  --portal-port 8080 \
+  --portal-path /portal/
+```
+
+Este orquestador ejecuta:
+1. `setup-openwrt-wifi-uplink24-ap5.sh`
+2. `setup-openwrt-reserve-core-nodes.sh`
+3. `openwrt-disable-opennds.sh`
+4. `setup-openwrt.sh --topology split_portal --portal-ip ... --portal-port ... --ai-ip ...`
 
 ---
 

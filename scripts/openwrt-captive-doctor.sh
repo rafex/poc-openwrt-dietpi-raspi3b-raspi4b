@@ -6,12 +6,21 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$SCRIPT_DIR/lib/common.sh"
 
-CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.localhost.com}"
-PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.localhost.com}"
+CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex.dev}"
+PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.rafex.dev}"
+PORTAL_PORT="${PORTAL_PORT:-80}"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --portal-ip) PORTAL_IP="$2"; shift 2 ;;
+    --portal-port) PORTAL_PORT="$2"; shift 2 ;;
+    *) log_error "Argumento no soportado: $1"; exit 2 ;;
+  esac
+done
 
 log_info "=== OpenWrt Captive Doctor ==="
 log_info "Topología esperada: ${TOPOLOGY:-legacy}"
-log_info "Portal esperado: $PORTAL_IP"
+log_info "Portal esperado: $PORTAL_IP:$PORTAL_PORT"
 log_info "Router: $ROUTER_IP"
 
 check_ssh_key
@@ -28,7 +37,7 @@ OPTS_SPLIT="$(printf '%s\n' "$OPTS" | tr ' ' '\n')"
 OPT114="$(printf '%s\n' "$OPTS_SPLIT" | grep '^114,' | tail -1)"
 OPT6="$(printf '%s\n' "$OPTS_SPLIT" | grep '^6,' | tail -1)"
 
-if [ -n "$OPT114" ] && printf '%s' "$OPT114" | grep -q "http://$PORTAL_IP/portal"; then
+if [ -n "$OPT114" ] && (printf '%s' "$OPT114" | grep -q "http://$PORTAL_IP:$PORTAL_PORT/portal" || printf '%s' "$OPT114" | grep -q "http://$CAPTIVE_DOMAIN/portal" || printf '%s' "$OPT114" | grep -q "http://$CAPTIVE_DOMAIN:$PORTAL_PORT/portal"); then
   check_ok "DHCP option 114 OK: $OPT114"
 else
   check_warn "DHCP option 114 incorrecta o ausente (actual: ${OPT114:-<vacía>})"
@@ -43,7 +52,7 @@ fi
 # 2) DNS de detección captive -> portal_ip
 check_dns_domain() {
   dom="$1"
-  resolved="$(router_ssh "nslookup '$dom' 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1")"
+  resolved="$(router_ssh "nslookup '$dom' 127.0.0.1 2>/dev/null | sed -n '/^Name:[[:space:]]*$dom\$/,/^$/p' | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1")"
   if [ "$resolved" = "$PORTAL_IP" ]; then
     check_ok "DNS $dom -> $resolved"
   else
@@ -54,8 +63,21 @@ check_dns_domain() {
 check_dns_domain connectivitycheck.gstatic.com
 check_dns_domain captive.apple.com
 check_dns_domain www.msftconnecttest.com
+check_dns_domain connectivitycheck.platform.hicloud.com
+check_dns_domain connectivitycheck.hicloud.com
+check_dns_domain connectivitycheck.platform.dbankcloud.com
+check_dns_domain hicloud.com
+check_dns_domain neverssl.com
 check_dns_domain "$CAPTIVE_DOMAIN"
 check_dns_domain "$PEOPLE_DOMAIN"
+
+# 2.1) Validar hardening AAAA en dnsmasq (evita bypass IPv6 de probes captive)
+FILTER_AAAA="$(router_ssh "uci -q get dhcp.@dnsmasq[0].filter_aaaa 2>/dev/null || true")"
+if [ "$FILTER_AAAA" = "1" ]; then
+  check_ok "dnsmasq filter_aaaa=1"
+else
+  check_warn "dnsmasq filter_aaaa no activo (actual: ${FILTER_AAAA:-<vacío>})"
+fi
 
 # 3) nftables: tabla, dnat y permanentes
 if router_table_exists; then
@@ -64,14 +86,19 @@ else
   check_warn "Tabla nftables $NFT_TABLE NO existe"
 fi
 
-DNAT_RULE="$(router_ssh "nft list chain ip captive prerouting 2>/dev/null | grep -F 'dnat to $PORTAL_IP:80' | head -1")"
+DNAT_RULE="$(router_ssh "nft list chain ip captive prerouting 2>/dev/null | grep -F 'dnat to $PORTAL_IP:$PORTAL_PORT' | head -1")"
 if [ -n "$DNAT_RULE" ]; then
   check_ok "DNAT a portal detectado: $DNAT_RULE"
 else
-  check_warn "No se encontró regla DNAT hacia $PORTAL_IP:80 en chain prerouting"
+  check_warn "No se encontró regla DNAT hacia $PORTAL_IP:$PORTAL_PORT en chain prerouting"
 fi
 
+SEEN_IPS=""
 for ip in "$ADMIN_IP" "$RASPI4B_IP" "$RASPI3B_IP" "$PORTAL_IP"; do
+  case " $SEEN_IPS " in
+    *" $ip "*) continue ;;
+  esac
+  SEEN_IPS="$SEEN_IPS $ip"
   if router_ip_in_set "$ip"; then
     check_ok "IP permanente en set: $ip"
   else
@@ -80,17 +107,17 @@ for ip in "$ADMIN_IP" "$RASPI4B_IP" "$RASPI3B_IP" "$PORTAL_IP"; do
 done
 
 # 4) Reachability HTTP del portal desde el router
-PORTAL_CODE="$(router_ssh "uclient-fetch -T 5 -qO- http://$PORTAL_IP/portal >/dev/null 2>&1; echo \$?" 2>/dev/null)"
+PORTAL_CODE="$(router_ssh "uclient-fetch -T 5 -qO- http://$PORTAL_IP:$PORTAL_PORT/portal >/dev/null 2>&1; echo \$?" 2>/dev/null)"
 if [ "$PORTAL_CODE" = "0" ]; then
-  check_ok "Router alcanza http://$PORTAL_IP/portal"
+  check_ok "Router alcanza http://$PORTAL_IP:$PORTAL_PORT/portal"
 else
-  check_warn "Router NO alcanza http://$PORTAL_IP/portal"
+  check_warn "Router NO alcanza http://$PORTAL_IP:$PORTAL_PORT/portal"
 fi
 
 # 5) Endpoints típicos de detección (desde host actual)
 probe_local() {
   path="$1"
-  code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 4 --max-time 8 "http://$PORTAL_IP$path" 2>/dev/null || echo 000)"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 4 --max-time 8 "http://$PORTAL_IP:$PORTAL_PORT$path" 2>/dev/null || echo 000)"
   case "$code" in
     200|301|302|307|308) check_ok "Probe $path -> HTTP $code" ;;
     *) check_warn "Probe $path -> HTTP $code (esperado redirect/200)" ;;
@@ -109,6 +136,6 @@ fi
 
 log_warn "Captive Doctor detectó inconsistencias"
 log_info "Reparación sugerida:"
-printf '  bash scripts/setup-openwrt.sh --topology %s --portal-ip %s --ai-ip %s\n' \
-  "${TOPOLOGY:-legacy}" "$PORTAL_IP" "${AI_IP:-$RASPI4B_IP}"
+printf '  bash scripts/setup-openwrt.sh --topology %s --portal-ip %s --portal-port %s --ai-ip %s\n' \
+  "${TOPOLOGY:-legacy}" "$PORTAL_IP" "$PORTAL_PORT" "${AI_IP:-$RASPI4B_IP}"
 exit 1

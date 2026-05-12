@@ -7,13 +7,28 @@
 # =============================================================================
 # Permite sobreescribir IPs/roles sin romper scripts legacy.
 TOPOLOGY_FILE="${TOPOLOGY_FILE:-/etc/demo-openwrt/topology.env}"
-if [ -f "$TOPOLOGY_FILE" ]; then
+COMMON_BASE_DIR="${SCRIPT_DIR:-}"
+if [ -n "$COMMON_BASE_DIR" ] && [ -f "$COMMON_BASE_DIR/lib/topology.env" ]; then
+    REPO_TOPOLOGY="$COMMON_BASE_DIR/lib/topology.env"
+else
+    REPO_TOPOLOGY="/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b/scripts/lib/topology.env"
+fi
+
+# Cargar SIEMPRE defaults del repo (si existen) y luego override local.
+# Esto evita que instalaciones con /etc/demo-openwrt/topology.env antiguo
+# pierdan variables nuevas (ej. ADMIN2_*) y queden en vacío.
+if [ -f "$REPO_TOPOLOGY" ]; then
     # shellcheck disable=SC1090
-    . "$TOPOLOGY_FILE"
+    . "$REPO_TOPOLOGY"
 elif [ -f "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b/scripts/lib/topology.env" ]; then
     # fallback para ejecución directa dentro de la ruta estándar en Raspi
     # shellcheck disable=SC1091
     . "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b/scripts/lib/topology.env"
+fi
+
+if [ -f "$TOPOLOGY_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$TOPOLOGY_FILE"
 fi
 
 # =============================================================================
@@ -21,6 +36,11 @@ fi
 # =============================================================================
 ROUTER_IP="${ROUTER_IP:-192.168.1.1}"
 ADMIN_IP="${ADMIN_IP:-192.168.1.113}"
+ADMIN_MAC="${ADMIN_MAC:-a8:60:b6:0f:f7:6a}"
+ADMIN_HOSTNAME="${ADMIN_HOSTNAME:-RafexAdminLaptop}"
+ADMIN2_IP="${ADMIN2_IP:-}"
+ADMIN2_MAC="${ADMIN2_MAC:-}"
+ADMIN2_HOSTNAME="${ADMIN2_HOSTNAME:-RafexAdminMacMini}"
 LAN_SUBNET="${LAN_SUBNET:-192.168.1.0/24}"    # subred LAN completa — usada en reglas nftables
 SSH_KEY="${SSH_KEY:-/opt/keys/captive-portal}"
 SSH_KEY_PUB="${SSH_KEY_PUB:-/opt/keys/captive-portal.pub}"
@@ -29,6 +49,7 @@ NFT_SET="${NFT_SET:-allowed_clients}"
 NFT_FILE="${NFT_FILE:-/etc/captive-portal.nft}"
 DNSMASQ_CONF="${DNSMASQ_CONF:-/etc/dnsmasq.d/captive-portal.conf}"
 AP_IFACE="${AP_IFACE:-phy0-ap0}"            # solo usado en pre-flight check de interfaz WiFi
+PORTAL_PORT="${PORTAL_PORT:-80}"            # puerto HTTP del portal cautivo (80 o 8080)
 
 # Raspberry Pi — IPs y MACs permanentes (bypass total del portal + reserva DHCP)
 RASPI4B_IP="${RASPI4B_IP:-192.168.1.167}"     # Raspi 4B (IA + k3s)
@@ -146,7 +167,8 @@ router_ip_in_set() {
 router_add_ip() {
     local ip="$1"
     local timeout_flag=""
-    if [ "$ip" = "$ADMIN_IP" ] || [ "$ip" = "$PORTAL_IP" ] || \
+    if [ "$ip" = "$ADMIN_IP" ] || [ -n "$ADMIN2_IP" ] && [ "$ip" = "$ADMIN2_IP" ] || \
+       [ "$ip" = "$PORTAL_IP" ] || \
        [ "$ip" = "$RASPI4B_IP" ] || [ "$ip" = "$RASPI3B_IP" ] || \
        [ "$ip" = "$PORTAL_NODE_IP" ] || [ "$ip" = "$AP_EXTENDER_IP" ]; then
         timeout_flag=" timeout 0s"

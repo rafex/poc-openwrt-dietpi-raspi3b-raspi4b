@@ -11,6 +11,20 @@ PoC educativa de seguridad en redes públicas que combina:
 - MQTT (Mosquitto) como cola de mensajes entre el sensor y el analizador IA
 - SQLite como persistencia de batches y análisis
 
+## Actualización operativa (12 de mayo de 2026)
+
+- Topología operativa actual validada:
+  - `TOPOLOGY=split_portal`
+  - `PORTAL_IP=192.168.1.181` (portal + sensor en la misma Raspi3B)
+  - `AI_IP=192.168.1.167` (RafexPi4B)
+- Bastión/admin secundario agregado como nodo core:
+  - `ADMIN2_IP=192.168.1.138`
+  - `ADMIN2_MAC=0c:4d:e9:bf:6e:91`
+  - DHCP reservado (`infinite`) + bypass permanente en nftables.
+- En OpenWrt, redirecciones captive DNS se gestionan por UCI
+  (`dhcp.@dnsmasq[0].address`) para compatibilidad con builds que no aplican
+  `/etc/dnsmasq.conf` como fuente principal de runtime.
+
 ## Hito 1 (completado)
 
 Estado al **22 de abril de 2026**:
@@ -19,7 +33,7 @@ Estado al **22 de abril de 2026**:
 - Detección captive mejorada:
   - dnsmasq con dominios de detección en `/etc/dnsmasq.conf`
   - DHCP option `114` (`http://192.168.1.167/portal`)
-  - dominio fallback `captive.localhost.com` y subdominio `people.localhost.com`
+  - dominio fallback `captive.rafex.dev` y subdominio `people.rafex.dev`
 - Scripts `setup-*` con logging persistente por componente en `/var/log/demo-openwrt/<componente>` (fallback `/tmp/demo-openwrt/<componente>`).
 - Script operativo para apagar/encender LLM (`scripts/llm-control.sh`) y reducir CPU.
 
@@ -33,7 +47,7 @@ Router OpenWrt (192.168.1.1)   ath79/mips_24kc
     │    • allowed_clients timeout 120m (clientes WiFi)
     │    • permanentes (timeout 0s): admin, RafexPi4B, RafexPi3B
     │  dnsmasq: dominios captive portal → 192.168.1.167
-    │           captive.localhost.com → 192.168.1.167
+    │           captive.rafex.dev → 192.168.1.167
     │           DHCP option 114 → http://192.168.1.167/portal
     │           lease 120m
     │  DHCP reservas: RafexPi4B=192.168.1.167, RafexPi3B=192.168.1.181
@@ -190,7 +204,7 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 - [x] `allowed_clients` timeout **120m** (subido de 30m)
 - [x] Permanentes (timeout 0s): admin `192.168.1.113`, RafexPi4B `192.168.1.167`, RafexPi3B `192.168.1.181`
 - [x] dnsmasq: dominios de detección de captive portal → 192.168.1.167
-- [x] Dominio fallback: `captive.localhost.com` → 192.168.1.167
+- [x] Dominio fallback: `captive.rafex.dev` → 192.168.1.167
 - [x] DHCP option `114`: `http://192.168.1.167/portal`
 - [x] DHCP option `6`: DNS del router (`192.168.1.1`) para clientes LAN
 - [x] DHCP lease time: **120m** (UCI `dhcp.lan.leasetime=120m`)
@@ -259,8 +273,8 @@ poc-openwrt-dietpi-raspi3b-raspi4b/
 | `/rulez` | `backend/ai-analyzer/rulez.html` | Editor de reglas/prompts IA en SQLite |
 
 Dominios relevantes:
-- `captive.localhost.com` → abrir portal (`/portal`)
-- `people.localhost.com` → dashboard de personas (`/people`)
+- `captive.rafex.dev` → abrir portal (`/portal`)
+- `people.rafex.dev` → dashboard de personas (`/people`)
 
 ## Constantes globales (lib/common.sh)
 
@@ -350,11 +364,13 @@ ssh-ed25519 AAAAC3... sensor@raspi3b
 - **No usar `systemctl`** — usar `/etc/init.d/`
 - Overlay: ~840KB — no instalar paquetes innecesarios
 - Dropbear: opciones SSH básicas únicamente
-- Para captive portal usar bloque en `/etc/dnsmasq.conf` (ruta confiable en OpenWrt)
+- Para captive portal, preferir UCI:
+  - `dhcp.lan.dhcp_option` para options 6 y 114
+  - `dhcp.@dnsmasq[0].address` para dominios de detección captive y dominios propios
 - Configurar por UCI en `dhcp.lan.dhcp_option`:
   - `6,192.168.1.1` (DNS del router)
-  - `114,http://192.168.1.167/portal` (RFC 7710/8910)
-- Mantener dominio fallback `captive.localhost.com` apuntando al portal
+  - `114,http://captive.rafex.dev/portal` (RFC 7710/8910)
+- Mantener dominio fallback `captive.rafex.dev` apuntando al portal
 
 ### DietPi (ambas Raspis)
 - **No usar `systemctl` directamente** — DietPi no usa systemd como PID 1
@@ -368,3 +384,4 @@ ssh-ed25519 AAAAC3... sensor@raspi3b
 ### Regla de oro
 **`192.168.1.113` (admin) y `192.168.1.181` (RafexPi3B) NUNCA pierden acceso a internet.**
 `router_add_ip` en `common.sh` aplica `timeout 0s` automáticamente para admin, portal y ambas Raspis.
+Admin2/bastión `192.168.1.138` también debe mantenerse con bypass permanente.

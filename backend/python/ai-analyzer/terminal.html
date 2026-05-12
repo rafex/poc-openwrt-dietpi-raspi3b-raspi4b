@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Analyzer - Terminal</title>
+  <style>
+    body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;max-width:980px;margin:24px auto;padding:0 12px;background:#020617;color:#e2e8f0}
+    a{color:#93c5fd}.nav{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    #log{border:1px solid #1e293b;background:#0f172a;border-radius:8px;padding:10px;min-height:360px;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <h1>AI Analyzer - Terminal SSE</h1>
+  <div class="nav">
+    <a href="/dashboard">dashboard</a><a href="/terminal">terminal</a><a href="/rulez">rulez</a><a href="/chat">chat</a><a href="/reports">reports</a>
+  </div>
+  <div id="log">conectando a /api/stream ...</div>
+  <script>
+    const out=document.getElementById('log');
+    const es=new EventSource('/api/stream');
+    es.onmessage=(ev)=>{out.textContent += "\n" + ev.data; out.scrollTop = out.scrollHeight;};
+    es.onerror=()=>{out.textContent += "\n[error SSE - reintentando]";};
+  </script>
+</body>
+</html>

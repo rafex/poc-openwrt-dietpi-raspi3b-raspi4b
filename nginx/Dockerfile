@@ -16,7 +16,7 @@
 # El backend Java corre como servicio systemd en :5000 del host.
 # Con --network=host, nginx puede hacer proxy_pass a http://localhost:5000.
 
-FROM nginx:1.27-alpine
+FROM docker.io/library/nginx:1.27-alpine
 
 # Eliminar configuración default
 RUN rm -f /etc/nginx/conf.d/default.conf

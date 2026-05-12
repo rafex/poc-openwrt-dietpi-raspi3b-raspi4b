@@ -21,6 +21,8 @@ _r3b_log_warn()  { printf '[WARN]  %s\n' "$*"; }
 
 # Respetar DRY_RUN si está definido en el entorno del padre
 _DRY_RUN="${DRY_RUN:-false}"
+_R3B_CACHE_BASE="${HOME:-/root}/.cache/demo-openwrt"
+_R3B_APT_CACHE_FILE="${_R3B_CACHE_BASE}/apt-installed.txt"
 
 _r3b_run() {
     if $_DRY_RUN; then
@@ -40,12 +42,42 @@ _r3b_apt_update_once() {
 
 _r3b_apt_install() {
     [ "$#" -gt 0 ] || return 0
-    local pkg missing=()
+    local pkg missing=() newly_seen=() cache_hits=0
+
+    # Cache best-effort (no debe romper instalación si falla)
+    if ! $_DRY_RUN; then
+        mkdir -p "$_R3B_CACHE_BASE" 2>/dev/null || true
+        touch "$_R3B_APT_CACHE_FILE" 2>/dev/null || true
+    fi
+
+    _r3b_cache_has_pkg() {
+        [ -f "$_R3B_APT_CACHE_FILE" ] && grep -Fxq "$1" "$_R3B_APT_CACHE_FILE" 2>/dev/null
+    }
+
+    _r3b_cache_add_pkgs() {
+        [ "$#" -gt 0 ] || return 0
+        printf '%s\n' "$@" >> "$_R3B_APT_CACHE_FILE" 2>/dev/null || true
+        sort -u "$_R3B_APT_CACHE_FILE" -o "$_R3B_APT_CACHE_FILE" 2>/dev/null || true
+    }
+
     for pkg in "$@"; do
-        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed" \
-            || missing+=("$pkg")
+        if _r3b_cache_has_pkg "$pkg"; then
+            cache_hits=$((cache_hits + 1))
+            continue
+        fi
+        if dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "install ok installed"; then
+            newly_seen+=("$pkg")
+        else
+            missing+=("$pkg")
+        fi
     done
-    [ "${#missing[@]}" -eq 0 ] && return 0
+    [ "${#newly_seen[@]}" -gt 0 ] && _r3b_cache_add_pkgs "${newly_seen[@]}"
+
+    if [ "${#missing[@]}" -eq 0 ]; then
+        _r3b_log_info "[deps/pi3b] apt cache hit: paquetes ya instalados (${cache_hits}/${#@}) en ${_R3B_CACHE_BASE}"
+        return 0
+    fi
+
     _r3b_apt_update_once
     _r3b_run env DEBIAN_FRONTEND=noninteractive APT_LISTCHANGES_FRONTEND=none NEEDRESTART_MODE=a \
         apt-get -y -q --no-install-recommends \
@@ -54,6 +86,7 @@ _r3b_apt_install() {
             -o Dpkg::Options::=--force-confdef \
             -o Dpkg::Options::=--force-confold \
             install "${missing[@]}"
+    _r3b_cache_add_pkgs "${missing[@]}"
 }
 
 # Si raspi4b-common.sh ya fue sourciado, reutilizar sus funciones

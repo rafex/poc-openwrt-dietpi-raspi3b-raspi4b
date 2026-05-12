@@ -13,6 +13,7 @@ import time
 import os
 import socket
 import urllib.request
+import urllib.parse
 import mimetypes
 from pathlib import Path
 
@@ -50,6 +51,10 @@ R3_USER     = os.environ.get("SERVICE_RASPI3_USER", "root")
 R3_KEY      = os.environ.get("SERVICE_RASPI3_SSH_KEY", "/opt/keys/sensor")
 REPO_PATH   = os.environ.get("REPO_PATH", "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b")
 AI_ANALYZER_URL = os.environ.get("AI_ANALYZER_URL", f"http://{R4_HOST}:5000")
+
+# Alias explícitos para validaciones de IP reservadas
+RASPI3B_IP = os.environ.get("RASPI3B_IP", R3_HOST)
+RASPI4B_IP = os.environ.get("RASPI4B_IP", R4_HOST)
 
 log.info("=== Lentium Portal Backend iniciando ===")
 log.info(f"ROUTER_IP={ROUTER_IP}  PORTAL_IP={PORTAL_IP}  DB_PATH={DB_PATH}  PORT={PORT}")
@@ -408,18 +413,25 @@ def get_client_ip(handler) -> str:
 
     log.info(f"IP headers — X-Real-IP={x_real_ip!r} X-Forwarded-For={x_forwarded!r} peer={peer_ip}")
 
-    if x_real_ip and x_real_ip.startswith("192.168.") and x_real_ip != PORTAL_IP:
+    reserved_ips = {PORTAL_IP, ROUTER_IP, ADMIN_IP, RASPI3B_IP, RASPI4B_IP}
+
+    if x_real_ip and x_real_ip.startswith("192.168.") and x_real_ip not in reserved_ips:
         return x_real_ip
     if x_forwarded:
         first = x_forwarded.split(",")[0].strip()
-        if first.startswith("192.168.") and first != PORTAL_IP:
+        if first.startswith("192.168.") and first not in reserved_ips:
             return first
+
+    # En modo directo (sin proxy intermedio) peer_ip suele ser la IP LAN real del cliente.
+    if peer_ip.startswith("192.168.") and peer_ip not in reserved_ips:
+        log.info(f"Usando peer IP LAN como cliente: {peer_ip}")
+        return peer_ip
 
     log.warning("Headers sin IP LAN válida — fallback conntrack")
     rc, stdout, _ = _router_ssh(
         "conntrack-get-ip",
         "cat /proc/net/nf_conntrack"
-        " | grep dport=80 | grep ESTABLISHED"
+        f" | grep -E 'dport=({PORT}|80)' | grep ESTABLISHED"
         " | awk '{print $7}' | sed 's/src=//'"
         f" | grep '192.168.1.' | grep -v '{PORTAL_IP}' | head -1"
     )
@@ -742,6 +754,11 @@ setInterval(() => refresh().catch(()=>{}), 5000);
 # HTTP Handler
 # =============================================================================
 class Handler(http.server.BaseHTTPRequestHandler):
+    def _path_only(self) -> str:
+        try:
+            return urllib.parse.urlparse(self.path).path or "/"
+        except Exception:
+            return self.path or "/"
 
     def _read_json(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -809,31 +826,124 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
 
+    def _redirect_portal(self):
+        self.send_response(302)
+        self.send_header("Location", "/portal")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.end_headers()
+
+    def _serve_captive_probe_page(self):
+        # Página mínima para asistentes cautivos (iOS CNA / Huawei) que a veces
+        # muestran blanco al seguir redirects hacia un portal con JS pesado.
+        portal_url = f"http://{PORTAL_IP}/portal"
+        html = (
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<title>Portal cautivo</title>"
+            "<meta http-equiv='refresh' content='0; url=/portal'>"
+            "<style>body{font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;"
+            "padding:24px;line-height:1.45;color:#111}a{display:inline-block;margin-top:12px}</style>"
+            "</head><body><h3>Iniciar sesión en red WiFi</h3>"
+            "<p>Si no abre automáticamente, toca continuar.</p>"
+            f"<a href='{portal_url}'>Continuar al portal</a>"
+            "</body></html>"
+        ).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Content-Length", str(len(html)))
+        self.end_headers()
+        self.wfile.write(html)
+
+    def _is_problematic_cna(self) -> bool:
+        ua = (self.headers.get("User-Agent") or "").lower()
+        host = (self.headers.get("Host") or "").lower()
+        # iOS/macOS CNA suele usar CaptiveNetworkSupport y host captive.apple.com.
+        # Algunos Huawei/Honor usan probes hicloud y pueden no seguir 302 bien.
+        if "captivenetworksupport" in ua:
+            return True
+        if "huawei" in ua or "honor" in ua:
+            return True
+        if "captive.apple.com" in host:
+            return True
+        if "hicloud.com" in host or "dbankcloud.cn" in host:
+            return True
+        return False
+
+    def do_HEAD(self):
+        path = self._path_only()
+        log.info(f"HEAD {self.path}  peer={self.client_address[0]}")
+        captive_probe_paths = {
+            "/generate_204",
+            "/hotspot-detect.html",
+            "/connecttest.txt",
+            "/redirect",
+            "/ncsi.txt",
+            "/fwlink",
+        }
+        if path in captive_probe_paths:
+            if self._is_problematic_cna():
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+            else:
+                self._redirect_portal()
+            return
+        if path in ("/", "/portal", "/portal/", "/index.html"):
+            portal_path = Path(__file__).parent / "portal.html"
+            if portal_path.exists():
+                size = portal_path.stat().st_size
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(size))
+                self.end_headers()
+                return
+        self.send_response(404)
+        self.end_headers()
+
     def do_GET(self):
+        path = self._path_only()
         log.info(f"GET {self.path}  peer={self.client_address[0]}")
 
-        if self.path in ("/", "/portal", "/index.html"):
+        captive_probe_paths = {
+            "/generate_204",
+            "/hotspot-detect.html",
+            "/connecttest.txt",
+            "/redirect",
+            "/ncsi.txt",
+            "/fwlink",
+        }
+        if path in captive_probe_paths:
+            if self._is_problematic_cna():
+                self._serve_captive_probe_page()
+            else:
+                self._redirect_portal()
+            return
+
+        if path in ("/", "/portal", "/portal/", "/index.html"):
             self._serve_portal()
             return
 
-        if self.path in ("/services", "/services/"):
+        if path in ("/services", "/services/"):
             self._serve_static_html("services.html")
             return
 
-        if self.path in ("/blocked", "/blocked/"):
+        if path in ("/blocked", "/blocked/"):
             self._serve_static_html("blocked.html")
             return
 
-        if self.path.startswith("/blocked-art/"):
-            rel = self.path.lstrip("/")
+        if path.startswith("/blocked-art/"):
+            rel = path.lstrip("/")
             self._serve_static_file(rel)
             return
 
-        if self.path in ("/people", "/people/", "/demoDashboard", "/demoDashboard/"):
+        if path in ("/people", "/people/", "/demoDashboard", "/demoDashboard/"):
             self._serve_static_html("people.html")
             return
 
-        if self.path == "/health":
+        if path == "/health":
             rc, stdout, _ = _router_ssh("health-check", "echo pong")
             router_ok = (rc == 0 and stdout == "pong")
             self._respond(200 if router_ok else 503, {
@@ -843,7 +953,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             })
             return
 
-        if self.path == "/accepted":
+        if path == "/accepted":
             html = (
                 b"<!DOCTYPE html><html><head><meta charset='UTF-8'>"
                 b"<title>Conectado - Lentium</title>"
@@ -862,7 +972,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(html)
             return
 
-        if self.path == "/api/registros/clientes":
+        if path == "/api/registros/clientes":
             with _db_connect() as conn:
                 rows = conn.execute(
                     "SELECT id,telefono,pwd_plano,pwd_hash,ip,registrado_en,ultima_sesion FROM clientes ORDER BY id DESC"
@@ -870,7 +980,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(200, {"clientes": [dict(r) for r in rows]})
             return
 
-        if self.path == "/api/registros/invitados":
+        if path == "/api/registros/invitados":
             with _db_connect() as conn:
                 rows = conn.execute(
                     """SELECT id,nombre,apellido_paterno,apellido_materno,telefono,
@@ -886,15 +996,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(200, {"invitados": result})
             return
 
-        if self.path in ("/api/people/dashboard", "/api/demo/dashboard"):
+        if path in ("/api/people/dashboard", "/api/demo/dashboard"):
             self._respond(200, _build_demo_dashboard_payload())
             return
 
-        if self.path == "/api/services/status":
+        if path == "/api/services/status":
             self._respond(200, _service_status())
             return
 
-        if self.path == "/api/portal/context":
+        if path == "/api/portal/context":
             client_ip = get_client_ip(self)
             warned = _is_warned_ip(client_ip)
             ai_risk = _fetch_ai_risk_message(client_ip)
@@ -911,6 +1021,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._respond(404, {"error": "not found"})
 
     def do_POST(self):
+        path = self._path_only()
         log.info(f"POST {self.path}  peer={self.client_address[0]}")
         data = self._read_json()
 
@@ -918,7 +1029,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Flujo de uso:
         #   Primera vez → registrarse como Invitado (/api/register/guest)
         #   Siguiente visita → entrar como Cliente con teléfono + contraseña
-        if self.path == "/api/register/client":
+        if path == "/api/register/client":
             err = _require_fields(data, ["telefono", "password"])
             if err:
                 self._respond(400, {"ok": False, "error": err}); return
@@ -969,7 +1080,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         # ── Registro de invitado ─────────────────────────────────────────────
-        if self.path in ("/api/register/guest", "/api/register/quest"):
+        if path in ("/api/register/guest", "/api/register/quest"):
             err = _require_fields(data, ["nombre","apellido_paterno","apellido_materno","telefono","password"])
             if err:
                 self._respond(400, {"ok": False, "error": err}); return
@@ -984,7 +1095,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._respond(200 if ok else 500, {"ok": ok, "ip": client_ip})
             return
 
-        if self.path == "/api/services/action":
+        if path == "/api/services/action":
             service = str(data.get("service", "")).strip()
             action = str(data.get("action", "")).strip()
             if not service or not action:
@@ -1002,7 +1113,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         # ── Compatibilidad con portal anterior (/accept) ─────────────────────
-        if self.path == "/accept":
+        if path == "/accept":
             client_ip = get_client_ip(self)
             ok = authorize_client(client_ip)
             self._respond(200 if ok else 500, {"ok": ok, "ip": client_ip})

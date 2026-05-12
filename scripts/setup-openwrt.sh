@@ -19,8 +19,8 @@
 #
 # Variables opcionales:
 #   CAPTIVE_DOMAIN=captive.rafex.dev    # dominio principal del portal (DHCP opt114 + dnsmasq)
-#   CAPTIVE_DOMAIN2=captive.localhost.com   # dominio secundario (fallback offline)
-#   PEOPLE_DOMAIN=people.localhost.com  # subdominio para dashboard de registros/conectados
+#   CAPTIVE_DOMAIN2=portal.rafex.dev    # dominio secundario (fallback)
+#   PEOPLE_DOMAIN=people.rafex.dev  # subdominio para dashboard de registros/conectados
 #   TOPOLOGY_FILE=/etc/demo-openwrt/topology.env
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -75,6 +75,7 @@ Uso:
 Opciones:
   --topology legacy|split_portal   Selecciona topología.
   --portal-ip <ip>                 Fuerza IP de destino del portal.
+  --portal-port <port>             Puerto HTTP del portal (default: 80).
   --ai-ip <ip>                     IP del nodo IA (Raspi4B normalmente).
   -h, --help                       Muestra esta ayuda.
 EOF
@@ -90,6 +91,11 @@ while [ "$#" -gt 0 ]; do
         --portal-ip)
             [ -n "${2:-}" ] || die "Falta valor para --portal-ip"
             PORTAL_IP="$2"
+            shift 2
+            ;;
+        --portal-port)
+            [ -n "${2:-}" ] || die "Falta valor para --portal-port"
+            PORTAL_PORT="$2"
             shift 2
             ;;
         --ai-ip)
@@ -119,16 +125,25 @@ AI_IP="${AI_IP:-$RASPI4B_IP}"
 
 validate_ip "$PORTAL_IP" || die "IP de portal inválida: $PORTAL_IP"
 validate_ip "$AI_IP" || die "IP de AI inválida: $AI_IP"
+case "$PORTAL_PORT" in
+    ''|*[!0-9]*) die "PORTAL_PORT inválido: $PORTAL_PORT" ;;
+esac
 
 CAPTIVE_DOMAIN="${CAPTIVE_DOMAIN:-captive.rafex.dev}"
-CAPTIVE_DOMAIN2="${CAPTIVE_DOMAIN2:-captive.localhost.com}"
-PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.localhost.com}"
+CAPTIVE_DOMAIN2="${CAPTIVE_DOMAIN2:-portal.rafex.dev}"
+PEOPLE_DOMAIN="${PEOPLE_DOMAIN:-people.rafex.dev}"
+PORTAL_URL_SUFFIX="/portal"
+if [ "$PORTAL_PORT" = "80" ]; then
+    PORTAL_URL_BASE="http://$CAPTIVE_DOMAIN"
+else
+    PORTAL_URL_BASE="http://$CAPTIVE_DOMAIN:$PORTAL_PORT"
+fi
 
 # =============================================================================
 # Pre-flight checks
 # =============================================================================
 log_info "=== Setup de OpenWrt para Captive Portal ==="
-log_info "Topología: $TOPOLOGY (portal_ip=$PORTAL_IP ai_ip=$AI_IP)"
+log_info "Topología: $TOPOLOGY (portal_ip=$PORTAL_IP portal_port=$PORTAL_PORT ai_ip=$AI_IP)"
 
 check_ssh_key
 test_router_ssh
@@ -144,9 +159,16 @@ log_ok "Espacio disponible en overlay: ${AVAIL_KB}KB"
 # Verificar que la interfaz AP existe en el router
 log_info "Verificando interfaz $AP_IFACE en el router..."
 if ! router_ssh "ip link show $AP_IFACE > /dev/null 2>&1"; then
-    log_warn "Interfaz $AP_IFACE no encontrada. Interfaces disponibles:"
-    router_ssh "ip link show | grep -E '^[0-9]+:' | awk '{print \$2}'"
-    die "Ajusta AP_IFACE en lib/common.sh con el nombre correcto de la interfaz AP WiFi"
+    log_warn "Interfaz $AP_IFACE no encontrada. Intentando autodetectar AP iface..."
+    AUTO_AP_IFACE="$(router_ssh "ip -o link show | awk -F': ' '{print \$2}' | sed 's/@.*//' | grep -E '^phy[0-9]+-ap[0-9]+$' | head -1" 2>/dev/null || true)"
+    if [ -n "$AUTO_AP_IFACE" ]; then
+        AP_IFACE="$AUTO_AP_IFACE"
+        log_ok "Autodetect AP_IFACE: $AP_IFACE"
+    else
+        log_warn "No se pudo autodetectar interfaz AP. Interfaces disponibles:"
+        router_ssh "ip link show | grep -E '^[0-9]+:' | awk '{print \$2}'"
+        die "Ajusta AP_IFACE en lib/common.sh con el nombre correcto de la interfaz AP WiFi"
+    fi
 fi
 log_ok "Interfaz $AP_IFACE presente en el router"
 
@@ -180,79 +202,63 @@ fi
 # =============================================================================
 log_info "--- FASE B: Configurando dnsmasq para captive portal ---"
 
-# Contenido del archivo de configuracion dnsmasq
-# Dominios que los SO usan para detectar captive portals +
-# dominios de demo de DNS poisoning (suplantacion educativa)
-DNSMASQ_CONTENT="# captive-portal.conf — Generado por setup-openwrt.sh
-# Redirige dominios de deteccion de captive portal a la Pi ($PORTAL_IP)
-# Orden: primero las marcas con mayor presencia en la demo.
+# En algunos builds OpenWrt dnsmasq no aplica /etc/dnsmasq.conf como fuente
+# principal, pero sí aplica UCI (/etc/config/dhcp -> /var/etc/dnsmasq*.conf).
+# Por eso, las redirecciones captive se gestionan por UCI.
+log_info "Configurando redirecciones captive en UCI (dhcp.@dnsmasq[0].address)..."
+router_ssh "sh -s" <<EOF
+set -eu
 
-# ── Android AOSP / Google (Pixel, la mayoria de marcas Android) ─────────────
-address=/connectivitycheck.gstatic.com/$PORTAL_IP
-address=/connectivitycheck.android.com/$PORTAL_IP
-address=/clients1.google.com/$PORTAL_IP
-address=/clients3.google.com/$PORTAL_IP
+# Limpiar entradas address previas para evitar acumulación/duplicados
+while uci -q delete dhcp.@dnsmasq[0].address[-1]; do :; done
 
-# ── Huawei EMUI / HarmonyOS ──────────────────────────────────────────────────
-# Estos dominios son los que usan los Huawei para su deteccion propia de portal.
-# Sin estas entradas dnsmasq no intercepta el check y la notificacion no aparece
-# aunque el DNAT de nftables redirige el trafico HTTP igualmente.
-address=/connectivitycheck.platform.hicloud.com/$PORTAL_IP
-address=/connectivitycheck.hicloud.com/$PORTAL_IP
-address=/connectivitycheck.dbankcloud.cn/$PORTAL_IP
+for dom in \
+  connectivitycheck.gstatic.com \
+  connectivitycheck.android.com \
+  clients1.google.com \
+  clients3.google.com \
+  connectivitycheck.platform.hicloud.com \
+  connectivitycheck.hicloud.com \
+  connectivitycheck.dbankcloud.cn \
+  connectivitycheck.platform.dbankcloud.com \
+  hicloud.com \
+  www.hicloud.com \
+  httpdns.hicloud.com \
+  dbankcloud.com \
+  www.dbankcloud.com \
+  neverssl.com \
+  www.neverssl.com \
+  connect.rom.miui.com \
+  connectivitycheck.platform.miui.com \
+  wifi.vivo.com.cn \
+  connectivitycheck.samsung.com \
+  google.com \
+  captive.apple.com \
+  appleiphonecell.com \
+  iphone-otu.apple.com \
+  www.apple.com \
+  www.msftconnecttest.com \
+  msftconnecttest.com \
+  www.msftncsi.com \
+  msftncsi.com \
+  detectportal.firefox.com \
+  connectivity-check.ubuntu.com \
+  network-test.debian.org \
+  nmcheck.gnome.org \
+  $CAPTIVE_DOMAIN \
+  $CAPTIVE_DOMAIN2 \
+  $PEOPLE_DOMAIN
+do
+  uci add_list dhcp.@dnsmasq[0].address="/\${dom}/$PORTAL_IP"
+done
 
-# ── Xiaomi MIUI / HyperOS ────────────────────────────────────────────────────
-address=/connect.rom.miui.com/$PORTAL_IP
-address=/connectivitycheck.platform.miui.com/$PORTAL_IP
-address=/wifi.vivo.com.cn/$PORTAL_IP
+# Endurecer captive para clientes que prefieren AAAA/CNAME (Huawei y similares).
+# Evita que el probe de conectividad salte a IPv6 pública y no abra popup.
+uci set dhcp.@dnsmasq[0].filter_aaaa='1'
 
-# ── Samsung OneUI ────────────────────────────────────────────────────────────
-address=/connectivitycheck.samsung.com/$PORTAL_IP
-address=/google.com/$PORTAL_IP
-
-# ── Apple iOS / macOS (CaptiveNetworkSupport) ────────────────────────────────
-address=/captive.apple.com/$PORTAL_IP
-address=/appleiphonecell.com/$PORTAL_IP
-address=/iphone-otu.apple.com/$PORTAL_IP
-address=/www.apple.com/$PORTAL_IP
-
-# ── Microsoft Windows (NCSI / NCA) ───────────────────────────────────────────
-address=/www.msftconnecttest.com/$PORTAL_IP
-address=/msftconnecttest.com/$PORTAL_IP
-address=/www.msftncsi.com/$PORTAL_IP
-address=/msftncsi.com/$PORTAL_IP
-
-# ── Mozilla Firefox ──────────────────────────────────────────────────────────
-address=/detectportal.firefox.com/$PORTAL_IP
-
-# ── Ubuntu / Canonical ───────────────────────────────────────────────────────
-address=/connectivity-check.ubuntu.com/$PORTAL_IP
-
-# ── Linux / GNOME / Debian ───────────────────────────────────────────────────
-address=/network-test.debian.org/$PORTAL_IP
-address=/nmcheck.gnome.org/$PORTAL_IP
-
-# ── Dominios propios del portal (acceso manual y DHCP option 114) ────────────
-# captive.rafex.dev  — URL pública de la demo (fácil de comunicar a asistentes)
-# captive.localhost.com  — fallback sin dominio externo (funciona offline)
-address=/$CAPTIVE_DOMAIN/$PORTAL_IP
-address=/$CAPTIVE_DOMAIN2/$PORTAL_IP
-address=/$PEOPLE_DOMAIN/$PORTAL_IP
-
-"
-
-# Forzar bloque en /etc/dnsmasq.conf (siempre leído por dnsmasq en OpenWrt)
-# y limpiar archivo legado para evitar duplicados.
-log_info "Aplicando bloque captive en /etc/dnsmasq.conf..."
-router_ssh "
-    rm -f /etc/dnsmasq.d/captive-portal.conf 2>/dev/null || true
-    if grep -q '# --- captive-portal begin ---' /etc/dnsmasq.conf 2>/dev/null; then
-        sed -i '/# --- captive-portal begin ---/,/# --- captive-portal end ---/d' /etc/dnsmasq.conf
-    fi
-    printf '\n# --- captive-portal begin ---\n%s\n# --- captive-portal end ---\n' \
-        '$DNSMASQ_CONTENT' >> /etc/dnsmasq.conf
-"
-log_ok "Configuracion captive insertada en /etc/dnsmasq.conf"
+uci commit dhcp
+EOF
+log_ok "Redirecciones captive aplicadas por UCI"
 
 # Configurar DHCP lease time a 120 minutos via UCI
 # Razon: al reconectar, el dispositivo obtiene nueva IP → no esta en allowed_clients → portal
@@ -266,9 +272,9 @@ router_ssh "
     uci del dhcp.lan.dhcp_option 2>/dev/null || true
     uci add_list dhcp.lan.dhcp_option='6,$ROUTER_IP'
     # Option 114 (RFC 8910): URL del captive portal que el OS usa directamente.
-    # Se usa el dominio propio (captive.rafex.dev) en lugar de la IP para que
+    # Se usa el dominio propio (captive.rafex) en lugar de la IP para que
     # la URL sea legible y coincida con lo que dnsmasq resuelve a $PORTAL_IP.
-    uci add_list dhcp.lan.dhcp_option='114,http://$CAPTIVE_DOMAIN/portal'
+    uci add_list dhcp.lan.dhcp_option='114,${PORTAL_URL_BASE}${PORTAL_URL_SUFFIX}'
     uci commit dhcp
 " && log_ok "DHCP lease time = 120m configurado" || \
     log_warn "No se pudo configurar DHCP lease time via UCI (puede que la interfaz no se llame 'lan')"
@@ -284,6 +290,17 @@ log_ok "dnsmasq recargado"
 # =============================================================================
 log_info "--- FASE C: Configurando nftables ---"
 
+ADMIN2_SET_ELEM=""
+ADMIN2_FORWARD_RULE=""
+ADMIN2_COMMENT=""
+if [ -n "$ADMIN2_IP" ] && validate_ip "$ADMIN2_IP"; then
+    ADMIN2_SET_ELEM=", $ADMIN2_IP timeout 0s"
+    ADMIN2_FORWARD_RULE="
+        # Admin secundario: acceso total siempre
+        ip saddr $ADMIN2_IP accept"
+    ADMIN2_COMMENT=", admin2 ($ADMIN2_IP)"
+fi
+
 # Contenido del archivo nft
 # IMPORTANTE: la tabla se elimina antes de aplicar este archivo (ver más abajo),
 # por lo que solo necesitamos 'add table' + la definición completa.
@@ -298,7 +315,7 @@ NFT_CONTENT="#!/usr/sbin/nft -f
 #   bridge br-lan y el hook forward ve br-lan, no la interfaz AP (phy0-ap0).
 #   Matching por subred LAN es más robusto y funciona con cualquier topología.
 #
-# SEGURIDAD: $ADMIN_IP (admin), $RASPI4B_IP (AI) y $PORTAL_IP (portal) NUNCA son bloqueadas.
+# SEGURIDAD: $ADMIN_IP (admin)$ADMIN2_COMMENT, $RASPI4B_IP (AI) y $PORTAL_IP (portal) NUNCA son bloqueadas.
 # Para resetear: nft delete table ip captive
 
 add table ip captive
@@ -309,14 +326,14 @@ table ip captive {
     # timeout 120m: las autorizaciones expiran solas (2 horas)
     #   → combinado con DHCP lease=120m: al reconectar pasan de nuevo por el portal
     #
-    # Admin ($ADMIN_IP), IA ($RASPI4B_IP), sensor ($RASPI3B_IP), portal node ($PORTAL_NODE_IP),
+    # Admin ($ADMIN_IP)$ADMIN2_COMMENT, IA ($RASPI4B_IP), sensor ($RASPI3B_IP), portal node ($PORTAL_NODE_IP),
     # AP extender ($AP_EXTENDER_IP) y portal activo ($PORTAL_IP):
     # timeout 0s = NUNCA expiran
     set $NFT_SET {
         type ipv4_addr
         flags dynamic, timeout
         timeout 120m
-        elements = { $ADMIN_IP timeout 0s, $RASPI4B_IP timeout 0s, $RASPI3B_IP timeout 0s, $PORTAL_NODE_IP timeout 0s, $AP_EXTENDER_IP timeout 0s, $PORTAL_IP timeout 0s }
+        elements = { $ADMIN_IP timeout 0s$ADMIN2_SET_ELEM, $RASPI4B_IP timeout 0s, $RASPI3B_IP timeout 0s, $PORTAL_NODE_IP timeout 0s, $AP_EXTENDER_IP timeout 0s, $PORTAL_IP timeout 0s }
     }
 
     # Redireccion HTTP: clientes de la LAN no autorizados → portal en $PORTAL_IP
@@ -324,14 +341,16 @@ table ip captive {
     chain prerouting {
         type nat hook prerouting priority dstnat; policy accept;
 
-        # No redirigir tráfico que ya va al portal
-        ip daddr $PORTAL_IP accept
+        # No redirigir tráfico que ya va al puerto real del portal.
+        # Importante: si el portal corre en :8080, NO debemos aceptar :80 aquí
+        # porque impediría el DNAT 80 -> 8080 para las URLs de captive detection.
+        ip daddr $PORTAL_IP tcp dport $PORTAL_PORT accept
 
         # Clientes autorizados: no redirigir
         ip saddr @$NFT_SET accept
 
         # Redirigir HTTP de la LAN que no está autorizado al portal
-        ip saddr $LAN_SUBNET tcp dport 80 dnat to $PORTAL_IP:80
+        ip saddr $LAN_SUBNET tcp dport 80 dnat to $PORTAL_IP:$PORTAL_PORT
     }
 
     # Control de forward: bloquear trafico de clientes no autorizados
@@ -344,6 +363,7 @@ table ip captive {
 
         # Admin: acceso total siempre (REGLA DE ORO — nunca bloquear)
         ip saddr $ADMIN_IP accept
+$ADMIN2_FORWARD_RULE
 
         # AI node (Raspi4B): siempre permitido (topología legacy/split)
         ip saddr $RASPI4B_IP accept
@@ -406,14 +426,21 @@ router_ssh "nft -f /tmp/captive-portal.nft" || \
 # CRITICO: Re-confirmar IPs permanentes (timeout 0s).
 # Admin, portal y ambas Raspis nunca deben expirar — sin importar los reinicios.
 log_info "Re-confirmando IPs permanentes en el set (timeout 0s)..."
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $ADMIN_IP timeout 0s }" || \
-    die "No se pudo asegurar $ADMIN_IP como permanente"
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI4B_IP timeout 0s }" 2>/dev/null || true
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $RASPI3B_IP timeout 0s }" 2>/dev/null || true
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_NODE_IP timeout 0s }" 2>/dev/null || true
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $AP_EXTENDER_IP timeout 0s }" 2>/dev/null || true
-router_ssh "nft add element $NFT_TABLE $NFT_SET { $PORTAL_IP timeout 0s }" 2>/dev/null || true
-log_ok "Permanentes: admin=$ADMIN_IP ai/4B=$RASPI4B_IP sensor/3B=$RASPI3B_IP portal/3B2=$PORTAL_NODE_IP ap-ext=$AP_EXTENDER_IP portal-activo=$PORTAL_IP (timeout 0s)"
+SEEN_PERM_IPS=""
+for ip in "$ADMIN_IP" "$ADMIN2_IP" "$RASPI4B_IP" "$RASPI3B_IP" "$PORTAL_NODE_IP" "$AP_EXTENDER_IP" "$PORTAL_IP"; do
+    [ -n "$ip" ] || continue
+    case " $SEEN_PERM_IPS " in
+        *" $ip "*) continue ;;
+    esac
+    SEEN_PERM_IPS="$SEEN_PERM_IPS $ip"
+    if [ "$ip" = "$ADMIN_IP" ] || { [ -n "$ADMIN2_IP" ] && [ "$ip" = "$ADMIN2_IP" ]; }; then
+        router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip timeout 0s }" || \
+            die "No se pudo asegurar $ip como permanente"
+    else
+        router_ssh "nft add element $NFT_TABLE $NFT_SET { $ip timeout 0s }" 2>/dev/null || true
+    fi
+done
+log_ok "Permanentes aplicadas (únicas):${SEEN_PERM_IPS} (timeout 0s)"
 
 # Limpiar conntrack para que el bloqueo sea efectivo inmediatamente
 # (conexiones ESTABLISHED bypasean el hook forward)
@@ -461,9 +488,9 @@ EOS
 router_ssh "rm -f /tmp/captive-portal.nft"
 
 # =============================================================================
-# FASE C.1: Reservas DHCP permanentes para las Raspberry Pi
+# FASE C.1: Reservas DHCP permanentes para core nodes (admin + Raspberry Pi)
 # =============================================================================
-log_info "--- FASE C.1: Reservas DHCP permanentes para RafexPi4B y RafexPi3B ---"
+log_info "--- FASE C.1: Reservas DHCP permanentes para core nodes ---"
 
 # Función interna: crea o actualiza una reserva DHCP via UCI en el router
 # Uso: reserve_raspi_dhcp <hostname> <mac> <ip>
@@ -506,6 +533,12 @@ reserve_raspi_dhcp() {
        log_warn "No se pudo configurar reserva DHCP para $NAME — hazlo manualmente con openwrt-reserve-raspi.sh"
 }
 
+reserve_raspi_dhcp "$ADMIN_HOSTNAME" "$ADMIN_MAC" "$ADMIN_IP"
+if [ -n "$ADMIN2_MAC" ] && [ -n "$ADMIN2_IP" ] && validate_ip "$ADMIN2_IP"; then
+    reserve_raspi_dhcp "$ADMIN2_HOSTNAME" "$ADMIN2_MAC" "$ADMIN2_IP"
+else
+    log_info "ADMIN2_MAC/IP no completos; no se creó reserva DHCP de admin secundario"
+fi
 reserve_raspi_dhcp "$RASPI4B_HOSTNAME" "$RASPI4B_MAC" "$RASPI4B_IP"
 reserve_raspi_dhcp "$RASPI3B_HOSTNAME" "$RASPI3B_MAC" "$RASPI3B_IP"
 if [ -n "$PORTAL_NODE_MAC" ] && validate_ip "$PORTAL_NODE_IP"; then
@@ -558,13 +591,21 @@ else
     log_warn "Admin $ADMIN_IP NO esta en $NFT_SET — agregando de emergencia..."
     router_add_ip "$ADMIN_IP"
 fi
+if [ -n "$ADMIN2_IP" ] && validate_ip "$ADMIN2_IP"; then
+    if router_ip_in_set "$ADMIN2_IP"; then
+        log_ok "Admin2 $ADMIN2_IP esta en $NFT_SET"
+    else
+        log_warn "Admin2 $ADMIN2_IP NO esta en $NFT_SET — agregando de emergencia..."
+        router_add_ip "$ADMIN2_IP"
+    fi
+fi
 
 # Verificar dnsmasq — función helper para no repetir el nslookup
 check_dns_redirect() {
     local domain="$1"
     local expected="$2"
     local resolved
-    resolved=$(router_ssh "nslookup $domain 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
+    resolved=$(router_ssh "nslookup '$domain' 127.0.0.1 2>/dev/null | sed -n '/^Name:[[:space:]]*$domain\$/,/^$/p' | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
     if [ "$resolved" = "$expected" ]; then
         log_ok "dnsmasq: $domain -> $resolved"
     else
@@ -593,27 +634,27 @@ check_dns_redirect "$PEOPLE_DOMAIN"   "$PORTAL_IP"
 # Verificar DHCP option 114 (URL del portal)
 log_info "Verificando DHCP option 114..."
 OPT114="$(router_ssh "uci -q get dhcp.lan.dhcp_option 2>/dev/null | tr ' ' '\n' | grep '^114,' | tail -1" 2>/dev/null || echo "")"
-if printf '%s' "$OPT114" | grep -q "114,http://$CAPTIVE_DOMAIN/portal"; then
+if printf '%s' "$OPT114" | grep -q "114,${PORTAL_URL_BASE}${PORTAL_URL_SUFFIX}"; then
     log_ok "DHCP option 114 correcta: $OPT114"
 else
-    log_warn "DHCP option 114 no coincide (actual: ${OPT114:-<vacía>}, esperado: 114,http://$CAPTIVE_DOMAIN/portal)"
+    log_warn "DHCP option 114 no coincide (actual: ${OPT114:-<vacía>}, esperado: 114,${PORTAL_URL_BASE}${PORTAL_URL_SUFFIX})"
 fi
 
 # Verificar regla DNAT hacia portal
 log_info "Verificando regla DNAT hacia portal..."
-DNAT_RULE="$(router_ssh "nft list chain ip captive prerouting 2>/dev/null | grep -F 'dnat to $PORTAL_IP:80' | head -1" 2>/dev/null || echo "")"
+DNAT_RULE="$(router_ssh "nft list chain ip captive prerouting 2>/dev/null | grep -F 'dnat to $PORTAL_IP:$PORTAL_PORT' | head -1" 2>/dev/null || echo "")"
 if [ -n "$DNAT_RULE" ]; then
     log_ok "Regla DNAT detectada: $DNAT_RULE"
 else
-    log_warn "No se encontró DNAT a $PORTAL_IP:80 en chain prerouting"
+    log_warn "No se encontró DNAT a $PORTAL_IP:$PORTAL_PORT en chain prerouting"
 fi
 
 # Reachability HTTP del portal desde el router
 log_info "Verificando reachability HTTP al portal desde OpenWrt..."
-if router_ssh "uclient-fetch -T 5 -qO- http://$PORTAL_IP/portal >/dev/null 2>&1"; then
-    log_ok "OpenWrt alcanza http://$PORTAL_IP/portal"
+if router_ssh "uclient-fetch -T 5 -qO- http://$PORTAL_IP:$PORTAL_PORT/portal >/dev/null 2>&1"; then
+    log_ok "OpenWrt alcanza http://$PORTAL_IP:$PORTAL_PORT/portal"
 else
-    log_warn "OpenWrt NO alcanza http://$PORTAL_IP/portal"
+    log_warn "OpenWrt NO alcanza http://$PORTAL_IP:$PORTAL_PORT/portal"
 fi
 
 # Resumen final
@@ -629,11 +670,19 @@ printf '  Portal node 3B2 reservado: %s (%s)\n' "$PORTAL_NODE_IP" "$PORTAL_NODE_
 printf '  AP extender reservado:     %s (%s)\n' "$AP_EXTENDER_IP" "$AP_EXTENDER_HOSTNAME"
 printf '  Sensor/3B:     %s (%s) — permanente\n' "$RASPI3B_IP" "$RASPI3B_HOSTNAME"
 printf '  Admin (libre): %s — permanente\n' "$ADMIN_IP"
+if [ -n "$ADMIN2_IP" ]; then
+  printf '  Admin2 (libre): %s — permanente\n' "$ADMIN2_IP"
+fi
 printf '  AP interface:  %s\n' "$AP_IFACE"
 printf '  Portal timeout: %s (acceso WiFi invitados)\n' "$PORTAL_TIMEOUT"
 printf '  DHCP leasetime: 120m\n'
-printf '  Portal (demo):    http://%s/portal\n' "$CAPTIVE_DOMAIN"
-printf '  Portal (local):   http://%s/portal\n' "$CAPTIVE_DOMAIN2"
+if [ "$PORTAL_PORT" = "80" ]; then
+  printf '  Portal (demo):    http://%s/portal\n' "$CAPTIVE_DOMAIN"
+  printf '  Portal (local):   http://%s/portal\n' "$CAPTIVE_DOMAIN2"
+else
+  printf '  Portal (demo):    http://%s:%s/portal\n' "$CAPTIVE_DOMAIN" "$PORTAL_PORT"
+  printf '  Portal (local):   http://%s:%s/portal\n' "$CAPTIVE_DOMAIN2" "$PORTAL_PORT"
+fi
 printf '  Dashboard people: http://%s/people\n' "$PEOPLE_DOMAIN"
 printf '\n'
 log_info "Comandos utiles:"

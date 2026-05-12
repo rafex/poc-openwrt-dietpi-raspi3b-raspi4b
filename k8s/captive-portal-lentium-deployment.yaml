@@ -53,6 +53,8 @@ spec:
               value: "8080"
             - name: LOG_LEVEL
               value: "INFO"
+            - name: ADMIN_IP
+              value: "192.168.1.113"
           volumeMounts:
             - name: ssh-keys
               mountPath: /opt/keys
@@ -69,4 +71,6 @@ spec:
             path: /opt/keys
             type: Directory
         - name: lentium-data
-          emptyDir: {}
+          hostPath:
+            path: /opt/captive-portal/lentium-data
+            type: DirectoryOrCreate

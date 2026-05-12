@@ -266,17 +266,245 @@ sudo bash scripts/setup-raspi4b-portals.sh --only-verify
 ```bash
 bash scripts/setup-openwrt.sh
 bash scripts/setup-openwrt.sh --topology legacy
-bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182 --ai-ip 192.168.1.167
+bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.181 --ai-ip 192.168.1.167
 ```
 
 | Fase | Qué hace |
 |---|---|
 | Pre-flight | Verifica overlay, interfaz `phy0-ap0`, SSH |
 | A | Agrega llave pública a `/etc/dropbear/authorized_keys` |
-| B | Configura dnsmasq: lease `120m`, option `6`, option `114`, `captive.localhost.com` |
+| B | Configura dnsmasq por UCI: lease `120m`, option `6`, option `114`, `dhcp.@dnsmasq[0].address` para dominios captive |
 | C | Tabla nftables `ip captive`: permanentes admin+Pi4B+Pi3B (timeout 0s), clientes 120m |
-| C.1 | Reservas DHCP UCI permanentes para ambas Raspis |
+| C.1 | Reservas DHCP UCI permanentes para nodos core (admin, admin2/bastión, Raspis, portal-node, AP-extender) |
 | D | Verificación completa |
+
+Notas:
+- En el modo operativo actual, `split_portal` usa `PORTAL_IP=192.168.1.181` (portal+sensor en la misma Raspi3B).
+- Si ejecutas el doctor desde distintas máquinas, asegúrate de tener homologado `/etc/demo-openwrt/topology.env`
+  o exportar `CAPTIVE_DOMAIN`, `CAPTIVE_DOMAIN2`, `PEOPLE_DOMAIN` para evitar falsos positivos.
+
+---
+
+## openwrt-install-usb-overlay.sh
+
+**Propósito:** mover el `overlay` de OpenWrt a una USB `ext4` para ganar persistencia/espacio.  
+**Idempotente:** Sí (reconfigura `fstab` y vuelve a sincronizar overlay).
+
+```bash
+bash scripts/openwrt-install-usb-overlay.sh
+bash scripts/openwrt-install-usb-overlay.sh --device /dev/sda1
+bash scripts/openwrt-install-usb-overlay.sh --uuid 191c8ec4-d5cc-4fb1-af5f-2ba1b0bcc58b
+bash scripts/openwrt-install-usb-overlay.sh --no-reboot
+```
+
+Qué hace:
+1. Detecta UUID (`block info`) o usa `--uuid`.
+2. Valida `TYPE=ext4`.
+3. Respalda `/etc/config/fstab`.
+4. Escribe mount UCI para `target '/overlay'`.
+5. Monta USB en `/mnt/usb` y copia `/overlay` actual con `tar | tar`.
+6. `sync` + `reboot` (salvo `--no-reboot`).
+
+Validación post-reboot:
+
+```bash
+ssh root@192.168.1.1 "mount | grep -E 'overlay|/dev/sda1'"
+ssh root@192.168.1.1 "df -h /overlay"
+```
+
+---
+
+## setup-openwrt-wifi-uplink24-ap5.sh
+
+**Propósito:** configurar OpenWrt con uplink por WiFi 2.4GHz (STA) y AP por 5GHz.
+
+```bash
+bash scripts/setup-openwrt-wifi-uplink24-ap5.sh
+bash scripts/setup-openwrt-wifi-uplink24-ap5.sh --uplink-ssid netup --uplink-pass 123 --ap-ssid "Rafex Portal 5G"
+```
+
+---
+
+## setup-openwrt-reserve-core-nodes.sh
+
+**Propósito:** reservas DHCP estáticas para nodos core:
+- Laptop admin (`ADMIN_IP`/`ADMIN_MAC`)
+- Raspi3B sensor (`RASPI3B_IP`/`RASPI3B_MAC`)
+- Raspi4B llm (`RASPI4B_IP`/`RASPI4B_MAC`)
+
+```bash
+bash scripts/setup-openwrt-reserve-core-nodes.sh
+```
+
+---
+
+## setup-openwrt-opennds-raspi-portal.sh
+
+**Propósito:** configurar openNDS para usar portal externo en Raspi3B.
+**Estado:** legado (no recomendado en TL-WDR3600/OpenWrt 25.x por crash loop de `opennds`).
+
+Defaults:
+- `fasremoteip=192.168.1.181`
+- `fasport=8080`
+- `faspath=/portal/`
+- `fas_secure_enabled=0`
+
+```bash
+bash scripts/setup-openwrt-opennds-raspi-portal.sh --portal-ip 192.168.1.181 --portal-port 8080 --portal-path /portal/
+```
+
+También agrega `preauthenticated_users` para puertos `8080/80/443` al host del portal.
+
+---
+
+## setup-openwrt-mode-raspi-portal-offload.sh
+
+**Propósito:** orquestador del modo "OpenWrt ligero + portal completo en Raspi3B".
+
+```bash
+bash scripts/setup-openwrt-mode-raspi-portal-offload.sh \
+  --uplink-ssid netup \
+  --uplink-pass 123 \
+  --ap-ssid "Rafex Portal 5G" \
+  --portal-ip 192.168.1.181 \
+  --portal-port 8080 \
+  --portal-path /portal/
+```
+
+Orden interno:
+1. WiFi 2.4 uplink + AP 5
+2. Reservas DHCP core
+3. Desactiva openNDS (`openwrt-disable-opennds.sh`)
+4. Configura captive clásico con `setup-openwrt.sh --topology split_portal --portal-port ...`
+
+---
+
+## openwrt-disable-opennds.sh
+
+**Propósito:** desactivar y limpiar `opennds` para operar en modo classic (`nftables + dnsmasq`).
+
+```bash
+bash scripts/openwrt-disable-opennds.sh
+```
+
+---
+
+## openwrt-push-admin-pubkeys.sh
+
+**Propósito:** copiar al OpenWrt las llaves públicas de administración para SSH de automatización.  
+**Llaves:** `captive-portal.pub` + `sensor.pub`  
+**Idempotente:** Sí
+
+```bash
+bash scripts/openwrt-push-admin-pubkeys.sh
+bash scripts/openwrt-push-admin-pubkeys.sh --captive-pub /ruta/a.pub --sensor-pub /ruta/b.pub
+```
+
+---
+
+## setup-openwrt-opennds-portal-files.sh
+
+**Propósito:** desplegar HTML del portal directamente en el router (`/www/portal`) y reiniciar `uhttpd`.  
+**Idempotente:** Sí
+
+```bash
+bash scripts/setup-openwrt-opennds-portal-files.sh
+```
+
+También copia `blocked-art/*.svg` a `/www/blocked-art`.
+
+---
+
+## setup-openwrt-opennds-config.sh
+
+**Propósito:** configurar `opennds` para portal local/FAS (gateway, `faspath`, `fasremoteip`, etc.).  
+**Idempotente:** Sí
+
+```bash
+bash scripts/setup-openwrt-opennds-config.sh
+bash scripts/setup-openwrt-opennds-config.sh --fas-path "/portal/portal.html?api_base=http://192.168.1.181:5000"
+```
+
+---
+
+## setup-openwrt-opennds-exceptions.sh
+
+**Propósito:** agregar excepciones `users_to_router` y `preauthenticated_users` para que clientes no autenticados alcancen backend/API del portal.  
+**Idempotente:** Sí
+
+```bash
+bash scripts/setup-openwrt-opennds-exceptions.sh --backend-ip 192.168.1.181
+```
+
+---
+
+## setup-openwrt-router-portal-mode.sh
+
+**Propósito:** orquestador del modo alternativo "portal en OpenWrt + openNDS + backend en Raspi3B-sensor".  
+**Estado:** legado (solo para pruebas específicas de FAS/openNDS).  
+**Idempotente:** Sí
+
+```bash
+sudo bash scripts/setup-openwrt-router-portal-mode.sh --backend-ip=192.168.1.181
+```
+
+Ejecuta en cadena:
+1. `openwrt-push-admin-pubkeys.sh`
+2. `setup-openwrt-opennds-portal-files.sh`
+3. `setup-openwrt-opennds-config.sh`
+4. `setup-openwrt-opennds-exceptions.sh`
+
+---
+
+## cleanup-raspi3b-sensor-for-captive-backend.sh
+
+**Propósito:** limpiar la Raspi3B-sensor del rol de captura (`network-sensor`, `tshark`, `/opt/sensor`, promisc persistente) y dejar base para backend cautivo.
+
+```bash
+sudo bash scripts/cleanup-raspi3b-sensor-for-captive-backend.sh
+sudo bash scripts/cleanup-raspi3b-sensor-for-captive-backend.sh --dry-run
+sudo bash scripts/cleanup-raspi3b-sensor-for-captive-backend.sh --purge-sensor-packages
+```
+
+---
+
+## setup-raspi3b-sensor-captive-backend.sh
+
+**Propósito:** desplegar backend cautivo Lentium en la Raspi3B-sensor con Podman.  
+**Persistencia SQLite host:** `/opt/captive-portal/lentium-data/lentium.db`
+
+```bash
+sudo bash scripts/setup-raspi3b-sensor-captive-backend.sh
+```
+
+Levanta:
+- contenedor `captive-backend-sensor`
+- backend en `http://127.0.0.1:5000`
+- servicio `systemd` `captive-backend-sensor.service` para autostart
+
+---
+
+## setup-portal-raspi3b-direct.sh
+
+**Propósito:** desplegar backend+frontend del portal cautivo directamente en la Raspi3B (sin Podman), en `:8080`.
+
+```bash
+sudo bash scripts/setup-portal-raspi3b-direct.sh
+sudo bash scripts/setup-portal-raspi3b-direct.sh --port 8080
+```
+
+---
+
+## setup-portal-raspi3b-nspawn.sh
+
+**Propósito:** variante en contenedor ligero con `systemd-nspawn`.
+
+```bash
+sudo bash scripts/setup-portal-raspi3b-nspawn.sh
+```
+
+Requisito:
+- `systemd-nspawn` instalado (`apt install systemd-container`).
 
 ---
 
@@ -302,6 +530,24 @@ sudo bash scripts/setup-sensor-raspi3b.sh --dry-run
 | D | Genera llave SSH `/opt/keys/sensor` (ed25519), intenta copiar al router |
 | E | Genera y arranca `/etc/init.d/network-sensor` con todas las env vars |
 | F | Verifica PID, captura tshark 5s, conectividad MQTT |
+
+Nota:
+- `ssh-copy-id` automático viene desactivado por defecto para evitar bloqueos interactivos.
+- Se puede activar con `--ssh-copy-auto`.
+
+---
+
+## setup-raspi3b-sensor-captive-full.sh
+
+**Propósito:** instalación completa de Raspi3B para modo actual recomendado:
+- sensor de red
+- portal cautivo (direct o nspawn)
+
+```bash
+sudo bash scripts/setup-raspi3b-sensor-captive-full.sh
+sudo bash scripts/setup-raspi3b-sensor-captive-full.sh --portal-mode direct
+sudo bash scripts/setup-raspi3b-sensor-captive-full.sh --portal-mode nspawn
+```
 
 ---
 
@@ -396,6 +642,34 @@ bash scripts/openwrt-flush-clients.sh --force
 bash scripts/openwrt-reset-firewall.sh            # emergencia — desactiva todo
 ```
 
+Descubrimiento de clientes conectados:
+
+```bash
+bash scripts/openwrt-list-connected.sh
+```
+
+Diagnóstico classic captive:
+
+```bash
+bash scripts/openwrt-captive-doctor.sh --portal-ip 192.168.1.181 --portal-port 80
+bash scripts/openwrt-wifi-ap-doctor.sh
+```
+
+Cambio de contraseña root en OpenWrt:
+
+```bash
+bash scripts/openwrt-set-password.sh
+bash scripts/openwrt-set-password.sh --password 'ClaveSeguraLarga'
+```
+
+Estado Raspi3B sensor + portal:
+
+```bash
+bash scripts/status-raspi3b-sensor-captive-admin.sh --pi3-ip 192.168.1.181 --portal-port 8080 --mode classic
+# en Raspi3B
+bash scripts/status-raspi3b-sensor-captive-local.sh
+```
+
 ---
 
 ## Demo DNS Poisoning
@@ -436,7 +710,7 @@ Constantes de red y helpers para scripts que interactúan con el router.
 | `ROUTER_IP` | 192.168.1.1 | Router OpenWrt |
 | `RASPI4B_IP` | 192.168.1.167 | RafexPi4B |
 | `RASPI3B_IP` | 192.168.1.181 | RafexPi3B |
-| `ADMIN_IP` | 192.168.1.113 | Laptop admin — nunca bloquear |
+| `ADMIN_IP` | 192.168.1.146 | Laptop admin — nunca bloquear |
 | `PORTAL_TIMEOUT` | 120m | Timeout nftables clientes WiFi |
 
 | Función | Descripción |

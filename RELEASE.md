@@ -286,7 +286,7 @@ Automatización:
 - Lease time: 120 minutos (coincide con timeout de portal)
 - Option 6: DNS del router (192.168.1.1)
 - Option 114: URL del portal (RFC 7710)
-- Dominio fallback: `captive.localhost.com`
+- Dominio fallback: `captive.rafex.dev`
 
 **SSH Automation**:
 - `/opt/keys/captive-portal` (Raspi4B/3B → OpenWrt)

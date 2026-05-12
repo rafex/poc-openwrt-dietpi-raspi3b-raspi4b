@@ -9,7 +9,7 @@
 | 3 | **RafexPi3B-A** | Raspberry Pi 3B (1 GB RAM) | 192.168.1.181 | DietPi (Raspberry Pi OS arm32) | Sensor de red — tshark, captura y envía batches |
 | 4 | **RafexPi3B-B** | Raspberry Pi 3B (1 GB RAM) | 192.168.1.182 | DietPi | Nodo de portal / extensión AP (en pruebas) |
 
-**Laptop admin:** 192.168.1.113 — Siempre autorizada en el portal (timeout=0s permanente).
+**Laptop admin:** 192.168.1.146 — Siempre autorizada en el portal (timeout=0s permanente).
 
 ---
 
@@ -40,7 +40,7 @@ graph TD
         PORTAL_NODE["Portal / AP extensor\nen pruebas"]
     end
 
-    Admin["💻 Laptop admin\n192.168.1.113"]
+    Admin["💻 Laptop admin\n192.168.1.146"]
 
     Internet -->|WAN| WAN
     WAN --> Router
@@ -128,7 +128,7 @@ Actualmente en 192.168.1.182.
 ```
 RafexPi4B:  d8:3a:dd:4d:4b:ae → 192.168.1.167  (reserva DHCP + allowlist timeout=0s)
 RafexPi3B:  b8:27:eb:5a:ec:33 → 192.168.1.181  (reserva DHCP + allowlist timeout=0s)
-Admin:      (dinámica)          → 192.168.1.113  (allowlist timeout=0s)
+Admin:      (dinámica)          → 192.168.1.146  (allowlist timeout=0s)
 ```
 
 ---

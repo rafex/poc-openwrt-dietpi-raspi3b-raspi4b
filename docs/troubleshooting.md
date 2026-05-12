@@ -142,7 +142,7 @@ Checklist rápido en router:
 ```bash
 # 1) DNS de detección captive debe resolver al portal
 nslookup connectivitycheck.gstatic.com 127.0.0.1
-nslookup captive.localhost.com 127.0.0.1
+nslookup captive.rafex.dev 127.0.0.1
 # ambos deben devolver 192.168.1.167
 
 # 2) DHCP debe anunciar option 6 (DNS router) y 114 (URL captive)
@@ -165,12 +165,35 @@ bash scripts/setup-openwrt.sh
 En el móvil:
 1. "Olvidar red" y reconectar (forzar nuevo lease DHCP).
 2. Desactivar DNS privado / DoH / VPN.
-3. Probar manual: `http://captive.localhost.com/portal`.
+3. Probar manual: `http://captive.rafex.dev/portal`.
 
 Si el popup sigue sin salir en iPhone:
 - activar/desactivar WiFi,
 - abrir Safari en HTTP (`http://neverssl.com`),
 - confirmar que no hay perfil MDM/VPN forzando DNS externo.
+
+### Hallazgo confirmado de puerto (importante)
+
+En este PoC, para compatibilidad CNA/popup entre dispositivos:
+
+- `:80` en el portal (`http://<portal-ip>/portal`) funciona mejor para popup automático.
+- `:8080` puede funcionar manualmente, pero reduce drásticamente la aparición del popup en varios equipos.
+
+Recomendación operativa:
+
+```bash
+bash scripts/setup-openwrt.sh \
+  --topology split_portal \
+  --portal-ip 192.168.1.181 \
+  --portal-port 80 \
+  --ai-ip 192.168.1.167
+```
+
+### Estado observado por familia de dispositivos
+
+- Android: popup automático OK con portal en `:80`.
+- Huawei: puede no abrir popup automático; usar apertura manual HTTP.
+- iPhone: popup puede aparecer con vista en blanco; probar `http://neverssl.com` en Safari y reconexión de red.
 
 ---
 
@@ -215,7 +238,7 @@ automáticamente para `ADMIN_IP`, `RASPI4B_IP` y `RASPI3B_IP`.
 Si ocurre igualmente, forzar manualmente los tres permanentes:
 ```bash
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
-  "nft add element ip captive allowed_clients { 192.168.1.113 timeout 0s }"  # admin
+  "nft add element ip captive allowed_clients { 192.168.1.146 timeout 0s }"  # admin
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
   "nft add element ip captive allowed_clients { 192.168.1.167 timeout 0s }"  # RafexPi4B
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
@@ -250,7 +273,7 @@ El hook `forward` bloquea tráfico WiFi → internet, pero el hook `input`
 (acceso directo al router) no está afectado. Acceder siempre es posible:
 
 ```bash
-# Desde la laptop admin (192.168.1.113) — siempre funciona
+# Desde la laptop admin (192.168.1.146) — siempre funciona
 ssh root@192.168.1.1
 
 # En el router — eliminar tabla y restaurar internet a todos
@@ -306,17 +329,21 @@ ssh -i /opt/keys/captive-portal root@192.168.1.1 \
   "nslookup connectivitycheck.gstatic.com 127.0.0.1"
 # Debe responder: Address: 192.168.1.167
 
-# Si no resuelve:
+# Si no resuelve, validar UCI (fuente real en OpenWrt para runtime dnsmasq):
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
-  "cat /etc/dnsmasq.conf | grep -E '192.168.1.167|captive.localhost.com|dhcp-option=114'"
-# Debe haber líneas address=/.../192.168.1.167
+  "uci show dhcp.@dnsmasq[0] | grep '\.address='"
+# Deben existir líneas address '/dominio/192.168.1.181'
+
+# Ver runtime generado:
+ssh -i /opt/keys/captive-portal root@192.168.1.1 \
+  "grep -E 'address=/(connectivitycheck|captive\\.apple|msftconnecttest|detectportal|captive\\.rafex\\.dev|portal\\.rafex\\.dev|people\\.rafex\\.dev)' /var/etc/dnsmasq*.conf"
 
 # Recargar dnsmasq
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
   "/etc/init.d/dnsmasq reload"
 ```
 
-Si no hay entradas, ejecutar `bash scripts/setup-openwrt.sh`.
+Si no hay entradas, ejecutar `bash scripts/setup-openwrt.sh` (desde mayo/2026 aplica redirecciones por UCI automáticamente).
 
 ---
 
