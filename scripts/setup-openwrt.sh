@@ -270,6 +270,10 @@ address=/$PEOPLE_DOMAIN/$PORTAL_IP
 log_info "Aplicando bloque captive en /etc/dnsmasq.conf..."
 router_ssh "
     rm -f /etc/dnsmasq.d/captive-portal.conf 2>/dev/null || true
+    # Limpiar entradas legacy sueltas fuera del bloque administrado.
+    # Si quedaron address=/dominio/IP de ejecuciones previas, dnsmasq puede
+    # devolver IP incorrecta aunque el bloque nuevo se inserte correctamente.
+    sed -i '/^[[:space:]]*address=\\/\\(connectivitycheck\\.gstatic\\.com\\|connectivitycheck\\.android\\.com\\|clients1\\.google\\.com\\|clients3\\.google\\.com\\|connectivitycheck\\.platform\\.hicloud\\.com\\|connectivitycheck\\.hicloud\\.com\\|connectivitycheck\\.dbankcloud\\.cn\\|neverssl\\.com\\|www\\.neverssl\\.com\\|connect\\.rom\\.miui\\.com\\|connectivitycheck\\.platform\\.miui\\.com\\|wifi\\.vivo\\.com\\.cn\\|connectivitycheck\\.samsung\\.com\\|google\\.com\\|captive\\.apple\\.com\\|appleiphonecell\\.com\\|iphone-otu\\.apple\\.com\\|www\\.apple\\.com\\|www\\.msftconnecttest\\.com\\|msftconnecttest\\.com\\|www\\.msftncsi\\.com\\|msftncsi\\.com\\|detectportal\\.firefox\\.com\\|connectivity-check\\.ubuntu\\.com\\|network-test\\.debian\\.org\\|nmcheck\\.gnome\\.org\\|$CAPTIVE_DOMAIN\\|$CAPTIVE_DOMAIN2\\|$PEOPLE_DOMAIN\\)\\//d' /etc/dnsmasq.conf 2>/dev/null || true
     if grep -q '# --- captive-portal begin ---' /etc/dnsmasq.conf 2>/dev/null; then
         sed -i '/# --- captive-portal begin ---/,/# --- captive-portal end ---/d' /etc/dnsmasq.conf
     fi
