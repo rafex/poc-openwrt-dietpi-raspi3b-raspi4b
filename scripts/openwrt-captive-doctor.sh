@@ -52,7 +52,7 @@ fi
 # 2) DNS de detección captive -> portal_ip
 check_dns_domain() {
   dom="$1"
-  resolved="$(router_ssh "nslookup '$dom' 127.0.0.1 2>/dev/null | awk -v d='$dom' 'BEGIN{f=0} /^Name:[[:space:]]*/{f=(\\$2==d); next} f && /^Address [0-9]+:[[:space:]]*/{print \\$3}' | tail -1")"
+  resolved="$(router_ssh "nslookup '$dom' 127.0.0.1 2>/dev/null | sed -n '/^Name:[[:space:]]*$dom\$/,/^$/p' | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1")"
   if [ "$resolved" = "$PORTAL_IP" ]; then
     check_ok "DNS $dom -> $resolved"
   else
