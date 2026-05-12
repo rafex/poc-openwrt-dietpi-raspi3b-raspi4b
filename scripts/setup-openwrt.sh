@@ -627,7 +627,7 @@ check_dns_redirect() {
     local domain="$1"
     local expected="$2"
     local resolved
-    resolved=$(router_ssh "nslookup $domain 127.0.0.1 2>/dev/null | grep -Eo '([0-9]{1,3}\\.){3}[0-9]{1,3}' | tail -1" 2>/dev/null || echo "")
+    resolved=$(router_ssh "nslookup '$domain' 127.0.0.1 2>/dev/null | awk -v d='$domain' 'BEGIN{f=0} /^Name:[[:space:]]*/{f=(\\$2==d); next} f && /^Address [0-9]+:[[:space:]]*/{print \\$3}' | tail -1" 2>/dev/null || echo "")
     if [ "$resolved" = "$expected" ]; then
         log_ok "dnsmasq: $domain -> $resolved"
     else
