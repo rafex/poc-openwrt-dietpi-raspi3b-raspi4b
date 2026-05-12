@@ -73,12 +73,33 @@ if router_set_exists; then
                 time_str="$PORTAL_TIMEOUT (nuevo)"
             fi
 
+            role="cliente WiFi"
+            is_core=0
             if [ "$ip" = "$ADMIN_IP" ]; then
-                role="ADMIN (nunca expira)"
+                role="ADMIN core"
+                is_core=1
+            elif [ -n "$ADMIN2_IP" ] && [ "$ip" = "$ADMIN2_IP" ]; then
+                role="ADMIN2/Bastion core"
+                is_core=1
+            elif [ "$ip" = "$RASPI4B_IP" ]; then
+                role="Raspi4B AI core"
+                is_core=1
+            elif [ "$ip" = "$RASPI3B_IP" ]; then
+                role="Raspi3B Sensor core"
+                is_core=1
+            elif [ "$ip" = "$PORTAL_NODE_IP" ]; then
+                role="Portal Node core"
+                is_core=1
+            elif [ "$ip" = "$AP_EXTENDER_IP" ]; then
+                role="AP Extender core"
+                is_core=1
             elif [ "$ip" = "$PORTAL_IP" ]; then
-                role="PORTAL (nunca expira)"
-            else
-                role="cliente WiFi"
+                role="PORTAL activo core"
+                is_core=1
+            fi
+
+            if [ "$is_core" -eq 1 ] && [ "$time_str" != "permanente" ]; then
+                role="$role (expira)"
             fi
 
             if [ "$HAS_TIMEOUT" -eq 1 ]; then
@@ -87,6 +108,10 @@ if router_set_exists; then
                 printf '  %-18s  %s\n' "$ip" "$role"
             fi
         done || printf '  (set vacio)\n'
+
+    if printf '%s' "$SET_RAW" | grep -Eq "($ADMIN_IP|$ADMIN2_IP|$RASPI4B_IP|$RASPI3B_IP|$PORTAL_NODE_IP|$AP_EXTENDER_IP|$PORTAL_IP)[^,}]*expires"; then
+        log_warn "Hay IPs core con timeout en $NFT_SET. Revisa el diseño si deben ser realmente permanentes."
+    fi
 else
     printf '  [AVISO] El set %s no existe.\n' "$NFT_SET"
     printf '  Ejecuta: sh scripts/setup-openwrt.sh\n'
