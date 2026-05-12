@@ -1,5 +1,5 @@
 /**
- * sse.ts — conexión SSE al endpoint /events del backend
+ * sse.ts — conexión SSE al endpoint /api/stream del backend
  */
 
 export type SseHandler = (data: string) => void
@@ -10,7 +10,7 @@ let handlers: SseHandler[] = []
 export function connectSse(): void {
   if (source) return
 
-  source = new EventSource('/events')
+  source = new EventSource('/api/stream')
 
   source.onopen = () => {
     setStatus('online', 'En línea')
