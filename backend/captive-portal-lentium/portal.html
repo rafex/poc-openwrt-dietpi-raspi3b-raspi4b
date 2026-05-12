@@ -415,35 +415,111 @@
     return ok;
   }
 
-  // ── OpenStreetMap Nominatim autocomplete ──────────────────────────────────
-  let nominatimTimer = null;
-  function initNominatim(inputEl, suggestionsEl, hiddenEl) {
+  function isLikelyMexicanAddress(value, geo) {
+    const g = geo || {};
+    if (String(g.country || '').toUpperCase() === 'MX') return true;
+    const v = (value || '').toLowerCase();
+    return v.includes('mexico') || v.includes('méxico') || v.includes('cdmx');
+  }
+
+  const MX_STATE_TO_CITIES = {
+    "Aguascalientes": ["Aguascalientes", "Jesús María"],
+    "Baja California": ["Tijuana", "Mexicali", "Ensenada"],
+    "Baja California Sur": ["La Paz", "Los Cabos"],
+    "Campeche": ["Campeche", "Carmen"],
+    "Chiapas": ["Tuxtla Gutiérrez", "Tapachula", "San Cristóbal de las Casas"],
+    "Chihuahua": ["Chihuahua", "Juárez", "Delicias"],
+    "Ciudad de México": ["Álvaro Obregón", "Benito Juárez", "Coyoacán", "Cuauhtémoc", "Gustavo A. Madero", "Iztapalapa", "Miguel Hidalgo", "Tlalpan"],
+    "Coahuila": ["Saltillo", "Torreón", "Monclova"],
+    "Colima": ["Colima", "Manzanillo"],
+    "Durango": ["Durango", "Gómez Palacio"],
+    "Guanajuato": ["León", "Irapuato", "Celaya", "Guanajuato"],
+    "Guerrero": ["Acapulco", "Chilpancingo"],
+    "Hidalgo": ["Pachuca", "Tula de Allende"],
+    "Jalisco": ["Guadalajara", "Zapopan", "Tlaquepaque", "Tlajomulco de Zúñiga", "Puerto Vallarta"],
+    "México": ["Ecatepec", "Naucalpan", "Nezahualcóyotl", "Toluca", "Tlalnepantla"],
+    "Michoacán": ["Morelia", "Uruapan", "Zamora"],
+    "Morelos": ["Cuernavaca", "Jiutepec"],
+    "Nayarit": ["Tepic", "Bahía de Banderas"],
+    "Nuevo León": ["Monterrey", "Guadalupe", "San Nicolás de los Garza", "Apodaca", "Santa Catarina"],
+    "Oaxaca": ["Oaxaca de Juárez", "Salina Cruz"],
+    "Puebla": ["Puebla", "Tehuacán", "San Martín Texmelucan"],
+    "Querétaro": ["Querétaro", "San Juan del Río", "Corregidora"],
+    "Quintana Roo": ["Cancún", "Solidaridad", "Tulum", "Cozumel"],
+    "San Luis Potosí": ["San Luis Potosí", "Soledad de Graciano Sánchez"],
+    "Sinaloa": ["Culiacán", "Mazatlán", "Ahome"],
+    "Sonora": ["Hermosillo", "Cajeme", "Nogales"],
+    "Tabasco": ["Centro", "Cárdenas"],
+    "Tamaulipas": ["Reynosa", "Matamoros", "Nuevo Laredo", "Tampico"],
+    "Tlaxcala": ["Tlaxcala", "Apizaco"],
+    "Veracruz": ["Veracruz", "Xalapa", "Coatzacoalcos", "Poza Rica"],
+    "Yucatán": ["Mérida", "Valladolid"],
+    "Zacatecas": ["Zacatecas", "Fresnillo"]
+  };
+  const MX_STATES = Object.keys(MX_STATE_TO_CITIES);
+
+  function initStateCitySelectors(stateEl, cityEl) {
+    stateEl.innerHTML = '<option value="">Selecciona un estado</option>' +
+      MX_STATES.map(s => `<option value="${s}">${s}</option>`).join('');
+    cityEl.innerHTML = '<option value="">Primero selecciona estado</option>';
+    cityEl.disabled = true;
+
+    stateEl.addEventListener('change', () => {
+      const state = stateEl.value;
+      const cities = MX_STATE_TO_CITIES[state] || [];
+      cityEl.innerHTML = '<option value="">Selecciona municipio/alcaldía</option>' +
+        cities.map(c => `<option value="${c}">${c}</option>`).join('');
+      cityEl.disabled = !state;
+    });
+  }
+
+  // ── Autocomplete via proxy del portal (Nominatim MX) ─────────────────────
+  let proxyAutocompleteTimer = null;
+  function initProxyMxAutocomplete(inputEl, suggestionsEl, hiddenEl, stateEl, cityEl) {
     inputEl.addEventListener('input', () => {
-      clearTimeout(nominatimTimer);
+      clearTimeout(proxyAutocompleteTimer);
       const q = inputEl.value.trim();
       suggestionsEl.innerHTML = '';
+      if (hiddenEl) hiddenEl.value = '';
       if (q.length < 4) return;
-      nominatimTimer = setTimeout(() => {
-        const url = 'https://nominatim.openstreetmap.org/search?format=json&limit=5&addressdetails=1&countrycodes=mx&bounded=1&viewbox=-118.455,32.718,-86.710,14.389&q=' + encodeURIComponent(q);
-        fetch(url, { headers: { 'Accept-Language': 'es' } })
+
+      proxyAutocompleteTimer = setTimeout(() => {
+        const state = stateEl ? stateEl.value.trim() : '';
+        const city = cityEl ? cityEl.value.trim() : '';
+        if (!state || !city) return;
+        const qs = new URLSearchParams({ q, state, city }).toString();
+        fetch(apiUrl('/api/address/search?' + qs), { cache: 'no-store' })
           .then(r => r.json())
-          .then(data => {
+          .then(payload => {
+            const results = Array.isArray(payload.results) ? payload.results : [];
             suggestionsEl.innerHTML = '';
-            data.forEach(item => {
+            results.slice(0, 6).forEach(item => {
               const div = document.createElement('div');
               div.className = 'suggestion-item';
-              div.textContent = item.display_name;
+              div.textContent = item.display || item.display_name || '';
               div.addEventListener('click', () => {
-                inputEl.value = item.display_name;
-                if (hiddenEl) hiddenEl.value = JSON.stringify({ lat: item.lat, lon: item.lon, display: item.display_name });
+                const text = item.display || item.display_name || '';
+                inputEl.value = text;
+                if (hiddenEl) {
+                  hiddenEl.value = JSON.stringify({
+                    source: 'portal-proxy-nominatim',
+                    country: item.country || 'MX',
+                    state: item.state || '',
+                    city: item.city || '',
+                    lat: item.lat || '',
+                    lon: item.lon || '',
+                    display: text
+                  });
+                }
                 suggestionsEl.innerHTML = '';
               });
               suggestionsEl.appendChild(div);
             });
           })
           .catch(() => {});
-      }, 400);
+      }, 250);
     });
+
     // cerrar al hacer click fuera
     document.addEventListener('click', e => {
       if (!inputEl.contains(e.target) && !suggestionsEl.contains(e.target))
@@ -614,9 +690,15 @@
         <label for="gPhone">Número de teléfono celular</label>
         <input id="gPhone" type="tel" placeholder="55 1234 5678" maxlength="20">
 
-        <label for="gAddress">Dirección en México (busca en el mapa)</label>
+        <label for="gState">Estado</label>
+        <select id="gState"></select>
+
+        <label for="gCity">Municipio / Alcaldía</label>
+        <select id="gCity"></select>
+
+        <label for="gAddress">Dirección en México</label>
         <div class="autocomplete-wrap">
-          <input id="gAddress" type="text" placeholder="Calle, colonia, ciudad (México)..." autocomplete="off">
+          <input id="gAddress" type="text" placeholder="Calle y colonia..." autocomplete="off">
           <div id="addressSuggestions"></div>
           <input type="hidden" id="gAddressData">
         </div>
@@ -645,10 +727,16 @@
       makeSocialRow(socialContainer, true);
     });
 
-    initNominatim(
+    const stateEl = document.getElementById('gState');
+    const cityEl = document.getElementById('gCity');
+    initStateCitySelectors(stateEl, cityEl);
+
+    initProxyMxAutocomplete(
       document.getElementById('gAddress'),
       document.getElementById('addressSuggestions'),
-      document.getElementById('gAddressData')
+      document.getElementById('gAddressData'),
+      stateEl,
+      cityEl
     );
 
     document.getElementById('btnInvitado').addEventListener('click', submitInvitado);
@@ -659,6 +747,8 @@
     const apPat   = document.getElementById('gApPat');
     const apMat   = document.getElementById('gApMat');
     const phone   = document.getElementById('gPhone');
+    const stateEl = document.getElementById('gState');
+    const cityEl  = document.getElementById('gCity');
     const address = document.getElementById('gAddress');
     const pwd     = document.getElementById('gPwd');
     const btn     = document.getElementById('btnInvitado');
@@ -671,11 +761,17 @@
       { el: apPat,   test: v => v.length >= 2 },
       { el: apMat,   test: v => v.length >= 2 },
       { el: phone,   test: v => /^[\d\s\-\+]{7,20}$/.test(v) },
-      { el: address, test: v => v.length >= 5 },
+      { el: stateEl, test: v => v.length >= 2 },
+      { el: cityEl,  test: v => v.length >= 2 },
+      { el: address, test: v => {
+          let geo = null;
+          try { geo = JSON.parse(document.getElementById('gAddressData').value || 'null'); } catch(e) {}
+          return isLikelyMexicanAddress(v, geo);
+        } },
       { el: pwd,     test: v => v.length >= 8 },
     ]);
 
-    if (!ok) { showMsg(msg, 'fail', 'Verifica los campos marcados en rojo.'); return; }
+    if (!ok) { showMsg(msg, 'fail', 'Verifica los campos marcados en rojo (la dirección debe ser de México).'); return; }
     if (socials.length === 0) {
       showMsg(msg, 'fail', 'Agrega al menos un usuario de red social.');
       return;
@@ -690,6 +786,8 @@
       apellido_paterno: apPat.value.trim(),
       apellido_materno: apMat.value.trim(),
       telefono:         phone.value.trim(),
+      estado:           stateEl.value.trim(),
+      municipio:        cityEl.value.trim(),
       direccion_texto:  address.value.trim(),
       direccion_geo:    addrData,
       password:         pwd.value,
