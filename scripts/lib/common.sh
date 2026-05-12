@@ -7,13 +7,28 @@
 # =============================================================================
 # Permite sobreescribir IPs/roles sin romper scripts legacy.
 TOPOLOGY_FILE="${TOPOLOGY_FILE:-/etc/demo-openwrt/topology.env}"
-if [ -f "$TOPOLOGY_FILE" ]; then
+COMMON_BASE_DIR="${SCRIPT_DIR:-}"
+if [ -n "$COMMON_BASE_DIR" ] && [ -f "$COMMON_BASE_DIR/lib/topology.env" ]; then
+    REPO_TOPOLOGY="$COMMON_BASE_DIR/lib/topology.env"
+else
+    REPO_TOPOLOGY="/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b/scripts/lib/topology.env"
+fi
+
+# Cargar SIEMPRE defaults del repo (si existen) y luego override local.
+# Esto evita que instalaciones con /etc/demo-openwrt/topology.env antiguo
+# pierdan variables nuevas (ej. ADMIN2_*) y queden en vacío.
+if [ -f "$REPO_TOPOLOGY" ]; then
     # shellcheck disable=SC1090
-    . "$TOPOLOGY_FILE"
+    . "$REPO_TOPOLOGY"
 elif [ -f "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b/scripts/lib/topology.env" ]; then
     # fallback para ejecución directa dentro de la ruta estándar en Raspi
     # shellcheck disable=SC1091
     . "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b/scripts/lib/topology.env"
+fi
+
+if [ -f "$TOPOLOGY_FILE" ]; then
+    # shellcheck disable=SC1090
+    . "$TOPOLOGY_FILE"
 fi
 
 # =============================================================================
