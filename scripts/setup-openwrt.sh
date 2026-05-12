@@ -202,85 +202,53 @@ fi
 # =============================================================================
 log_info "--- FASE B: Configurando dnsmasq para captive portal ---"
 
-# Contenido del archivo de configuracion dnsmasq
-# Dominios que los SO usan para detectar captive portals +
-# dominios de demo de DNS poisoning (suplantacion educativa)
-DNSMASQ_CONTENT="# captive-portal.conf — Generado por setup-openwrt.sh
-# Redirige dominios de deteccion de captive portal a la Pi ($PORTAL_IP)
-# Orden: primero las marcas con mayor presencia en la demo.
+# En algunos builds OpenWrt dnsmasq no aplica /etc/dnsmasq.conf como fuente
+# principal, pero sí aplica UCI (/etc/config/dhcp -> /var/etc/dnsmasq*.conf).
+# Por eso, las redirecciones captive se gestionan por UCI.
+log_info "Configurando redirecciones captive en UCI (dhcp.@dnsmasq[0].address)..."
+router_ssh "sh -s" <<EOF
+set -eu
 
-# ── Android AOSP / Google (Pixel, la mayoria de marcas Android) ─────────────
-address=/connectivitycheck.gstatic.com/$PORTAL_IP
-address=/connectivitycheck.android.com/$PORTAL_IP
-address=/clients1.google.com/$PORTAL_IP
-address=/clients3.google.com/$PORTAL_IP
+# Limpiar entradas address previas para evitar acumulación/duplicados
+while uci -q delete dhcp.@dnsmasq[0].address[-1]; do :; done
 
-# ── Huawei EMUI / HarmonyOS ──────────────────────────────────────────────────
-# Estos dominios son los que usan los Huawei para su deteccion propia de portal.
-# Sin estas entradas dnsmasq no intercepta el check y la notificacion no aparece
-# aunque el DNAT de nftables redirige el trafico HTTP igualmente.
-address=/connectivitycheck.platform.hicloud.com/$PORTAL_IP
-address=/connectivitycheck.hicloud.com/$PORTAL_IP
-address=/connectivitycheck.dbankcloud.cn/$PORTAL_IP
-address=/neverssl.com/$PORTAL_IP
-address=/www.neverssl.com/$PORTAL_IP
+for dom in \
+  connectivitycheck.gstatic.com \
+  connectivitycheck.android.com \
+  clients1.google.com \
+  clients3.google.com \
+  connectivitycheck.platform.hicloud.com \
+  connectivitycheck.hicloud.com \
+  connectivitycheck.dbankcloud.cn \
+  neverssl.com \
+  www.neverssl.com \
+  connect.rom.miui.com \
+  connectivitycheck.platform.miui.com \
+  wifi.vivo.com.cn \
+  connectivitycheck.samsung.com \
+  google.com \
+  captive.apple.com \
+  appleiphonecell.com \
+  iphone-otu.apple.com \
+  www.apple.com \
+  www.msftconnecttest.com \
+  msftconnecttest.com \
+  www.msftncsi.com \
+  msftncsi.com \
+  detectportal.firefox.com \
+  connectivity-check.ubuntu.com \
+  network-test.debian.org \
+  nmcheck.gnome.org \
+  $CAPTIVE_DOMAIN \
+  $CAPTIVE_DOMAIN2 \
+  $PEOPLE_DOMAIN
+do
+  uci add_list dhcp.@dnsmasq[0].address="/\${dom}/$PORTAL_IP"
+done
 
-# ── Xiaomi MIUI / HyperOS ────────────────────────────────────────────────────
-address=/connect.rom.miui.com/$PORTAL_IP
-address=/connectivitycheck.platform.miui.com/$PORTAL_IP
-address=/wifi.vivo.com.cn/$PORTAL_IP
-
-# ── Samsung OneUI ────────────────────────────────────────────────────────────
-address=/connectivitycheck.samsung.com/$PORTAL_IP
-address=/google.com/$PORTAL_IP
-
-# ── Apple iOS / macOS (CaptiveNetworkSupport) ────────────────────────────────
-address=/captive.apple.com/$PORTAL_IP
-address=/appleiphonecell.com/$PORTAL_IP
-address=/iphone-otu.apple.com/$PORTAL_IP
-address=/www.apple.com/$PORTAL_IP
-
-# ── Microsoft Windows (NCSI / NCA) ───────────────────────────────────────────
-address=/www.msftconnecttest.com/$PORTAL_IP
-address=/msftconnecttest.com/$PORTAL_IP
-address=/www.msftncsi.com/$PORTAL_IP
-address=/msftncsi.com/$PORTAL_IP
-
-# ── Mozilla Firefox ──────────────────────────────────────────────────────────
-address=/detectportal.firefox.com/$PORTAL_IP
-
-# ── Ubuntu / Canonical ───────────────────────────────────────────────────────
-address=/connectivity-check.ubuntu.com/$PORTAL_IP
-
-# ── Linux / GNOME / Debian ───────────────────────────────────────────────────
-address=/network-test.debian.org/$PORTAL_IP
-address=/nmcheck.gnome.org/$PORTAL_IP
-
-# ── Dominios propios del portal (acceso manual y DHCP option 114) ────────────
-# captive.rafex  — URL pública de la demo (fácil de comunicar a asistentes)
-# captive.rafex.dev  — fallback sin dominio externo (funciona offline)
-address=/$CAPTIVE_DOMAIN/$PORTAL_IP
-address=/$CAPTIVE_DOMAIN2/$PORTAL_IP
-address=/$PEOPLE_DOMAIN/$PORTAL_IP
-
-"
-
-# Forzar bloque en /etc/dnsmasq.conf (siempre leído por dnsmasq en OpenWrt)
-# y limpiar archivo legado para evitar duplicados.
-log_info "Aplicando bloque captive en /etc/dnsmasq.conf..."
-router_ssh "
-    rm -f /etc/dnsmasq.d/captive-portal.conf 2>/dev/null || true
-    # Limpiar entradas legacy sueltas fuera del bloque administrado.
-    # Si quedaron address=/dominio/IP de ejecuciones previas, dnsmasq puede
-    # devolver IP incorrecta aunque el bloque nuevo se inserte correctamente.
-    sed -i '/^[[:space:]]*address=\\/\\(connectivitycheck\\.gstatic\\.com\\|connectivitycheck\\.android\\.com\\|clients1\\.google\\.com\\|clients3\\.google\\.com\\|connectivitycheck\\.platform\\.hicloud\\.com\\|connectivitycheck\\.hicloud\\.com\\|connectivitycheck\\.dbankcloud\\.cn\\|neverssl\\.com\\|www\\.neverssl\\.com\\|connect\\.rom\\.miui\\.com\\|connectivitycheck\\.platform\\.miui\\.com\\|wifi\\.vivo\\.com\\.cn\\|connectivitycheck\\.samsung\\.com\\|google\\.com\\|captive\\.apple\\.com\\|appleiphonecell\\.com\\|iphone-otu\\.apple\\.com\\|www\\.apple\\.com\\|www\\.msftconnecttest\\.com\\|msftconnecttest\\.com\\|www\\.msftncsi\\.com\\|msftncsi\\.com\\|detectportal\\.firefox\\.com\\|connectivity-check\\.ubuntu\\.com\\|network-test\\.debian\\.org\\|nmcheck\\.gnome\\.org\\|$CAPTIVE_DOMAIN\\|$CAPTIVE_DOMAIN2\\|$PEOPLE_DOMAIN\\)\\//d' /etc/dnsmasq.conf 2>/dev/null || true
-    if grep -q '# --- captive-portal begin ---' /etc/dnsmasq.conf 2>/dev/null; then
-        sed -i '/# --- captive-portal begin ---/,/# --- captive-portal end ---/d' /etc/dnsmasq.conf
-    fi
-    printf '\n# --- captive-portal begin ---\n%s\n# --- captive-portal end ---\n' \
-        '$DNSMASQ_CONTENT' >> /etc/dnsmasq.conf
-"
-log_ok "Configuracion captive insertada en /etc/dnsmasq.conf"
+uci commit dhcp
+EOF
+log_ok "Redirecciones captive aplicadas por UCI"
 
 # Configurar DHCP lease time a 120 minutos via UCI
 # Razon: al reconectar, el dispositivo obtiene nueva IP → no esta en allowed_clients → portal
