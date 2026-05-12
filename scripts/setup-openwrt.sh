@@ -220,6 +220,12 @@ for dom in \
   connectivitycheck.platform.hicloud.com \
   connectivitycheck.hicloud.com \
   connectivitycheck.dbankcloud.cn \
+  connectivitycheck.platform.dbankcloud.com \
+  hicloud.com \
+  www.hicloud.com \
+  httpdns.hicloud.com \
+  dbankcloud.com \
+  www.dbankcloud.com \
   neverssl.com \
   www.neverssl.com \
   connect.rom.miui.com \
@@ -245,6 +251,10 @@ for dom in \
 do
   uci add_list dhcp.@dnsmasq[0].address="/\${dom}/$PORTAL_IP"
 done
+
+# Endurecer captive para clientes que prefieren AAAA/CNAME (Huawei y similares).
+# Evita que el probe de conectividad salte a IPv6 pública y no abra popup.
+uci set dhcp.@dnsmasq[0].filter_aaaa='1'
 
 uci commit dhcp
 EOF

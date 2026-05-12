@@ -65,9 +65,19 @@ check_dns_domain captive.apple.com
 check_dns_domain www.msftconnecttest.com
 check_dns_domain connectivitycheck.platform.hicloud.com
 check_dns_domain connectivitycheck.hicloud.com
+check_dns_domain connectivitycheck.platform.dbankcloud.com
+check_dns_domain hicloud.com
 check_dns_domain neverssl.com
 check_dns_domain "$CAPTIVE_DOMAIN"
 check_dns_domain "$PEOPLE_DOMAIN"
+
+# 2.1) Validar hardening AAAA en dnsmasq (evita bypass IPv6 de probes captive)
+FILTER_AAAA="$(router_ssh "uci -q get dhcp.@dnsmasq[0].filter_aaaa 2>/dev/null || true")"
+if [ "$FILTER_AAAA" = "1" ]; then
+  check_ok "dnsmasq filter_aaaa=1"
+else
+  check_warn "dnsmasq filter_aaaa no activo (actual: ${FILTER_AAAA:-<vacío>})"
+fi
 
 # 3) nftables: tabla, dnat y permanentes
 if router_table_exists; then
