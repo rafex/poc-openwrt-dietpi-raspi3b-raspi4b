@@ -41,6 +41,21 @@ bash scripts/setup-openwrt.sh \
 bash scripts/openwrt-captive-doctor.sh --portal-ip 192.168.1.181 --portal-port 80
 ```
 
+## Actualización 2026-05-12 (homologación OpenWrt)
+
+- Se incorporó `ADMIN2`/bastión como nodo core:
+  - `ADMIN2_IP=192.168.1.138`
+  - `ADMIN2_MAC=0c:4d:e9:bf:6e:91`
+  - Reserva DHCP `infinite` + bypass permanente en `nftables`.
+- En esta topología `split_portal`, el portal activo vive en la misma Raspi del sensor:
+  - `PORTAL_IP=192.168.1.181`
+  - `AI_IP=192.168.1.167`
+- `setup-openwrt.sh` ahora aplica redirecciones captive DNS por UCI (`dhcp.@dnsmasq[0].address`),
+  no por edición directa de `/etc/dnsmasq.conf`, para compatibilidad con builds OpenWrt que
+  generan runtime config en `/var/etc/dnsmasq*.conf`.
+- Se añadió script para rotar contraseña de root del router:
+  - `bash scripts/openwrt-set-password.sh`
+
 ---
 
 ## Dispositivos y prerequisitos

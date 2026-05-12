@@ -11,6 +11,20 @@ PoC educativa de seguridad en redes públicas que combina:
 - MQTT (Mosquitto) como cola de mensajes entre el sensor y el analizador IA
 - SQLite como persistencia de batches y análisis
 
+## Actualización operativa (12 de mayo de 2026)
+
+- Topología operativa actual validada:
+  - `TOPOLOGY=split_portal`
+  - `PORTAL_IP=192.168.1.181` (portal + sensor en la misma Raspi3B)
+  - `AI_IP=192.168.1.167` (RafexPi4B)
+- Bastión/admin secundario agregado como nodo core:
+  - `ADMIN2_IP=192.168.1.138`
+  - `ADMIN2_MAC=0c:4d:e9:bf:6e:91`
+  - DHCP reservado (`infinite`) + bypass permanente en nftables.
+- En OpenWrt, redirecciones captive DNS se gestionan por UCI
+  (`dhcp.@dnsmasq[0].address`) para compatibilidad con builds que no aplican
+  `/etc/dnsmasq.conf` como fuente principal de runtime.
+
 ## Hito 1 (completado)
 
 Estado al **22 de abril de 2026**:
@@ -350,10 +364,12 @@ ssh-ed25519 AAAAC3... sensor@raspi3b
 - **No usar `systemctl`** — usar `/etc/init.d/`
 - Overlay: ~840KB — no instalar paquetes innecesarios
 - Dropbear: opciones SSH básicas únicamente
-- Para captive portal usar bloque en `/etc/dnsmasq.conf` (ruta confiable en OpenWrt)
+- Para captive portal, preferir UCI:
+  - `dhcp.lan.dhcp_option` para options 6 y 114
+  - `dhcp.@dnsmasq[0].address` para dominios de detección captive y dominios propios
 - Configurar por UCI en `dhcp.lan.dhcp_option`:
   - `6,192.168.1.1` (DNS del router)
-  - `114,http://192.168.1.167/portal` (RFC 7710/8910)
+  - `114,http://captive.rafex.dev/portal` (RFC 7710/8910)
 - Mantener dominio fallback `captive.rafex.dev` apuntando al portal
 
 ### DietPi (ambas Raspis)
@@ -368,3 +384,4 @@ ssh-ed25519 AAAAC3... sensor@raspi3b
 ### Regla de oro
 **`192.168.1.113` (admin) y `192.168.1.181` (RafexPi3B) NUNCA pierden acceso a internet.**
 `router_add_ip` en `common.sh` aplica `timeout 0s` automáticamente para admin, portal y ambas Raspis.
+Admin2/bastión `192.168.1.138` también debe mantenerse con bypass permanente.

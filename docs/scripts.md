@@ -266,17 +266,22 @@ sudo bash scripts/setup-raspi4b-portals.sh --only-verify
 ```bash
 bash scripts/setup-openwrt.sh
 bash scripts/setup-openwrt.sh --topology legacy
-bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.182 --ai-ip 192.168.1.167
+bash scripts/setup-openwrt.sh --topology split_portal --portal-ip 192.168.1.181 --ai-ip 192.168.1.167
 ```
 
 | Fase | Qué hace |
 |---|---|
 | Pre-flight | Verifica overlay, interfaz `phy0-ap0`, SSH |
 | A | Agrega llave pública a `/etc/dropbear/authorized_keys` |
-| B | Configura dnsmasq: lease `120m`, option `6`, option `114`, `captive.rafex.dev` |
+| B | Configura dnsmasq por UCI: lease `120m`, option `6`, option `114`, `dhcp.@dnsmasq[0].address` para dominios captive |
 | C | Tabla nftables `ip captive`: permanentes admin+Pi4B+Pi3B (timeout 0s), clientes 120m |
-| C.1 | Reservas DHCP UCI permanentes para ambas Raspis |
+| C.1 | Reservas DHCP UCI permanentes para nodos core (admin, admin2/bastión, Raspis, portal-node, AP-extender) |
 | D | Verificación completa |
+
+Notas:
+- En el modo operativo actual, `split_portal` usa `PORTAL_IP=192.168.1.181` (portal+sensor en la misma Raspi3B).
+- Si ejecutas el doctor desde distintas máquinas, asegúrate de tener homologado `/etc/demo-openwrt/topology.env`
+  o exportar `CAPTIVE_DOMAIN`, `CAPTIVE_DOMAIN2`, `PEOPLE_DOMAIN` para evitar falsos positivos.
 
 ---
 
@@ -646,8 +651,15 @@ bash scripts/openwrt-list-connected.sh
 Diagnóstico classic captive:
 
 ```bash
-bash scripts/openwrt-captive-doctor.sh --portal-ip 192.168.1.181 --portal-port 8080
+bash scripts/openwrt-captive-doctor.sh --portal-ip 192.168.1.181 --portal-port 80
 bash scripts/openwrt-wifi-ap-doctor.sh
+```
+
+Cambio de contraseña root en OpenWrt:
+
+```bash
+bash scripts/openwrt-set-password.sh
+bash scripts/openwrt-set-password.sh --password 'ClaveSeguraLarga'
 ```
 
 Estado Raspi3B sensor + portal:

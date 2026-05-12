@@ -329,17 +329,21 @@ ssh -i /opt/keys/captive-portal root@192.168.1.1 \
   "nslookup connectivitycheck.gstatic.com 127.0.0.1"
 # Debe responder: Address: 192.168.1.167
 
-# Si no resuelve:
+# Si no resuelve, validar UCI (fuente real en OpenWrt para runtime dnsmasq):
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
-  "cat /etc/dnsmasq.conf | grep -E '192.168.1.167|captive.rafex.dev|dhcp-option=114'"
-# Debe haber líneas address=/.../192.168.1.167
+  "uci show dhcp.@dnsmasq[0] | grep '\.address='"
+# Deben existir líneas address '/dominio/192.168.1.181'
+
+# Ver runtime generado:
+ssh -i /opt/keys/captive-portal root@192.168.1.1 \
+  "grep -E 'address=/(connectivitycheck|captive\\.apple|msftconnecttest|detectportal|captive\\.rafex\\.dev|portal\\.rafex\\.dev|people\\.rafex\\.dev)' /var/etc/dnsmasq*.conf"
 
 # Recargar dnsmasq
 ssh -i /opt/keys/captive-portal root@192.168.1.1 \
   "/etc/init.d/dnsmasq reload"
 ```
 
-Si no hay entradas, ejecutar `bash scripts/setup-openwrt.sh`.
+Si no hay entradas, ejecutar `bash scripts/setup-openwrt.sh` (desde mayo/2026 aplica redirecciones por UCI automáticamente).
 
 ---
 
