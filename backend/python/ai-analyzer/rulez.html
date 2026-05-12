@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Analyzer - Rulez</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:980px;margin:24px auto;padding:0 12px;background:#0b1220;color:#e5e7eb}
+    a{color:#93c5fd}.nav{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    pre{border:1px solid #1f2937;background:#111827;border-radius:8px;padding:10px;white-space:pre-wrap}
+  </style>
+</head>
+<body>
+  <h1>AI Analyzer - Rulez</h1>
+  <div class="nav">
+    <a href="/dashboard">dashboard</a><a href="/terminal">terminal</a><a href="/rulez">rulez</a><a href="/chat">chat</a><a href="/reports">reports</a>
+  </div>
+  <pre id="rules">cargando...</pre>
+  <script>
+    fetch('/api/rulez').then(r=>r.json()).then(d=>{
+      document.getElementById('rules').textContent = JSON.stringify(d,null,2);
+    }).catch(e=>{
+      document.getElementById('rules').textContent = String(e);
+    });
+  </script>
+</body>
+</html>

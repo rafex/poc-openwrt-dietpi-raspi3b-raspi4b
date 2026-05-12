@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>AI Analyzer - Dashboard</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:980px;margin:24px auto;padding:0 12px;background:#0b1220;color:#e5e7eb}
+    a{color:#93c5fd} .nav{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    .box{background:#111827;border:1px solid #1f2937;border-radius:10px;padding:12px;margin-top:10px}
+    pre{white-space:pre-wrap;word-break:break-word}
+  </style>
+</head>
+<body>
+  <h1>AI Analyzer - Dashboard</h1>
+  <div class="nav">
+    <a href="/dashboard">dashboard</a><a href="/terminal">terminal</a><a href="/rulez">rulez</a><a href="/chat">chat</a><a href="/reports">reports</a>
+  </div>
+  <div class="box"><h3>Estado</h3><pre id="stats">cargando...</pre></div>
+  <div class="box"><h3>Analisis recientes</h3><pre id="history">cargando...</pre></div>
+  <script>
+    async function load(){
+      const stats = await fetch('/api/stats').then(r=>r.json()).catch(e=>({error:String(e)}));
+      const hist = await fetch('/api/history?limit=5').then(r=>r.json()).catch(e=>({error:String(e)}));
+      document.getElementById('stats').textContent = JSON.stringify(stats,null,2);
+      document.getElementById('history').textContent = JSON.stringify(hist,null,2);
+    }
+    load();
+    setInterval(load,10000);
+  </script>
+</body>
+</html>
