@@ -36,6 +36,8 @@ export default defineConfig({
       input: {
         index:     resolve(__dirname, 'index.html'),
         dashboard: resolve(__dirname, 'dashboard.html'),
+        actions:   resolve(__dirname, 'actions.html'),
+        devices:   resolve(__dirname, 'devices.html'),
         chat:      resolve(__dirname, 'chat.html'),
         terminal:  resolve(__dirname, 'terminal.html'),
         rulez:     resolve(__dirname, 'rulez.html'),

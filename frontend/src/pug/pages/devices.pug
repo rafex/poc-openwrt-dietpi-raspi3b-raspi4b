@@ -1,0 +1,152 @@
+- var pageTitle = 'Dispositivos'; var pageId = 'devices'; var mainScript = '/src/ts/devices.ts';
+include /includes/_layout.pug
+
+block content
+  .page-header.animate__animated.animate__fadeInDown
+    h1 📱 Perfiles de Dispositivos
+    p.subtitle Identificación heurística de dispositivos en la red
+
+  .stats-grid
+    .stat-card.animate__animated.animate__fadeInUp
+      .stat-icon 📱
+      .stat-label iPhones / iPads
+      .stat-value#stat-ios —
+    .stat-card.animate__animated.animate__fadeInUp(style="animation-delay:.1s")
+      .stat-icon 🤖
+      .stat-label Dispositivos Android
+      .stat-value#stat-android —
+    .stat-card.animate__animated.animate__fadeInUp(style="animation-delay:.2s")
+      .stat-icon 📺
+      .stat-label Smart TVs
+      .stat-value#stat-smart-tv —
+    .stat-card.animate__animated.animate__fadeInUp(style="animation-delay:.3s")
+      .stat-icon 💻
+      .stat-label Laptops / Desktops
+      .stat-value#stat-laptop —
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Dispositivos identificados
+      .section-controls
+        input#filter-type.filter-input(type="text" placeholder="Filtrar por IP o tipo...")
+        button.btn.btn-sm#btn-refresh-devices ↻ Actualizar
+    .table-wrap
+      table.data-table#devices-table
+        thead
+          tr
+            th IP del Dispositivo
+            th Tipo detectado
+            th Confianza
+            th Indicadores clave
+            th Última actividad
+        tbody
+          tr
+            td.text-muted(colspan="5") — Cargando perfiles...
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Distribución por tipo
+    .chart-container
+      #device-type-chart.chart-grid
+        p.text-muted (cargando...)
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Eventos en vivo (SSE)
+    #sse-log.log-box(aria-live="polite")
+      p.text-muted Escuchando eventos...
+
+  style.
+    .filter-input {
+      padding: 0.4rem 0.8rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    .filter-input:focus {
+      border-color: #667eea;
+    }
+    .section-controls {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      margin-left: auto;
+    }
+    .confidence-bar {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .confidence-fill {
+      height: 8px;
+      border-radius: 4px;
+      background: linear-gradient(90deg, #667eea, #764ba2);
+      min-width: 4px;
+    }
+    .confidence-label {
+      font-size: 0.85rem;
+      color: #555;
+      white-space: nowrap;
+    }
+    .device-type-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.25rem 0.65rem;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    .badge-ios      { background: #e8f4fd; color: #0066cc; }
+    .badge-android  { background: #e8f5e9; color: #2e7d32; }
+    .badge-smart_tv { background: #fff3e0; color: #e65100; }
+    .badge-iot      { background: #fce4ec; color: #c62828; }
+    .badge-laptop   { background: #f3e5f5; color: #6a1b9a; }
+    .badge-unknown  { background: #f5f5f5; color: #757575; }
+    .reasons-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.3rem;
+    }
+    .reason-tag {
+      background: #f0f0f0;
+      color: #444;
+      border-radius: 4px;
+      padding: 0.1rem 0.5rem;
+      font-size: 0.75rem;
+      font-family: monospace;
+    }
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    .chart-card {
+      padding: 1.25rem;
+      border-radius: 10px;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .chart-card .chart-icon {
+      font-size: 2rem;
+      margin-bottom: 0.5rem;
+    }
+    .chart-card .chart-count {
+      font-size: 2rem;
+      font-weight: 700;
+    }
+    .chart-card .chart-label {
+      font-size: 0.85rem;
+      color: #666;
+      margin-top: 0.25rem;
+    }
+    .card-ios      { background: linear-gradient(135deg,#e8f4fd,#c9e3f7); }
+    .card-android  { background: linear-gradient(135deg,#e8f5e9,#c8e6c9); }
+    .card-smart_tv { background: linear-gradient(135deg,#fff3e0,#ffe0b2); }
+    .card-iot      { background: linear-gradient(135deg,#fce4ec,#f8bbd9); }
+    .card-laptop   { background: linear-gradient(135deg,#f3e5f5,#e1bee7); }
+    .card-unknown  { background: linear-gradient(135deg,#f5f5f5,#e0e0e0); }
+    .text-muted { color: #999; font-style: italic; }
