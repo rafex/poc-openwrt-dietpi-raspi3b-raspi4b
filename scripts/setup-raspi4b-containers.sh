@@ -402,20 +402,67 @@ _check_image_arch() {
     esac
 }
 
+# ── Detener servicios y contenedores existentes ───────────────────────────────
+# Evita "Address already in use" en :5000 o :80 al redesplegar.
+# Orden correcto: systemd primero (para que no reinicie el contenedor),
+# luego los contenedores podman.
+_stop_backend_services() {
+    log_info "─── Deteniendo servicios backend existentes ──────────────────────────"
+
+    # 1. Detener unidad systemd si está activa (impide que reinicie el contenedor)
+    if systemctl is-active --quiet ai-analyzer.service 2>/dev/null; then
+        log_info "Deteniendo systemd ai-analyzer.service ..."
+        run_cmd systemctl stop ai-analyzer.service || true
+    fi
+
+    # 2. Detener y eliminar cualquier contenedor que pueda ocupar el puerto 5000
+    for old_name in ai-analyzer ai-analyzer-java ai-analyzer-python; do
+        if $PODMAN_BIN container exists "$old_name" 2>/dev/null; then
+            local state
+            state="$($PODMAN_BIN inspect --format '{{.State.Status}}' "$old_name" 2>/dev/null || echo unknown)"
+            log_info "Contenedor $old_name encontrado (estado: $state) — deteniendo y eliminando..."
+            run_cmd $PODMAN_BIN stop -t 10 "$old_name" 2>/dev/null || true
+            run_cmd $PODMAN_BIN rm -f "$old_name" 2>/dev/null || true
+        fi
+    done
+
+    # 3. Verificar que el puerto 5000 está libre antes de continuar
+    if ss -tlnp 2>/dev/null | grep -q ':5000 '; then
+        log_warn "El puerto 5000 sigue ocupado. Proceso usando el puerto:"
+        ss -tlnp 2>/dev/null | grep ':5000 ' || true
+        log_warn "Esperando 5s para que el proceso libere el puerto..."
+        sleep 5
+        if ss -tlnp 2>/dev/null | grep -q ':5000 '; then
+            die "Puerto 5000 aún ocupado. Ejecuta manualmente: fuser -k 5000/tcp"
+        fi
+    fi
+    log_ok "Puerto 5000 libre — listo para desplegar"
+}
+
+_stop_web_services() {
+    if systemctl is-active --quiet ai-analyzer-web.service 2>/dev/null; then
+        log_info "Deteniendo systemd ai-analyzer-web.service ..."
+        run_cmd systemctl stop ai-analyzer-web.service || true
+    fi
+
+    if $PODMAN_BIN container exists "$CONTAINER_WEB" 2>/dev/null; then
+        local state
+        state="$($PODMAN_BIN inspect --format '{{.State.Status}}' "$CONTAINER_WEB" 2>/dev/null || echo unknown)"
+        log_info "Contenedor $CONTAINER_WEB encontrado (estado: $state) — deteniendo y eliminando..."
+        run_cmd $PODMAN_BIN stop -t 10 "$CONTAINER_WEB" 2>/dev/null || true
+        run_cmd $PODMAN_BIN rm -f "$CONTAINER_WEB" 2>/dev/null || true
+    fi
+}
+
 _deploy_backend() {
     local image_name="$1"
     local build_mode="$2"   # pull | local
 
     log_info "─── Backend ($BACKEND) ──────────────────────────────────────────────"
 
-    # Eliminar contenedor anterior si existe (sea java o python)
-    for old_name in ai-analyzer ai-analyzer-java ai-analyzer-python; do
-        if $PODMAN_BIN container exists "$old_name" 2>/dev/null; then
-            log_info "Eliminando contenedor anterior: $old_name"
-            run_cmd $PODMAN_BIN stop -t 10 "$old_name" 2>/dev/null || true
-            run_cmd $PODMAN_BIN rm -f "$old_name" 2>/dev/null || true
-        fi
-    done
+    # Detener servicios/contenedores existentes ANTES de desplegar
+    # (evita "Address already in use" en :5000)
+    _stop_backend_services
 
     if [[ "$build_mode" == "local" ]]; then
         _build_java_local "$image_name"
@@ -555,11 +602,8 @@ _deploy_web() {
 
     log_info "─── Web (nginx + frontend) ──────────────────────────────────────────"
 
-    if $PODMAN_BIN container exists "$CONTAINER_WEB" 2>/dev/null; then
-        log_info "Eliminando contenedor anterior: $CONTAINER_WEB"
-        run_cmd $PODMAN_BIN stop -t 10 "$CONTAINER_WEB" 2>/dev/null || true
-        run_cmd $PODMAN_BIN rm -f "$CONTAINER_WEB" 2>/dev/null || true
-    fi
+    # Detener servicios/contenedores web existentes ANTES de desplegar
+    _stop_web_services
 
     if ! $NO_PULL; then
         _pull_image_with_fallback "$image_name"

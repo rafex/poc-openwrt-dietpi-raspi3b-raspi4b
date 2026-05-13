@@ -117,6 +117,81 @@ sudo bash scripts/setup-raspi4b-llm.sh --only-verify
 
 ---
 
+## setup-raspi4b-llama-build.sh
+
+**Propósito:** clonar, compilar e instalar `llama.cpp` optimizado para Cortex-A72 (Pi 4B) en `/usr/local/bin/`.  
+**Ejecutar en:** RafexPi4B (como root)  
+**Idempotente:** Sí — omite la compilación si los binarios ya existen (salvo `--force`)
+
+```bash
+sudo bash scripts/setup-raspi4b-llama-build.sh
+sudo bash scripts/setup-raspi4b-llama-build.sh --force          # recompila aunque exista
+sudo bash scripts/setup-raspi4b-llama-build.sh --dry-run        # muestra qué haría
+sudo bash scripts/setup-raspi4b-llama-build.sh --branch b4946   # rama/tag específico de llama.cpp
+```
+
+Qué hace:
+
+| Paso | Acción |
+|---|---|
+| 1 | Instala dependencias: `cmake build-essential libopenblas-dev git` |
+| 2 | Clona `github.com/ggerganov/llama.cpp` en `/opt/repository/llama.cpp` (o actualiza) |
+| 3 | `cmake` con flags Cortex-A72: `-march=armv8-a+crc+simd -mtune=cortex-a72 -O3 -fno-plt -DGGML_BLAS=ON` |
+| 4 | `cmake --build` con todos los núcleos (`nproc`) |
+| 5 | Instala binarios en `/usr/local/bin/`: `llama-server llama-cli llama-run llama-bench llama-quantize llama-embedding` |
+
+Build dir: `/opt/repository/llama.cpp/build-raspi4b`  
+Tiempo de compilación: ~15–30 minutos en Pi 4B.
+
+---
+
+## llama-compile.sh
+
+**Propósito:** compilar `llama.cpp` desde un directorio existente con CMake optimizado para Cortex-A72. A diferencia de `setup-raspi4b-llama-build.sh`, **no clona ni instala** — solo compila en el directorio que tú indiques.  
+**Nota:** llama.cpp ya no usa `make` — migró a CMake exclusivamente.
+
+```bash
+bash scripts/llama-compile.sh
+bash scripts/llama-compile.sh --llama-dir=/opt/repository/llama.cpp
+bash scripts/llama-compile.sh --llama-dir=~/llama.cpp --build-dir=build-rpi4
+bash scripts/llama-compile.sh --llama-dir=~/llama.cpp --clean
+bash scripts/llama-compile.sh --llama-dir=~/llama.cpp --only-clean
+bash scripts/llama-compile.sh --llama-dir=~/llama.cpp --jobs=2
+bash scripts/llama-compile.sh --dry-run
+```
+
+Variables de entorno alternativas:
+
+```bash
+LLAMA_DIR=~/llama.cpp bash scripts/llama-compile.sh
+BUILD_DIR=build-custom  bash scripts/llama-compile.sh
+```
+
+Flags del script:
+
+| Flag | Descripción |
+|---|---|
+| `--llama-dir=PATH` | Ruta al repositorio de llama.cpp (default: `/opt/repository/llama.cpp`) |
+| `--build-dir=NAME` | Nombre del subdirectorio de build (default: `build-rpi4`) |
+| `--jobs=N` | Número de jobs paralelos (default: `nproc`) |
+| `--clean` | Elimina el build dir antes de compilar |
+| `--only-clean` | Solo limpia, no compila |
+| `--dry-run` | Muestra comandos sin ejecutarlos |
+
+Flags de CMake aplicados:
+
+| Flag | Propósito |
+|---|---|
+| `-DCMAKE_BUILD_TYPE=Release` | Optimizaciones completas, sin debug symbols |
+| `-DGGML_BLAS=ON` | Activa backend BLAS (si `libopenblas-dev` está instalado) |
+| `-DGGML_BLAS_VENDOR=OpenBLAS` | Usa OpenBLAS |
+| `-mcpu=cortex-a72 -mtune=cortex-a72` | CPU target exacto de la Pi 4B |
+| `-O3` | Máximo nivel de optimización |
+
+Post-compilación: lista los binarios generados en `<build-dir>/bin/` con su tamaño e imprime instrucciones de instalación en `/usr/local/bin/`.
+
+---
+
 ## setup-raspi4b-ai-analyzer-java.sh
 
 **Propósito:** descargar e instalar el binario GraalVM nativo de `ai-analyzer` + `.so` Rust.  
@@ -144,11 +219,13 @@ sudo bash scripts/setup-raspi4b-ai-analyzer-java.sh --dry-run
 ## setup-raspi4b-containers.sh
 
 **Propósito:** desplegar en Raspi4B el stack desde imágenes preconstruidas en `ghcr.io` (sin compilar localmente).  
-**Idempotente:** Sí
+**Idempotente:** Sí  
+**Stop-before-modify:** detiene automáticamente el servicio systemd y los contenedores existentes antes de redesplegar, para evitar `BindException: Address already in use` en el puerto 5000.
 
 ```bash
 sudo bash scripts/setup-raspi4b-containers.sh
 sudo bash scripts/setup-raspi4b-containers.sh --release=v1.2.3
+sudo bash scripts/setup-raspi4b-containers.sh --release=preview --backend=java
 sudo bash scripts/setup-raspi4b-containers.sh --backend=python
 sudo bash scripts/setup-raspi4b-containers.sh --skip-web
 sudo bash scripts/setup-raspi4b-containers.sh --skip-backend
@@ -158,6 +235,8 @@ Qué hace:
 
 | Paso | Acción |
 |---|---|
+| 0 | **Para** `ai-analyzer.service` (systemd) → para/elimina contenedores backend → verifica que el puerto 5000 esté libre |
+| 0b | **Para** `ai-analyzer-web.service` (systemd) → para/elimina contenedor web (si aplica) |
 | 1 | Login opcional a GHCR (`GHCR_TOKEN`) |
 | 2 | Pull `linux/arm64` de imágenes según backend/flags |
 | 3 | Crea/recrea contenedores podman (`ai-analyzer`, `ai-analyzer-web`) |
@@ -168,6 +247,8 @@ Imágenes usadas:
 - `ghcr.io/<owner>/poc-ai-analyzer-java:<release>`
 - `ghcr.io/<owner>/poc-ai-analyzer-python:<release>`
 - `ghcr.io/<owner>/poc-ai-analyzer-web:<release>`
+
+El script para el servicio systemd **primero** (antes de eliminar el contenedor) porque de lo contrario systemd podría reiniciarlo automáticamente durante el redespliegue.
 
 Atajo con `just` (desde tu laptop/admin):
 
@@ -601,10 +682,14 @@ bash scripts/secrets-push-key.sh --host 192.168.1.167
 | `health-raspi3b-sensor.sh` | Health del sensor en RafexPi3B |
 | `health-raspi3b-portal.sh` | Health del portal en RafexPi3B (topología split) |
 | `health-all.sh` | Health check de todos los nodos |
+| `sensor-status.sh` | Estado completo sensor + llama-server + ai-analyzer + dashboard |
 
 ```bash
 bash scripts/health-raspi4b.sh
 bash scripts/health-all.sh
+bash scripts/sensor-status.sh
+bash scripts/sensor-status.sh --follow   # tail -f de logs del analizador
+bash scripts/sensor-status.sh --test     # tests funcionales automáticos
 ```
 
 ---
@@ -617,6 +702,16 @@ bash scripts/llm-control.sh off    # apaga LLM (libera CPU/RAM)
 bash scripts/llm-control.sh on     # enciende LLM
 bash scripts/llm-control.sh restart
 bash scripts/llm-status.sh         # diagnóstico detallado
+```
+
+### llama-curl-check.sh
+
+Smoke tests HTTP contra `llama-server`. Prueba: `/health`, `/props`, `/metrics`, `/tokenize`, `/completion`, `/embedding`.
+
+```bash
+bash scripts/llama-curl-check.sh
+bash scripts/llama-curl-check.sh --host 127.0.0.1 --port 8081
+bash scripts/llama-curl-check.sh --timeout 12
 ```
 
 ---
@@ -647,6 +742,27 @@ Descubrimiento de clientes conectados:
 ```bash
 bash scripts/openwrt-list-connected.sh
 ```
+
+Expulsión de clientes (`openwrt-kick-client.sh`):
+
+```bash
+# Expulsar (vuelve al portal cautivo):
+bash scripts/openwrt-kick-client.sh 192.168.1.55
+bash scripts/openwrt-kick-client.sh aa:bb:cc:dd:ee:ff
+
+# Expulsar y bloquear permanentemente:
+bash scripts/openwrt-kick-client.sh 192.168.1.55 --permanente
+
+# Gestión de bloqueos:
+bash scripts/openwrt-kick-client.sh --lista                       # ver bloqueados
+bash scripts/openwrt-kick-client.sh --desbloquear 192.168.1.55   # quitar bloqueo
+```
+
+Qué hace `kick-client`:
+1. Detecta si el argumento es IP o MAC
+2. Resuelve el par IP↔MAC con ARP + leases de dnsmasq
+3. Elimina la IP del set nftables `allowed_clients`
+4. Desautentica el cliente del WiFi con `hostapd_cli`
 
 Diagnóstico classic captive:
 
@@ -679,6 +795,47 @@ bash scripts/openwrt-dns-spoof-enable.sh                    # activa rafex.dev
 bash scripts/openwrt-dns-spoof-enable.sh --domain otro.com
 bash scripts/openwrt-dns-spoof-disable.sh
 ```
+
+---
+
+## portal-reset-demo.sh
+
+**Propósito:** resetear el estado del portal cautivo para empezar una nueva demo limpia.  
+**Ejecutar en:** máquina admin (con acceso SSH al router y la Pi)
+
+```bash
+bash scripts/portal-reset-demo.sh               # interactivo (pide confirmación)
+bash scripts/portal-reset-demo.sh --force       # sin confirmación
+bash scripts/portal-reset-demo.sh --db-only     # solo limpiar BD SQLite
+bash scripts/portal-reset-demo.sh --nft-only    # solo limpiar nftables
+bash scripts/portal-reset-demo.sh --status      # mostrar estado sin borrar
+```
+
+Qué hace:
+1. Trunca tablas `clientes` e `invitados` en la BD SQLite del portal
+2. Elimina IPs de invitados del set nftables `allowed_clients` en el router (conserva IPs de infraestructura con `timeout 0s`)
+3. Reinicia el contenedor backend para empezar limpio
+
+---
+
+## tag-release.sh
+
+**Propósito:** crear y opcionalmente empujar el tag de release de GitHub.
+
+```bash
+./scripts/tag-release.sh                           # crea tag, NO empuja
+./scripts/tag-release.sh --push                    # crea tag Y empuja a origin
+./scripts/tag-release.sh --dry-run                 # muestra qué haría
+./scripts/tag-release.sh --version 0.5.0 --push   # override de versión
+```
+
+Comportamiento por rama:
+
+| Rama | Tag generado | Tipo |
+|---|---|---|
+| `main` | `v<VERSION>` | Release de producción |
+| `develop` | `v<VERSION>-preview` | Pre-release para pruebas en Pi |
+| otra | `v<VERSION>-preview` | Preview con advertencia |
 
 ---
 
