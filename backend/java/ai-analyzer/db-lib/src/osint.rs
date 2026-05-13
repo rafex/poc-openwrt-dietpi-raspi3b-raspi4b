@@ -229,7 +229,7 @@ pub unsafe extern "C" fn osint_pending_alerts(
         Some(h) => h,
         None => { set_last_error("handle nulo"); return std::ptr::null_mut(); }
     };
-    let sev = match cstr_to_str(min_severity) { Some(s) => s, None => "HIGH" };
+    let sev = cstr_to_str(min_severity).unwrap_or("HIGH");
     let now = match cstr_to_str(now_iso)      { Some(s) => s, None => { set_last_error("now_iso nulo"); return std::ptr::null_mut(); } };
     let lim = if limit <= 0 { 20 } else { limit };
 
