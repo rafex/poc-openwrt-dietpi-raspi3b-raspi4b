@@ -19,7 +19,7 @@ Bing via SearchAPI.io:
   La Bing Web Search API fue retirada en agosto 2025.
   SearchAPI.io actúa como proxy y acepta todos los operadores Bing en 'q',
   incluyendo el exclusivo 'ip:X.X.X.X' (reverse-IP lookup de Bing).
-  Sin BING_API_KEY → sólo PHOMBER (modo degradado, completamente funcional).
+  Sin SEARCH_API_TOKEN → sólo PHOMBER (modo degradado, completamente funcional).
 
 Uso:
   from app.osint import OsintOrchestrator
@@ -197,7 +197,7 @@ class BingDorker:
     Búsquedas Bing vía SearchAPI.io.
     La Bing Web Search API fue retirada en agosto 2025.
     SearchAPI.io soporta todos los operadores Bing (incluyendo 'ip:X.X.X.X').
-    Sin BING_API_KEY → devuelve listas vacías (modo degradado).
+    Sin SEARCH_API_TOKEN → devuelve listas vacías (modo degradado).
 
     El operador 'ip:X.X.X.X' es EXCLUSIVO de Bing — revela todos los dominios
     co-hospedados en esa IP y menciones en páginas web indexadas.
@@ -217,7 +217,7 @@ class BingDorker:
         self.endpoint  = BING_ENDPOINT
         self.available = bool(BING_API_KEY)
         if not self.available:
-            log.info("Bing dorks deshabilitados — configura BING_API_KEY (SearchAPI.io)")
+            log.info("Bing dorks deshabilitados — configura SEARCH_API_TOKEN (SearchAPI.io)")
 
     def _search(self, query: str, count: int = 5) -> list[dict]:
         """Llama a SearchAPI.io y retorna lista de {title, url, snippet}."""

@@ -72,14 +72,17 @@ jobs:
             exit 1
           }
 
-      - name: Validar símbolos ABI de libanalyzer_db (rule_upsert)
+      - name: Validar símbolos ABI de libanalyzer_db
         working-directory: backend/java/ai-analyzer
         run: |
           set -euo pipefail
-          nm -D libanalyzer_db-linux-arm64.so | grep -w 'rule_upsert' || {
-            echo "ERROR: libanalyzer_db-linux-arm64.so no exporta rule_upsert"
-            exit 1
-          }
+          for sym in rule_upsert osint_insert osint_is_cached osint_list_recent; do
+            nm -D libanalyzer_db-linux-arm64.so | grep -w "$sym" || {
+              echo "ERROR: libanalyzer_db-linux-arm64.so no exporta $sym"
+              exit 1
+            }
+          done
+          echo "✅ Todos los símbolos ABI validados"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -135,6 +138,8 @@ jobs:
 
       - name: GraalVM Native Image arm64
         working-directory: backend/java/ai-analyzer
+        env:
+          SEARCH_API_TOKEN: ${{ secrets.SEARCH_API_TOKEN }}
         run: |
           # JAVA_HOME ya apunta a GraalVM 25 gracias a graalvm/setup-graalvm@v1
           # source/target Java 21 — compilación nativa ARM64 al ejecutar en runner ARM
@@ -221,6 +226,25 @@ jobs:
             ```bash
             bash scripts/setup-raspi4b-ai-analyzer-java.sh --release=${{ steps.version.outputs.tag }}
             ```
+
+            ### Variables de entorno requeridas en producción
+
+            | Variable | Descripción |
+            |---|---|
+            | `SEARCH_API_TOKEN` | API key de [SearchAPI.io](https://www.searchapi.io) para enriquecimiento OSINT vía Bing. Opcional — sin ella sólo se usa PHOMBER. |
+            | `GROQ_API_KEY` | API key de Groq (LLM en nube). Opcional — sin ella usa llama.cpp local. |
+            | `MQTT_BROKER` | IP/hostname del broker MQTT (ej: `192.168.1.1`). |
+
+            ```bash
+            # Ejemplo con podman + SEARCH_API_TOKEN
+            podman run -d --name ai-analyzer \
+              -e SEARCH_API_TOKEN=tu_token_aqui \
+              -e GROQ_API_KEY=gsk_... \
+              -e MQTT_BROKER=192.168.1.1 \
+              -v /opt/analyzer/data:/data:z \
+              -p 5000:5000 \
+              ghcr.io/${{ github.repository_owner }}/poc-ai-analyzer-java:${{ steps.version.outputs.tag }}
+            ```
           files: |
             dist/ai-analyzer-linux-arm64/ai-analyzer-linux-arm64
             dist/libanalyzer_db-linux-arm64/libanalyzer_db-linux-arm64.so
@@ -269,13 +293,16 @@ jobs:
             exit 1
           }
 
-      - name: Validar símbolos ABI en artefacto staged (rule_upsert)
+      - name: Validar símbolos ABI en artefacto staged
         run: |
           set -euo pipefail
-          nm -D _docker_staging/libanalyzer_db-linux-arm64.so | grep -w 'rule_upsert' || {
-            echo "ERROR: Artefacto staged no exporta rule_upsert"
-            exit 1
-          }
+          for sym in rule_upsert osint_insert osint_is_cached osint_list_recent; do
+            nm -D _docker_staging/libanalyzer_db-linux-arm64.so | grep -w "$sym" || {
+              echo "ERROR: Artefacto staged no exporta $sym"
+              exit 1
+            }
+          done
+          echo "✅ Todos los símbolos ABI validados"
 
       - name: Login ghcr.io
         uses: docker/login-action@v3

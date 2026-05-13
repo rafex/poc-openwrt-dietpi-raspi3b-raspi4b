@@ -82,9 +82,9 @@ RISKY_PORTS: frozenset[int] = frozenset({
 # ── OSINT ─────────────────────────────────────────────────────────────────────
 # SearchAPI.io actúa como proxy para Bing (Bing API retirada en agosto 2025).
 # Soporta todos los operadores Bing, incluyendo el exclusivo ip:X.X.X.X.
-# Sin BING_API_KEY → sólo PHOMBER (modo degradado, completamente funcional).
-BING_API_KEY      = os.environ.get("BING_API_KEY",   "")
-BING_ENDPOINT     = os.environ.get("BING_ENDPOINT",  "https://www.searchapi.io/api/v1/search")
+# Sin SEARCH_API_TOKEN → sólo PHOMBER (modo degradado, completamente funcional).
+BING_API_KEY      = os.environ.get("SEARCH_API_TOKEN", "")
+BING_ENDPOINT     = os.environ.get("BING_ENDPOINT",    "https://www.searchapi.io/api/v1/search")
 PHOMBER_TIMEOUT   = _int("PHOMBER_TIMEOUT",           25)   # segundos por scan
 OSINT_LLM_TIMEOUT = _int("OSINT_LLM_TIMEOUT",         60)   # segundos por llamada LLM
 OSINT_MIN_SEVERITY = os.environ.get("OSINT_MIN_SEVERITY", "HIGH").upper()

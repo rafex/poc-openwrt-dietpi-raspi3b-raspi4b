@@ -30,6 +30,7 @@ on:
       - develop
     paths:
       - 'backend/python/ai-analyzer/**'
+      - 'backend/python/ai-analyzer-v2/**'
       - '.github/workflows/release-python.yml'
   workflow_dispatch:
     inputs:
@@ -122,6 +123,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+        env:
+          SEARCH_API_TOKEN: ${{ secrets.SEARCH_API_TOKEN }}
 
       - name: Resumen
         run: |

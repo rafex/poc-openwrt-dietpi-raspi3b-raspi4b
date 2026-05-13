@@ -50,7 +50,7 @@ import java.util.logging.Logger;
  * Bing en el parámetro {@code q}, incluyendo el exclusivo
  * {@code ip:X.X.X.X} (reverse-IP lookup).
  *
- * <p>Sin {@code BING_API_KEY} configurado, todas las búsquedas retornan
+ * <p>Sin {@code SEARCH_API_TOKEN} configurado, todas las búsquedas retornan
  * lista vacía (modo degradado — PHOMBER sigue funcionando).
  *
  * <p>Solo usa {@code java.net.http.HttpClient} — sin dependencias externas.
@@ -88,7 +88,7 @@ public final class BingDorker {
     public BingDorker() {
         this.available = !Config.BING_API_KEY.isBlank();
         if (!available) {
-            LOG.info("Bing dorks deshabilitados — configura BING_API_KEY (SearchAPI.io)");
+            LOG.info("Bing dorks deshabilitados — configura SEARCH_API_TOKEN (SearchAPI.io)");
         }
     }
 

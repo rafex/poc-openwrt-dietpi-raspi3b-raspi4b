@@ -109,8 +109,8 @@ public final class Config {
     // ── OSINT ─────────────────────────────────────────────────────────────────
     // SearchAPI.io actúa como proxy Bing (Bing Web Search API retirada agosto 2025).
     // Soporta todos los operadores Bing, incluyendo el exclusivo ip:X.X.X.X.
-    // Sin BING_API_KEY → sólo PHOMBER (modo degradado, completamente funcional).
-    public static final String  BING_API_KEY        = env("BING_API_KEY",         "");
+    // Sin SEARCH_API_TOKEN → sólo PHOMBER (modo degradado, completamente funcional).
+    public static final String  BING_API_KEY        = env("SEARCH_API_TOKEN",     "");
     public static final String  BING_ENDPOINT       = env("BING_ENDPOINT",        "https://www.searchapi.io/api/v1/search");
     public static final int     PHOMBER_TIMEOUT_S   = intEnv("PHOMBER_TIMEOUT",   25);
     public static final int     OSINT_LLM_TIMEOUT_S = intEnv("OSINT_LLM_TIMEOUT", 60);
