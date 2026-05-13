@@ -27,7 +27,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import database as db
-from .config import RISKY_PORTS, PROTECTED_IPS, FEATURE_HUMAN_EXPLAIN, FEATURE_DEVICE_PROFILING
+from .config import (
+    RISKY_PORTS, PROTECTED_IPS,
+    FEATURE_HUMAN_EXPLAIN, FEATURE_DEVICE_PROFILING,
+    OSINT_MIN_SEVERITY,
+)
 from .llm import analyze_traffic, explain_human, extract_risk
 from .sse import broadcast_sync
 
@@ -272,6 +276,51 @@ def _detect_alerts(batch_id: int, p: dict):
                                 f"Escaneo de hosts desde {sip}", source_ip=sip)
 
 
+def _trigger_osint_if_needed(batch_id: int, p: dict, risk: str):
+    """
+    Dispara enriquecimiento OSINT en background si el riesgo supera el umbral.
+    - Extrae la primera IP externa no-LAN de top_talkers
+    - Extrae el primer dominio DGA/TLD sospechoso de all_domains
+    - Importa el orchestrator de forma lazy para evitar ciclos en startup
+    """
+    _rank = {"BAJO": 1, "MEDIO": 2, "ALTO": 3, "CRÍTICO": 4}
+    min_rank = _rank.get(OSINT_MIN_SEVERITY.upper(), 3)
+    if _rank.get(risk, 0) < min_rank:
+        return
+
+    # IP externa prioritaria
+    source_ip: str | None = None
+    for t in p.get("top_talkers", []):
+        ip = t.get("ip", "")
+        if ip and ip not in PROTECTED_IPS and not any(
+            ip.startswith(pfx) for pfx in ("192.168.", "10.", "172.16.", "127.")
+        ):
+            source_ip = ip
+            break
+
+    # Dominio sospechoso prioritario (DGA o TLD riesgoso)
+    domain: str | None = None
+    for d in p.get("all_domains", []):
+        if _DGA_RE.match(d) or any(d.endswith(t) for t in _RISKY_TLDS):
+            domain = d
+            break
+
+    if not source_ip and not domain:
+        return  # Sin indicadores externos que enriquecer
+
+    log.info(f"[OSINT] Trigger batch={batch_id} riesgo={risk} ip={source_ip} domain={domain}")
+    try:
+        from .osint import get_orchestrator
+        get_orchestrator().enrich_async(
+            batch_id  = batch_id,
+            alert_id  = None,
+            source_ip = source_ip,
+            domain    = domain,
+        )
+    except Exception as exc:
+        log.warning(f"[OSINT] Error al disparar enriquecimiento: {exc}")
+
+
 def _sse_alert(batch_id: int, severity: str, alert_type: str, detail: Any):
     broadcast_sync({
         "event":      "alert_detected",
@@ -347,6 +396,9 @@ def process_one(batch_id: int):
         })
 
         log.info(f"[Worker] Batch #{batch_id} → {risk} en {elapsed:.1f}s")
+
+        # ── OSINT enrichment (fire-and-forget si riesgo >= OSINT_MIN_SEVERITY) ─
+        _trigger_osint_if_needed(batch_id, p, risk)
 
         # ── Explicación humana ────────────────────────────────────────────────
         if FEATURE_HUMAN_EXPLAIN:

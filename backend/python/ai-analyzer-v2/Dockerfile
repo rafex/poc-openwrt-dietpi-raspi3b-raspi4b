@@ -14,7 +14,9 @@ WORKDIR /app
 
 # ── Dependencias Python ───────────────────────────────────────────────────────
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# phomber: herramienta OSINT para lookup de IPs, MACs, dominios y DNS
+# Corre como subprocess — el LLM lee su output ASCII directamente
+RUN pip install --no-cache-dir -r requirements.txt phomber
 
 # ── Código fuente ─────────────────────────────────────────────────────────────
 COPY app/ ./app/

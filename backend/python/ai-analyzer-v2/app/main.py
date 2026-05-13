@@ -59,6 +59,7 @@ from .routes.profiles  import router as profiles_router
 from .routes.stats     import router as stats_router
 from .routes.portal    import router as portal_router
 from .routes.sse_route import router as sse_router
+from .routes.osint     import router as osint_router
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
@@ -123,6 +124,7 @@ app.include_router(whitelist_router)
 app.include_router(profiles_router)
 app.include_router(stats_router)
 app.include_router(portal_router)
+app.include_router(osint_router)
 
 log.debug("Rutas registradas:")
 for route in app.routes:

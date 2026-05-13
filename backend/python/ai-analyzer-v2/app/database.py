@@ -128,11 +128,31 @@ CREATE TABLE IF NOT EXISTS anomalies_detected (
     description          TEXT
 );
 
+CREATE TABLE IF NOT EXISTS osint_enrichments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id    INTEGER,                       -- FK network_alerts (puede ser NULL si enriquecimiento manual)
+    batch_id    INTEGER,                       -- FK batches
+    target      TEXT    NOT NULL,              -- IP, dominio o MAC consultado
+    target_type TEXT    NOT NULL,              -- 'ip' | 'domain' | 'mac'
+    source      TEXT    NOT NULL,              -- 'phomber-ip' | 'phomber-dns' | 'phomber-whois' | 'phomber-mac' | 'bing-dork'
+    phomber_raw TEXT,                          -- stdout de PHOMBER ya limpio de ANSI
+    bing_raw    TEXT,                          -- JSON de snippets Bing [{title,url,snippet}]
+    llm_result  TEXT,                          -- JSON extraído por el LLM
+    risk        TEXT,                          -- BAJO | MEDIO | ALTO | CRÍTICO
+    summary_es  TEXT,                          -- resumen en español del LLM
+    queried_at  TEXT    NOT NULL,
+    expires_at  TEXT    NOT NULL,
+    UNIQUE(target, target_type, source)        -- upsert por target+source
+);
+
 CREATE INDEX IF NOT EXISTS idx_batches_status   ON batches(status);
 CREATE INDEX IF NOT EXISTS idx_analyses_batch   ON analyses(batch_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_batch     ON network_alerts(batch_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_severity  ON network_alerts(severity, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_session     ON chat_messages(session_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_osint_target     ON osint_enrichments(target, expires_at);
+CREATE INDEX IF NOT EXISTS idx_osint_alert      ON osint_enrichments(alert_id);
+CREATE INDEX IF NOT EXISTS idx_osint_batch      ON osint_enrichments(batch_id);
 """
 
 # ── Conexión ──────────────────────────────────────────────────────────────────
@@ -444,3 +464,99 @@ def anomaly_list_by_device(device_ip: str, limit: int = 50) -> list[dict]:
             (device_ip, limit),
         ).fetchall()
         return _rows(rows)
+
+# ── OSINT enrichments ─────────────────────────────────────────────────────────
+
+def osint_insert(alert_id: int | None, batch_id: int | None,
+                 target: str, target_type: str, source: str,
+                 phomber_raw: str, bing_raw: Any, llm_result: Any,
+                 risk: str, summary_es: str, expires_at: str):
+    """Inserta o reemplaza un enriquecimiento OSINT (upsert por target+source)."""
+    with get_db() as conn:
+        conn.execute(
+            """INSERT OR REPLACE INTO osint_enrichments
+               (alert_id, batch_id, target, target_type, source,
+                phomber_raw, bing_raw, llm_result, risk, summary_es,
+                queried_at, expires_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                alert_id, batch_id, target, target_type, source,
+                phomber_raw,
+                json.dumps(bing_raw,    ensure_ascii=False) if not isinstance(bing_raw, str)    else bing_raw,
+                json.dumps(llm_result,  ensure_ascii=False) if not isinstance(llm_result, str)  else llm_result,
+                risk, summary_es, now(), expires_at,
+            ),
+        )
+
+def osint_is_cached(target: str, source: str) -> bool:
+    """Devuelve True si existe un enriquecimiento vigente (no expirado)."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT 1 FROM osint_enrichments
+               WHERE target=? AND source=? AND expires_at > ?
+               LIMIT 1""",
+            (target, source, now()),
+        ).fetchone()
+        return row is not None
+
+def osint_pending_alerts(min_severity: str = "HIGH", limit: int = 20) -> list[dict]:
+    """
+    Alertas HIGH/CRITICAL sin enriquecimiento OSINT vigente.
+    Usada por el orchestrator para encontrar trabajo pendiente.
+    """
+    rank = {"LOW": 1, "MEDIUM": 2, "HIGH": 3, "CRITICAL": 4}
+    min_rank = rank.get(min_severity.upper(), 3)
+    severities = [s for s, r in rank.items() if r >= min_rank]
+    placeholders = ",".join("?" * len(severities))
+    with get_db() as conn:
+        rows = conn.execute(
+            f"""SELECT a.id, a.timestamp, a.alert_type, a.severity,
+                       a.source_ip, a.message, a.domain, a.details
+                FROM network_alerts a
+                WHERE a.severity IN ({placeholders})
+                  AND NOT EXISTS (
+                      SELECT 1 FROM osint_enrichments e
+                      WHERE e.alert_id = a.id AND e.expires_at > ?
+                  )
+                ORDER BY a.id DESC LIMIT ?""",
+            severities + [now(), limit],
+        ).fetchall()
+        return _rows(rows)
+
+def osint_list_recent(limit: int = 50, target: str | None = None) -> list[dict]:
+    """Devuelve enriquecimientos recientes, sin los campos raw voluminosos."""
+    with get_db() as conn:
+        if target:
+            rows = conn.execute(
+                """SELECT id, alert_id, batch_id, target, target_type, source,
+                          risk, summary_es, queried_at, expires_at
+                   FROM osint_enrichments
+                   WHERE target=? ORDER BY id DESC LIMIT ?""",
+                (target, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT id, alert_id, batch_id, target, target_type, source,
+                          risk, summary_es, queried_at, expires_at
+                   FROM osint_enrichments ORDER BY id DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return _rows(rows)
+
+def osint_get_detail(enrichment_id: int) -> dict | None:
+    """Devuelve un enriquecimiento completo incluyendo phomber_raw, bing_raw, llm_result."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT * FROM osint_enrichments WHERE id=?", (enrichment_id,)
+        ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        # Deserializar JSON almacenados
+        for field in ("bing_raw", "llm_result"):
+            if d.get(field):
+                try:
+                    d[field] = json.loads(d[field])
+                except Exception:
+                    pass
+        return d
