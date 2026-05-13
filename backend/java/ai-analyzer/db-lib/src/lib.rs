@@ -49,6 +49,7 @@ mod error;
 mod handle;
 mod init;
 mod misc;
+mod osint;
 mod rules;
 mod util;
 
@@ -73,6 +74,8 @@ pub use error::*;
 pub use handle::*;
 #[allow(unused_imports)]
 pub use misc::*;
+#[allow(unused_imports)]
+pub use osint::*;
 #[allow(unused_imports)]
 pub use rules::*;
 

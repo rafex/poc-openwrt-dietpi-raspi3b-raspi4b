@@ -329,4 +329,54 @@ public final class DatabaseClient implements AutoCloseable {
         // Retorna acciones de tipo 'anomaly' para device_ip específico
         return "[]";  // TODO: Requiere soporte en DbLibrary
     }
+
+    // ── OSINT enrichments ─────────────────────────────────────────────────────
+
+    /**
+     * Inserta o reemplaza un enriquecimiento OSINT.
+     * alert_id y batch_id pueden ser -1 si no aplican.
+     */
+    public long osintInsert(long alertId, long batchId,
+                            String target, String targetType, String source,
+                            String phomberRaw, String bingRaw, String llmResult,
+                            String risk, String summaryEs,
+                            String queriedAt, String expiresAt) {
+        return DbLibrary.osint_insert(handle, alertId, batchId,
+            target, targetType, source,
+            phomberRaw, bingRaw, llmResult,
+            risk, summaryEs, queriedAt, expiresAt);
+    }
+
+    /**
+     * Comprueba si existe un enriquecimiento vigente (expires_at > now) para target+source.
+     * Devuelve true si está en caché.
+     */
+    public boolean osintIsCached(String target, String source) {
+        var now = java.time.Instant.now().toString();
+        return DbLibrary.osint_is_cached(handle, target, source, now) == 1L;
+    }
+
+    /**
+     * Devuelve los {@code limit} enriquecimientos más recientes como JSON array.
+     * Los campos voluminosos (phomber_raw, bing_raw, llm_result) se omiten.
+     */
+    public String osintListRecent(long limit) {
+        return readAndFree(DbLibrary.osint_list_recent(handle, limit), "[]");
+    }
+
+    /**
+     * Devuelve el detalle completo de un enriquecimiento por ID (incluye campos raw).
+     * Retorna null si no existe.
+     */
+    public String osintGetDetail(long id) {
+        return readAndFree(DbLibrary.osint_get_detail(handle, id));
+    }
+
+    /**
+     * Devuelve alertas HIGH/CRITICAL sin enriquecimiento OSINT vigente.
+     */
+    public String osintPendingAlerts(String minSeverity, long limit) {
+        var now = java.time.Instant.now().toString();
+        return readAndFree(DbLibrary.osint_pending_alerts(handle, minSeverity, now, limit), "[]");
+    }
 }

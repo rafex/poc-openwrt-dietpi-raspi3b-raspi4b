@@ -33,6 +33,7 @@ import mx.rafex.analyzer.db.DatabaseClient;
 import mx.rafex.analyzer.llm.GroqClient;
 import mx.rafex.analyzer.llm.LlamaClient;
 import mx.rafex.analyzer.mqtt.MqttConsumer;
+import mx.rafex.analyzer.osint.OsintOrchestrator;
 import mx.rafex.analyzer.util.Json;
 import mx.rafex.analyzer.worker.AnalysisWorker;
 
@@ -72,6 +73,9 @@ import java.util.logging.Logger;
  *   GET    /api/profiles          → perfiles de dispositivos
  *   GET    /api/reports           → reportes de red
  *   GET    /api/summaries         → resúmenes periódicos
+ *   GET    /api/osint             → enriquecimientos OSINT recientes
+ *   GET    /api/osint/{id}        → detalle completo de un enriquecimiento
+ *   POST   /api/osint/enrich      → disparo manual de enriquecimiento OSINT
  *   GET    /events                → SSE tiempo real
  *   OPTIONS *                     → CORS preflight
  * </pre>
@@ -89,9 +93,10 @@ public final class ApiServer {
     private static final Logger LOG = Logger.getLogger(ApiServer.class.getName());
     private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_INSTANT.withZone(ZoneOffset.UTC);
 
-    private final DatabaseClient db;
-    private final AnalysisWorker worker;
-    private final MqttConsumer   mqtt;
+    private final DatabaseClient   db;
+    private final AnalysisWorker   worker;
+    private final MqttConsumer     mqtt;
+    private final OsintOrchestrator osint;
 
     /** Clientes SSE activos. */
     private final Set<SseClient> sseClients = ConcurrentHashMap.newKeySet();
@@ -105,6 +110,7 @@ public final class ApiServer {
         this.db     = db;
         this.worker = worker;
         this.mqtt   = mqtt;
+        this.osint  = new OsintOrchestrator(db);
 
         server = HttpServer.create(new InetSocketAddress(Config.PORT), 128);
         // ExecutorService de hilos virtuales — Project Loom
@@ -140,6 +146,7 @@ public final class ApiServer {
         server.createContext("/api/reports",          this::handleReports);
         server.createContext("/api/summaries",        this::handleSummaries);
         server.createContext("/api/portal/risk-message", this::handlePortalRiskMessage);
+        server.createContext("/api/osint",            this::handleOsint);
 
         // ── SSE ───────────────────────────────────────────────────────────────
         server.createContext("/events",          this::handleSse);
@@ -158,7 +165,8 @@ public final class ApiServer {
                     {"service":"ai-analyzer","version":"1.0.0",
                      "endpoints":["/health","/api/analyses","/api/alerts","/api/actions","/api/anomalies",
                      "/api/stats","/api/ingest","/api/chat","/api/whitelist",
-                     "/api/profiles","/api/reports","/api/summaries","/api/portal/risk-message","/events"],
+                     "/api/profiles","/api/reports","/api/summaries","/api/portal/risk-message",
+                     "/api/osint","/events"],
                      "ui":"served by frontend (Node.js/Vite)"}
                     """.strip());
             } else {
@@ -416,6 +424,71 @@ public final class ApiServer {
                        message.replace("\"", "\\\""), now);
 
         json(ex, 200, resp);
+    }
+
+    /**
+     * Maneja {@code /api/osint}, {@code /api/osint/{id}} y
+     * {@code /api/osint/enrich}.
+     *
+     * <pre>
+     *   GET  /api/osint               → lista reciente (param limit, target)
+     *   GET  /api/osint/{id}          → detalle con campos raw
+     *   POST /api/osint/enrich        → disparo manual asíncrono
+     * </pre>
+     */
+    private void handleOsint(HttpExchange ex) throws IOException {
+        var method = ex.getRequestMethod();
+        var path   = ex.getRequestURI().getPath();
+
+        // POST /api/osint/enrich  — disparo manual
+        if ("POST".equals(method) && path.endsWith("/enrich")) {
+            if (!Config.FEATURE_OSINT) {
+                json(ex, 403, Json.error("OSINT deshabilitado"));
+                return;
+            }
+            var body      = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            var sourceIp  = Json.extractString(body, "source_ip");
+            var domain    = Json.extractString(body, "domain");
+            var mac       = Json.extractString(body, "mac");
+            var batchIdS  = Json.extractString(body, "batch_id");
+            long batchId  = batchIdS != null ? Long.parseLong(batchIdS) : -1L;
+
+            if ((sourceIp == null || sourceIp.isBlank())
+                    && (domain == null || domain.isBlank())
+                    && (mac == null || mac.isBlank())) {
+                json(ex, 400, Json.error("Se requiere al menos source_ip, domain o mac"));
+                return;
+            }
+            osint.enrichAsync(batchId, -1L, sourceIp, domain, mac, this);
+            json(ex, 202, "{\"status\":\"accepted\",\"batch_id\":" + batchId
+                          + ",\"target\":\"" + (sourceIp != null ? sourceIp : domain) + "\"}");
+            return;
+        }
+
+        // GET /api/osint/{id}  — detalle completo
+        if ("GET".equals(method)) {
+            // Detectar si la ruta tiene un ID numérico al final
+            var segments = path.replaceFirst("^/api/osint/?", "").split("/");
+            if (segments.length == 1 && !segments[0].isBlank() && segments[0].matches("\\d+")) {
+                long id   = Long.parseLong(segments[0]);
+                var  data = db.osintGetDetail(id);
+                json(ex, 200, data != null ? data : Json.error("Enriquecimiento no encontrado"));
+                return;
+            }
+
+            // GET /api/osint  — lista reciente
+            var limit  = queryParam(ex, "limit",  "50");
+            var target = queryParam(ex, "target", null);
+            var data   = db.osintListRecent(Long.parseLong(limit));
+            // Filtrado por target en memoria si se especificó
+            if (target != null && !target.isBlank() && data != null && !data.equals("[]")) {
+                if (!data.contains(target)) data = "[]";
+            }
+            json(ex, 200, data != null ? data : "[]");
+            return;
+        }
+
+        json(ex, 405, Json.error("Método no permitido"));
     }
 
     private void handleReports(HttpExchange ex) throws IOException {

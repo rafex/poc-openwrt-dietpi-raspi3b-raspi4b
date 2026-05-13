@@ -27,6 +27,8 @@ package mx.rafex.analyzer.worker;
  */
 
 import mx.rafex.analyzer.analysis.AnomalyDetector;
+import mx.rafex.analyzer.osint.OsintOrchestrator;
+import mx.rafex.analyzer.osint.PhomberRunner;
 import mx.rafex.analyzer.analysis.DeviceProfiler;
 import mx.rafex.analyzer.analysis.DomainClassifierLLM;
 import mx.rafex.analyzer.analysis.HourlyPatternAnalyzer;
@@ -44,6 +46,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
@@ -74,6 +77,7 @@ public final class AnalysisWorker implements Runnable {
     private final HourlyPatternAnalyzer hourlyAnalyzer;
     private final DomainClassifierLLM domainClassifierLLM;
     private final DeviceProfiler deviceProfiler;
+    private final OsintOrchestrator osintOrchestrator;
     private volatile ApiServer apiServer;
 
     // Estadísticas públicas
@@ -91,6 +95,7 @@ public final class AnalysisWorker implements Runnable {
         this.hourlyAnalyzer = new HourlyPatternAnalyzer();
         this.domainClassifierLLM = new DomainClassifierLLM(db);
         this.deviceProfiler = new DeviceProfiler(db);
+        this.osintOrchestrator = new OsintOrchestrator(db);
     }
 
     /** Encola un batch_id para análisis asíncrono.  No bloquea. */
@@ -223,6 +228,11 @@ public final class AnalysisWorker implements Runnable {
             // ★ NUEVO: Ejecutar políticas automáticas
             if (Config.FEATURE_AUTO_ENFORCE) {
                 policyExecutor.executePolicy(batchId, risk, analysis, apiServer);
+            }
+
+            // ★ NUEVO: Enriquecimiento OSINT asíncrono (Fase 5)
+            if (Config.FEATURE_OSINT) {
+                triggerOsintIfNeeded(batchId, risk, payload);
             }
 
             // Human explanation si está habilitado
@@ -373,5 +383,92 @@ public final class AnalysisWorker implements Runnable {
             LOG.fine("No se pudo extraer bytes del payload: " + e.getMessage());
         }
         return 0.0;
+    }
+
+    // ─── OSINT trigger ────────────────────────────────────────────────────────
+
+    /**
+     * Dispara el enriquecimiento OSINT de forma asíncrona si el riesgo
+     * supera el umbral configurado ({@code OSINT_MIN_SEVERITY}).
+     *
+     * <p>Extrae la primera IP externa del payload (campo {@code top_talkers}
+     * o {@code source_ip}) y el primer dominio sospechoso detectado, y los
+     * pasa a {@link OsintOrchestrator#enrichAsync}.
+     *
+     * @param batchId ID del batch procesado
+     * @param risk    nivel de riesgo determinado por el LLM (BAJO/MEDIO/ALTO/CRÍTICO)
+     * @param payload JSON del batch tal como llegó del sensor
+     */
+    private void triggerOsintIfNeeded(long batchId, String risk, String payload) {
+        // Mapa de ranking de severidad
+        var rankMap = Map.of("BAJO", 1, "MEDIO", 2, "ALTO", 3, "CRÍTICO", 4);
+        var minRank = rankMap.getOrDefault(
+            Config.OSINT_MIN_SEVERITY.toUpperCase(), 3);
+
+        if (rankMap.getOrDefault(risk, 0) < minRank) {
+            LOG.fine("OSINT omitido — riesgo %s < umbral %s".formatted(risk, Config.OSINT_MIN_SEVERITY));
+            return;
+        }
+
+        // Extraer primera IP externa (no LAN) del payload
+        String externalIp = null;
+        var rawTalkers = Json.extractRaw(payload, "top_talkers");
+        if (rawTalkers != null) {
+            // Buscar IPs en el array top_talkers: primer valor no privado
+            for (var part : rawTalkers.split("[\"\\s,\\[\\]{}:]")) {
+                part = part.trim();
+                if (part.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")
+                        && !PhomberRunner.isPrivateOrProtected(part)) {
+                    externalIp = part;
+                    break;
+                }
+            }
+        }
+        if (externalIp == null) {
+            // Fallback: buscar cualquier IP pública en el payload completo
+            for (var part : payload.split("[\"\\s,\\[\\]{}:]")) {
+                part = part.trim();
+                if (part.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")
+                        && !PhomberRunner.isPrivateOrProtected(part)) {
+                    externalIp = part;
+                    break;
+                }
+            }
+        }
+
+        // Extraer primer dominio sospechoso del payload
+        String suspiciousDomain = null;
+        var domains = extractDomainsFromPayload(payload);
+        // TLDs que merecen investigación OSINT
+        var riskyTlds = Set.of(".ru", ".cn", ".tk", ".pw", ".top", ".xyz",
+                               ".cc", ".to", ".onion", ".biz");
+        for (var domain : domains) {
+            var lc = domain.toLowerCase();
+            boolean isRisky = riskyTlds.stream().anyMatch(lc::endsWith);
+            // Dominios con muchos subdominios (DGA heuristic: >3 partes)
+            boolean isDga = lc.split("\\.").length > 3;
+            if (isRisky || isDga) {
+                suspiciousDomain = domain;
+                break;
+            }
+        }
+        // Si no hay dominio sospechoso pero el riesgo es ALTO/CRÍTICO,
+        // tomar el primer dominio conocido para enriquecer igual
+        if (suspiciousDomain == null && !domains.isEmpty()
+                && rankMap.getOrDefault(risk, 0) >= 3) {
+            suspiciousDomain = domains.get(0);
+        }
+
+        // Si no tenemos nada que enriquecer, salir
+        if (externalIp == null && suspiciousDomain == null) {
+            LOG.fine("OSINT omitido — sin IP externa ni dominio sospechoso en batch %d".formatted(batchId));
+            return;
+        }
+
+        LOG.info("Disparando OSINT async batch=%d ip=%s domain=%s".formatted(
+            batchId, externalIp, suspiciousDomain));
+
+        osintOrchestrator.enrichAsync(batchId, -1L,
+            externalIp, suspiciousDomain, null, apiServer);
     }
 }

@@ -167,6 +167,26 @@ CREATE INDEX IF NOT EXISTS idx_hourly_device    ON hourly_patterns(device_ip, ho
 CREATE INDEX IF NOT EXISTS idx_anomalies_batch  ON anomalies_detected(batch_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_anomalies_device ON anomalies_detected(device_ip, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_anomalies_ts     ON anomalies_detected(timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS osint_enrichments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id    INTEGER,
+    batch_id    INTEGER,
+    target      TEXT NOT NULL,
+    target_type TEXT NOT NULL,
+    source      TEXT NOT NULL,
+    phomber_raw TEXT,
+    bing_raw    TEXT,
+    llm_result  TEXT,
+    risk        TEXT,
+    summary_es  TEXT,
+    queried_at  TEXT NOT NULL,
+    expires_at  TEXT NOT NULL,
+    UNIQUE(target, target_type, source)
+);
+CREATE INDEX IF NOT EXISTS idx_osint_target ON osint_enrichments(target, expires_at);
+CREATE INDEX IF NOT EXISTS idx_osint_alert  ON osint_enrichments(alert_id);
+CREATE INDEX IF NOT EXISTS idx_osint_batch  ON osint_enrichments(batch_id);
 "#;
 
 /// Aplica el esquema completo a la conexión abierta.
