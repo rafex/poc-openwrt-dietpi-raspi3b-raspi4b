@@ -32,10 +32,15 @@ import mx.rafex.analyzer.http.ApiServer;
 import mx.rafex.analyzer.mqtt.MqttConsumer;
 import mx.rafex.analyzer.worker.AnalysisWorker;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
+import java.util.logging.FileHandler;
+import java.util.logging.SimpleFormatter;
 import java.util.logging.Logger;
 
 /**
@@ -64,6 +69,8 @@ public final class Main {
         LOG.info("Puerto    : " + Config.PORT);
         LOG.info("DB        : " + Config.DB_PATH);
         LOG.info("MQTT      : " + Config.MQTT_HOST + ":" + Config.MQTT_PORT);
+        LOG.info("MQTT PCAP : " + Config.MQTT_PCAP_TOPIC_BASE + "/{meta,data/<id>,done}");
+        LOG.info("PCAP dir  : " + Config.PCAP_STORE_DIR);
         LOG.info("LLM       : " + (Config.GROQ_CHAT_ENABLED
             ? "Groq/" + Config.GROQ_MODEL
             : "llama.cpp " + Config.LLAMA_URL));
@@ -161,5 +168,34 @@ public final class Main {
         var rootLogger = Logger.getLogger("");
         rootLogger.setLevel(level);
         for (var h : rootLogger.getHandlers()) h.setLevel(level);
+
+        // Log persistente para diagnóstico operativo.
+        // Preferencia: /var/logs/ai-analyzer-java.log (como pidió operación).
+        // Fallback: /tmp/ai-analyzer-java.log si no hay permisos.
+        try {
+            var fh = buildFileHandler("/var/logs", "ai-analyzer-java.log");
+            fh.setLevel(level);
+            rootLogger.addHandler(fh);
+            rootLogger.info("Logging persistente activo en /var/logs/ai-analyzer-java.log");
+        } catch (Exception e) {
+            try {
+                var fh = buildFileHandler("/tmp", "ai-analyzer-java.log");
+                fh.setLevel(level);
+                rootLogger.addHandler(fh);
+                rootLogger.warning("No se pudo usar /var/logs; fallback logging en /tmp/ai-analyzer-java.log");
+            } catch (Exception e2) {
+                rootLogger.warning("No se pudo habilitar logging a archivo: " + e2.getMessage());
+            }
+        }
+    }
+
+    private static FileHandler buildFileHandler(String dir, String fileName) throws IOException {
+        Path path = Path.of(dir);
+        Files.createDirectories(path);
+        // Rotación simple: 5 archivos de hasta 5 MB.
+        var pattern = path.resolve(fileName + ".%g").toString();
+        var fh = new FileHandler(pattern, 5 * 1024 * 1024, 5, true);
+        fh.setFormatter(new SimpleFormatter());
+        return fh;
     }
 }
