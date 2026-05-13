@@ -41,6 +41,9 @@ public final class Config {
     public static final String MQTT_HOST  = env("MQTT_HOST",  "192.168.1.167");
     public static final int    MQTT_PORT  = intEnv("MQTT_PORT", 1883);
     public static final String MQTT_TOPIC = env("MQTT_TOPIC", "rafexpi/sensor/batch");
+    public static final String MQTT_PCAP_TOPIC_BASE = env("MQTT_PCAP_TOPIC_BASE", "rafexpi/sensor01/pcap");
+    public static final String PCAP_STORE_DIR       = env("PCAP_STORE_DIR", "/data/pcap-evidence");
+    public static final long   PCAP_MAX_ZST_BYTES   = longEnv("PCAP_MAX_ZST_BYTES", 4L * 1024L * 1024L);
 
     // ── Base de datos ─────────────────────────────────────────────────────────
     public static final String DB_PATH = env("DB_PATH", "/data/sensor.db");
@@ -110,6 +113,11 @@ public final class Config {
 
     private static int intEnv(String key, int def) {
         try { return Integer.parseInt(env(key, String.valueOf(def))); }
+        catch (NumberFormatException e) { return def; }
+    }
+
+    private static long longEnv(String key, long def) {
+        try { return Long.parseLong(env(key, String.valueOf(def))); }
         catch (NumberFormatException e) { return def; }
     }
 
