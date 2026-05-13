@@ -130,6 +130,7 @@ public final class ApiServer {
         server.createContext("/health",          this::handleHealth);
         server.createContext("/api/analyses",    this::handleAnalyses);
         server.createContext("/api/alerts",      this::handleAlerts);
+        server.createContext("/api/actions",     this::handleActions);
         server.createContext("/api/stats",       this::handleStats);
         server.createContext("/api/ingest",      this::handleIngest);
         server.createContext("/api/chat",        this::handleChat);
@@ -153,7 +154,7 @@ public final class ApiServer {
             if ("/".equals(path)) {
                 json(ex, 200, """
                     {"service":"ai-analyzer","version":"1.0.0",
-                     "endpoints":["/health","/api/analyses","/api/alerts",
+                     "endpoints":["/health","/api/analyses","/api/alerts","/api/actions",
                      "/api/stats","/api/ingest","/api/chat","/api/whitelist",
                      "/api/profiles","/api/reports","/api/summaries","/events"],
                      "ui":"served by frontend (Node.js/Vite)"}
@@ -195,6 +196,13 @@ public final class ApiServer {
         if (!"GET".equals(ex.getRequestMethod())) { json(ex, 405, Json.error("Método no permitido")); return; }
         var limit = queryParam(ex, "limit", "50");
         json(ex, 200, db.alertListRecent(Long.parseLong(limit)));
+    }
+
+    private void handleActions(HttpExchange ex) throws IOException {
+        if (!"GET".equals(ex.getRequestMethod())) { json(ex, 405, Json.error("Método no permitido")); return; }
+        var limit = queryParam(ex, "limit", "50");
+        var data = db.policyActionListRecent(Long.parseLong(limit));
+        json(ex, 200, data != null ? data : "[]");
     }
 
     private void handleStats(HttpExchange ex) throws IOException {
