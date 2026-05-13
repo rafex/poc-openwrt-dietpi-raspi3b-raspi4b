@@ -100,6 +100,12 @@ public final class Config {
     public static final boolean FEATURE_AUTO_REPORTS                 = boolEnv("FEATURE_AUTO_REPORTS",      true);
     public static final boolean FEATURE_HUMAN_EXPLAIN               = boolEnv("FEATURE_HUMAN_EXPLAIN",     true);
 
+    // ── Ejecución automática de políticas ──────────────────────────────────────
+    public static final boolean FEATURE_AUTO_ENFORCE           = boolEnv("FEATURE_AUTO_ENFORCE",           true);
+    public static final boolean FEATURE_AUTO_ENFORCE_SSH       = boolEnv("FEATURE_AUTO_ENFORCE_SSH",       true);
+    public static final int     POLICY_ACTION_TIMEOUT_S        = intEnv("POLICY_ACTION_TIMEOUT_S",         10);
+    public static final String  POLICY_LOG_PATH                = env("POLICY_LOG_PATH",                   "/var/log/ai-analyzer");
+
     // ── Misc ──────────────────────────────────────────────────────────────────
     public static final String LOG_LEVEL          = env("LOG_LEVEL",       "INFO");
     public static final int    SUMMARY_INTERVAL_S = intEnv("SUMMARY_INTERVAL_S", 60);
