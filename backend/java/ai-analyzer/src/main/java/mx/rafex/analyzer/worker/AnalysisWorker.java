@@ -28,6 +28,7 @@ package mx.rafex.analyzer.worker;
 
 import mx.rafex.analyzer.config.Config;
 import mx.rafex.analyzer.db.DatabaseClient;
+import mx.rafex.analyzer.executor.PolicyExecutor;
 import mx.rafex.analyzer.llm.GroqClient;
 import mx.rafex.analyzer.llm.LlamaClient;
 import mx.rafex.analyzer.util.Json;
@@ -62,6 +63,7 @@ public final class AnalysisWorker implements Runnable {
 
     private final BlockingQueue<Long> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
     private final DatabaseClient db;
+    private final PolicyExecutor policyExecutor;
 
     // Estadísticas públicas
     public final AtomicLong analysesOk    = new AtomicLong();
@@ -73,6 +75,7 @@ public final class AnalysisWorker implements Runnable {
 
     public AnalysisWorker(DatabaseClient db) {
         this.db = db;
+        this.policyExecutor = new PolicyExecutor(db);
     }
 
     /** Encola un batch_id para análisis asíncrono.  No bloquea. */
@@ -133,6 +136,11 @@ public final class AnalysisWorker implements Runnable {
 
             analysesOk.incrementAndGet();
             LOG.info("Batch %d analizado en %.1fs (riesgo: %s)".formatted(batchId, elapsedS, risk));
+
+            // ★ NUEVO: Ejecutar políticas automáticas
+            if (Config.FEATURE_AUTO_ENFORCE) {
+                policyExecutor.executePolicy(batchId, risk, analysis);
+            }
 
             // Human explanation si está habilitado
             if (Config.FEATURE_HUMAN_EXPLAIN) {
