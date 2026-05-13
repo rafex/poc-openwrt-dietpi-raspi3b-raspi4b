@@ -558,63 +558,219 @@ curl "http://localhost:5000/api/portal/risk-message?ip=192.168.1.50"
 | Día 1-2 | Fase 1: PolicyExecutor + bloqueo social | ✅ Completada |
 | Día 3-5 | Fase 2: Anomalías + patrones | ✅ Completada |
 | Día 6-7 | Fase 3: Dashboard + clasificación LLM | ✅ Completada |
-| Día 8-10 | Fase 4: Device profiling heurístico | ✅ Backend listo |
-| Día 11 | Fase 5: Mensajes dinámicos portal cautivo | ✅ Backend listo |
-| Día 12-13 | Fase 6: Testing end-to-end + integración | ⚪ Pendiente |
+| Día 8-10 | Fase 4: Device profiling heurístico | ✅ Completada |
+| Día 11 | Fase 5: Mensajes dinámicos portal cautivo | ✅ Completada |
+| Día 12-13 | Fase 6: Testing end-to-end + integración | 🟡 En progreso |
 
 **Total estimado:** ~2 semanas para sistema al 99%
 
 ---
 
-## 🔄 ESTADO ACTUAL - SESIÓN ACTUALIZADA
+## 🔄 ESTADO ACTUAL
 
-**Fases completadas:** 1, 2, 3 (de 6)  
-**Backend Fase 4+5 implementado:** DeviceProfiler + /api/portal/risk-message  
-**Compilación:** ✅ 19 archivos .class sin errores  
-**Pendiente:** Frontend /devices.pug · integración portal Lentium · testing e2e (Fase 6)
+**Fases completadas:** 1, 2, 3, 4, 5 (de 6)  
+**Compilación Java:** ✅ Sin errores  
+**TypeScript:** ✅ Sin errores  
+**Pendiente:** Testing end-to-end (Fase 6) + push a origin/develop
 
 ---
 
-## 📈 VERIFICACIÓN END-TO-END
+## 📈 FASE 6: VERIFICACIÓN END-TO-END
 
-### Test Fase 1: Bloqueo Social Automático
+**Duración:** 2-3 días  
+**Status:** 🟡 En progreso
+
+Los 6 escenarios de testing validan que todas las fases funcionan integradas.
+
+---
+
+### Test A: Bloqueo Social Automático (Fase 1)
 
 ```bash
-# 1. Enviar batch a las 20:00 con tráfico a instagram.com
-curl -X POST http://localhost:5000/api/ingest \
+# 1. Enviar batch con tráfico a instagram.com (simular hora 20:00+)
+curl -X POST http://192.168.1.167:5000/api/ingest \
   -H "Content-Type: application/json" \
   -d '{
     "sensor_ip": "192.168.1.50",
-    "domains": [{"domain": "instagram.com", "bytes": 5000000}]
+    "bytes": 5000000,
+    "payload": {
+      "domains": ["instagram.com", "cdninstagram.com"],
+      "protocol": "HTTPS"
+    }
   }'
 
-# 2. Verificar alerta
-curl http://localhost:5000/api/alerts?limit=5
+# 2. Verificar que se creó alerta
+curl http://192.168.1.167:5000/api/alerts?limit=5 | jq '.[] | {severity, message}'
 
-# 3. Verificar acción ejecutada
-curl http://localhost:5000/api/actions?limit=5
+# 3. Verificar que se registró acción
+curl http://192.168.1.167:5000/api/actions?limit=5 | jq '.[] | {action, timestamp}'
 
-# 4. En router: verificar nftables
+# 4. Verificar en router que IP fue bloqueada
 ssh root@192.168.1.1 "nft list set ip captive blocked_social_ips"
+
+# ✅ Esperado: acción "social_policy_block" con ssh_return_code=0
+```
+
+---
+
+### Test B: Detección de Anomalías (Fase 2)
+
+```bash
+# 1. Enviar 10 batches "normales" del dispositivo 192.168.1.100
+for i in $(seq 1 10); do
+  curl -s -X POST http://192.168.1.167:5000/api/ingest \
+    -H "Content-Type: application/json" \
+    -d "{\"sensor_ip\": \"192.168.1.100\", \"bytes\": $((RANDOM % 500000 + 100000))}"
+  sleep 1
+done
+
+# 2. Enviar batch con 10x el tráfico típico (anomalía)
+curl -X POST http://192.168.1.167:5000/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"sensor_ip": "192.168.1.100", "bytes": 50000000}'
+
+# 3. Verificar anomalía detectada
+curl http://192.168.1.167:5000/api/anomalies?limit=5
+
+# ✅ Esperado: registro con z_score > 2.0 y description no vacía
+```
+
+---
+
+### Test C: Portal Cautivo — Mensaje de Riesgo Dinámico (Fase 5)
+
+```bash
+# 1. Consultar mensaje de riesgo para una IP
+curl "http://192.168.1.167:5000/api/portal/risk-message?ip=192.168.1.50"
+
+# Salida esperada:
+# {"ip":"192.168.1.50","risk":"ALTO","message":"⚠️ Se ha detectado...","timestamp":"..."}
+
+# 2. Verificar que el portal expone el contexto
+curl "http://192.168.1.167:8080/api/portal/context"
+
+# ✅ Esperado: risk_message y risk_severity presentes
+
+# 3. Visitar el portal en navegador
+# http://192.168.1.167:8080/portal
+# → Ver banner de IA con color según severidad (rojo=ALTO, amarillo=MEDIO, azul=BAJO)
+```
+
+---
+
+### Test D: Dashboard Acciones — Tiempo Real (Fase 3)
+
+```bash
+# 1. Abrir en navegador (dev server)
+open http://localhost:5173/actions
+
+# 2. En otra terminal, generar un batch que trigger acción
+curl -X POST http://localhost:5000/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"sensor_ip": "192.168.1.55", "bytes": 1000000,
+       "payload": "{\"domains\":[\"tiktok.com\"]}"}'
+
+# ✅ Esperado: tabla se actualiza sin recargar vía SSE
+# ✅ Esperado: fila con badge "social_policy_block" aparece al top
+
+# 3. Verificar página Dispositivos
+open http://localhost:5173/devices
+# ✅ Esperado: tabla vacía o con perfiles si ya había batches previos
+```
+
+---
+
+### Test E: Clasificación LLM de Dominios (Fase 3)
+
+```bash
+# 1. Enviar batch con dominios desconocidos
+curl -X POST http://192.168.1.167:5000/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sensor_ip": "192.168.1.77",
+    "bytes": 100000,
+    "payload": "{\"domains\":[\"newsite.io\",\"example-store.mx\",\"blog.unknown.co\"]}"
+  }'
+
+# 2. Esperar ~30s para que el worker clasifique
+sleep 30
+
+# 3. Verificar clasificaciones en BD (via logs del servicio)
+# En Raspi4B:
+journalctl -u ai-analyzer --since "5 minutes ago" | grep -i "clasificando\|domain"
+
+# ✅ Esperado: log "Clasificando N dominios nuevos..."
+```
+
+---
+
+### Test F: Perfilado de Dispositivos (Fase 4)
+
+```bash
+# 1. Enviar batches de un "iPhone" (con dominios Apple)
+for domain in "apple.com" "icloud.com" "push.apple.com" "mzstatic.com"; do
+  curl -s -X POST http://192.168.1.167:5000/api/ingest \
+    -H "Content-Type: application/json" \
+    -d "{\"sensor_ip\": \"192.168.1.200\", \"bytes\": 50000,
+         \"payload\": \"{\\\"domains\\\":[\\\"${domain}\\\"]}\"}"
+  sleep 0.5
+done
+
+# 2. Consultar perfil del dispositivo
+curl http://192.168.1.167:5000/api/profiles
+
+# ✅ Esperado: {"ip":"192.168.1.200","device_type":"ios","confidence":0.9+,"reasons":["apple.com",...]}
+
+# 3. Ver en dashboard de dispositivos
+open http://localhost:5173/devices
+# ✅ Esperado: 192.168.1.200 aparece como "📱 iPhone / iPad" con barra de confianza ~90%
+```
+
+---
+
+### Checklist de Validación Final
+
+```
+[ ] A: Bloqueo social → nftables ejecutado + acción registrada en /api/actions
+[ ] B: Anomalía → z_score > 2 en /api/anomalies + SSE broadcast
+[ ] C: Portal → banner IA con color correcto según severidad
+[ ] D: Dashboard /actions → actualización SSE en tiempo real
+[ ] E: Clasificación LLM → dominios nuevos aparecen categorizados
+[ ] F: Perfilado → /api/profiles devuelve tipo correcto (ios/android/etc)
+[ ] Build → make all (Rust + fat-jar + frontend) sin errores
+[ ] Deploy → just setup-java TAG=v0.5.0 completa sin errores
+[ ] Health → GET /health responde status:ok
+[ ] SSE → /events conectado y emite eventos
 ```
 
 ---
 
 ## 📝 NOTAS IMPORTANTES
 
-- SSH al router **ya está configurado** en Config.java
+- SSH al router **ya está configurado** en Config.java (`ROUTER_IP`, `ROUTER_USER`, `SSH_KEY`)
 - nftables scripts **ya existen** en `/scripts`
-- MQTT y LLM **ya funcionales**
-- SSE **ya implementado** en ApiServer
-- Frontend **Vite + TypeScript** disponible
+- MQTT y LLM (Groq/llama.cpp) **ya funcionales**
+- SSE **ya implementado** en ApiServer con broadcast thread-safe
+- Frontend **Vite + TypeScript** — build con `cd frontend && npm run build`
+- Artifact final: `make all` genera `dist/` con fat-jar + .so + frontend estático
 
 ---
 
-## 🚀 PROXIMOS PASOS
+## 🚀 DESPLIEGUE EN RASPI4B
 
-1. ✅ Plan escrito en el repositorio
-2. ⏭️ **Iniciar Fase 1: PolicyExecutor + Bloqueo Social**
-3. Integración con AnalysisWorker
-4. Database schema updates
-5. Testing y validación
+```bash
+# 1. Crear tag y push (trigger CI/CD en GitHub Actions)
+just tag        # Crea v0.5.x-preview desde develop
+just sync       # Push tags al remoto
+
+# 2. Cuando CI completa, desplegar en Raspi4B
+just setup-java TAG=v0.5.0-preview
+
+# 3. Verificar que el servicio está activo
+just health
+curl http://192.168.1.167:5000/health
+
+# 4. Ver logs en tiempo real
+just logs-java
+```
 
