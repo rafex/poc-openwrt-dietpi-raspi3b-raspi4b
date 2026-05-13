@@ -1,8 +1,8 @@
 # Plan: Sistema de IA Interactivo con Acciones de Red y Dashboard en Tiempo Real
 
 **Fecha de creación:** Mayo 12, 2026  
-**Estado:** En Implementación - Fase 1  
-**Realismo POC:** 70% → 95% → 99%
+**Estado:** En Implementación - Fase 2  
+**Realismo POC:** ✅ Fase 1 (70%) → 🔄 Fase 2 (85%) → Fase 3 (95%) → Fase 4 (99%)
 
 ---
 
@@ -24,8 +24,8 @@
 
 | Fase | Funcionalidades | Realismo | Tiempo Est. | Estado |
 |------|-----------------|----------|------------|--------|
-| **1** | F2 (Alertas) + F5 (Bloqueo Social) | 70% | 2-3 días | 🟡 En progreso |
-| **2** | F3 (Patrones) + F1 (Anomalías) | 85% | 3-4 días | ⚪ Pendiente |
+| **1** | F2 (Alertas) + F5 (Bloqueo Social) | 70% | 2-3 días | ✅ Completada |
+| **2** | F3 (Patrones) + F1 (Anomalías) | 85% | 3-4 días | 🟡 En progreso |
 | **3** | F4 (Clasificación LLM) + Dashboard | 95% | 2-3 días | ⚪ Pendiente |
 | **4** | F6 (Device Profiling) + Predicción | 99% | 4-5 días | ⚪ Pendiente |
 
@@ -203,13 +203,13 @@ private void handleActions(HttpExchange ex) throws IOException {
 
 ### 1.8 Checklist de implementación
 
-- [ ] PolicyExecutor.java creado
-- [ ] AnalysisWorker integrado con PolicyExecutor
-- [ ] Config variables nuevas (FEATURE_AUTO_ENFORCE, etc)
-- [ ] network_alerts extendido con action_taken
-- [ ] Endpoint GET /api/actions implementado
-- [ ] SSE broadcast de acciones
-- [ ] Test: Bloqueo social automático
+- [x] PolicyExecutor.java creado
+- [x] AnalysisWorker integrado con PolicyExecutor
+- [x] Config variables nuevas (FEATURE_AUTO_ENFORCE, etc)
+- [x] network_alerts extendido con action_taken
+- [x] Endpoint GET /api/actions implementado
+- [x] SSE broadcast de acciones
+- [x] Test: Bloqueo social automático
 
 ---
 
@@ -324,8 +324,8 @@ public class AnomalyDetector {
 
 | Fecha | Hito | Status |
 |-------|------|--------|
-| Día 1-2 | Fase 1: PolicyExecutor + bloqueo social | 🟡 En progreso |
-| Día 3-5 | Fase 2: Anomalías + patrones | ⚪ Pendiente |
+| Día 1-2 | Fase 1: PolicyExecutor + bloqueo social | ✅ Completada |
+| Día 3-5 | Fase 2: Anomalías + patrones | 🟡 En progreso |
 | Día 6-7 | Fase 3: Dashboard + clasificación LLM | ⚪ Pendiente |
 | Día 8-12 | Fase 4: Device profiling + predicción | ⚪ Pendiente |
 | Día 13 | Testing + documentación | ⚪ Pendiente |
