@@ -1,0 +1,36 @@
+[Unit]
+Description=OSINT Enricher — sidecar PHOMBER+LLM para ai-analyzer
+After=network-online.target ai-analyzer.service
+Wants=network-online.target
+BindsTo=ai-analyzer.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/osint
+
+# Variables — ajustar según entorno
+EnvironmentFile=-/etc/ai-analyzer.env
+Environment=DB_PATH=/data/sensor.db
+Environment=LLAMA_URL=http://127.0.0.1:8081
+Environment=POLL_INTERVAL=30
+Environment=MIN_SEVERITY=high
+Environment=PHOMBER_TIMEOUT=25
+Environment=LLM_TIMEOUT=60
+
+# BING_API_KEY y GROQ_API_KEY vienen del EnvironmentFile si están definidos
+
+ExecStart=/usr/bin/python3 /opt/osint/osint_enricher.py
+
+Restart=on-failure
+RestartSec=15s
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=osint-enricher
+
+# Límites de recursos (proceso ligero)
+MemoryMax=256M
+CPUQuota=25%
+
+[Install]
+WantedBy=multi-user.target
