@@ -130,6 +130,27 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     meta        TEXT
 );
 
+CREATE TABLE IF NOT EXISTS hourly_patterns (
+    device_ip           TEXT NOT NULL,
+    hour                INTEGER NOT NULL,
+    avg_bytes_per_sec   REAL NOT NULL,
+    last_updated        TEXT NOT NULL,
+    PRIMARY KEY (device_ip, hour)
+);
+
+CREATE TABLE IF NOT EXISTS anomalies_detected (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id                INTEGER NOT NULL REFERENCES batches(id),
+    device_ip               TEXT NOT NULL,
+    timestamp               TEXT NOT NULL,
+    bytes_per_sec           REAL NOT NULL,
+    typical_bytes_per_sec   REAL NOT NULL,
+    stddev                  REAL NOT NULL,
+    z_score                 REAL NOT NULL,
+    description             TEXT,
+    FOREIGN KEY (batch_id) REFERENCES batches(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_batches_status   ON batches(status);
 CREATE INDEX IF NOT EXISTS idx_analyses_batch   ON analyses(batch_id);
 CREATE INDEX IF NOT EXISTS idx_analyses_created ON analyses(timestamp DESC);
@@ -142,6 +163,10 @@ CREATE INDEX IF NOT EXISTS idx_alerts_sev       ON network_alerts(severity, id D
 CREATE INDEX IF NOT EXISTS idx_summaries_ts     ON network_summaries(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_reports_ts       ON network_reports(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_chat_session_ts  ON chat_messages(session_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_hourly_device    ON hourly_patterns(device_ip, hour);
+CREATE INDEX IF NOT EXISTS idx_anomalies_batch  ON anomalies_detected(batch_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_anomalies_device ON anomalies_detected(device_ip, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_anomalies_ts     ON anomalies_detected(timestamp DESC);
 "#;
 
 /// Aplica el esquema completo a la conexión abierta.

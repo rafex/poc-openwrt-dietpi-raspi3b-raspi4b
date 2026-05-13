@@ -26,6 +26,8 @@ package mx.rafex.analyzer.worker;
  * #L%
  */
 
+import mx.rafex.analyzer.analysis.AnomalyDetector;
+import mx.rafex.analyzer.analysis.HourlyPatternAnalyzer;
 import mx.rafex.analyzer.config.Config;
 import mx.rafex.analyzer.db.DatabaseClient;
 import mx.rafex.analyzer.executor.PolicyExecutor;
@@ -35,6 +37,7 @@ import mx.rafex.analyzer.llm.LlamaClient;
 import mx.rafex.analyzer.util.Json;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -65,6 +68,8 @@ public final class AnalysisWorker implements Runnable {
     private final BlockingQueue<Long> queue = new LinkedBlockingQueue<>(QUEUE_CAPACITY);
     private final DatabaseClient db;
     private final PolicyExecutor policyExecutor;
+    private final AnomalyDetector anomalyDetector;
+    private final HourlyPatternAnalyzer hourlyAnalyzer;
     private volatile ApiServer apiServer;
 
     // Estadísticas públicas
@@ -78,6 +83,8 @@ public final class AnalysisWorker implements Runnable {
     public AnalysisWorker(DatabaseClient db) {
         this.db = db;
         this.policyExecutor = new PolicyExecutor(db);
+        this.anomalyDetector = new AnomalyDetector();
+        this.hourlyAnalyzer = new HourlyPatternAnalyzer();
     }
 
     /** Encola un batch_id para análisis asíncrono.  No bloquea. */
@@ -132,7 +139,31 @@ public final class AnalysisWorker implements Runnable {
         long t0 = System.currentTimeMillis();
         try {
             var traffic = summarizePayload(payload);
-            var analysis = callLlm(traffic);
+            int hour = LocalDateTime.now(ZoneOffset.UTC).getHour();
+
+            // ★ NUEVO (Fase 2): Detección de anomalías y patrones horarios
+            String deviceIp = extractDeviceIp(payload);
+            double bytesPerSecond = extractBytesPerSecond(payload);
+
+            boolean anomalyDetected = anomalyDetector.isAnomaly(deviceIp, bytesPerSecond);
+            String anomalyDescription = anomalyDetector.describeAnomaly(deviceIp, bytesPerSecond);
+
+            hourlyAnalyzer.recordConsumption(deviceIp, hour, bytesPerSecond);
+            String patternDescription = hourlyAnalyzer.describePattern(deviceIp, hour, bytesPerSecond);
+
+            // Enriquecer el contexto para el LLM con información de anomalías
+            String enrichedTraffic = traffic;
+            if (anomalyDetected || !patternDescription.isEmpty()) {
+                enrichedTraffic = traffic + "\n\n[ANÁLISIS DE PATRONES]\n";
+                if (anomalyDetected) {
+                    enrichedTraffic += "⚠️ ANOMALÍA: " + anomalyDescription + "\n";
+                }
+                if (!patternDescription.isEmpty()) {
+                    enrichedTraffic += "📊 PATRÓN: " + patternDescription + "\n";
+                }
+            }
+
+            var analysis = callLlm(enrichedTraffic);
             double elapsedS = (System.currentTimeMillis() - t0) / 1000.0;
 
             var risk = extractRisk(analysis);
@@ -229,5 +260,22 @@ public final class AnalysisWorker implements Runnable {
         if (upper.contains("ALTO") || upper.contains("HIGH") || upper.contains("CRÍTICO")) return "ALTO";
         if (upper.contains("MEDIO") || upper.contains("MEDIUM"))                            return "MEDIO";
         return "BAJO";
+    }
+
+    private static String extractDeviceIp(String payload) {
+        var sensorIp = Json.extractString(payload, "sensor_ip");
+        return sensorIp != null ? sensorIp : "unknown";
+    }
+
+    private static double extractBytesPerSecond(String payload) {
+        try {
+            var bytesStr = Json.extractString(payload, "bytes");
+            if (bytesStr != null) {
+                return Double.parseDouble(bytesStr);
+            }
+        } catch (Exception e) {
+            LOG.fine("No se pudo extraer bytes del payload: " + e.getMessage());
+        }
+        return 0.0;
     }
 }

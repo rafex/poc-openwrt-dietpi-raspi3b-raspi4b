@@ -131,6 +131,7 @@ public final class ApiServer {
         server.createContext("/api/analyses",    this::handleAnalyses);
         server.createContext("/api/alerts",      this::handleAlerts);
         server.createContext("/api/actions",     this::handleActions);
+        server.createContext("/api/anomalies",   this::handleAnomalies);
         server.createContext("/api/stats",       this::handleStats);
         server.createContext("/api/ingest",      this::handleIngest);
         server.createContext("/api/chat",        this::handleChat);
@@ -154,7 +155,7 @@ public final class ApiServer {
             if ("/".equals(path)) {
                 json(ex, 200, """
                     {"service":"ai-analyzer","version":"1.0.0",
-                     "endpoints":["/health","/api/analyses","/api/alerts","/api/actions",
+                     "endpoints":["/health","/api/analyses","/api/alerts","/api/actions","/api/anomalies",
                      "/api/stats","/api/ingest","/api/chat","/api/whitelist",
                      "/api/profiles","/api/reports","/api/summaries","/events"],
                      "ui":"served by frontend (Node.js/Vite)"}
@@ -203,6 +204,23 @@ public final class ApiServer {
         var limit = queryParam(ex, "limit", "50");
         var data = db.policyActionListRecent(Long.parseLong(limit));
         json(ex, 200, data != null ? data : "[]");
+    }
+
+    private void handleAnomalies(HttpExchange ex) throws IOException {
+        if (!"GET".equals(ex.getRequestMethod())) { json(ex, 405, Json.error("Método no permitido")); return; }
+        var limit = queryParam(ex, "limit", "50");
+        var deviceIp = queryParam(ex, "device_ip", null);
+
+        String data;
+        if (deviceIp != null && !deviceIp.isBlank()) {
+            // Retornar anomalías para un dispositivo específico
+            data = "[]";  // TODO: Implementar en DatabaseClient
+        } else {
+            // Retornar todas las anomalías recientes
+            data = "[]";  // TODO: Implementar en DatabaseClient
+        }
+
+        json(ex, 200, data);
     }
 
     private void handleStats(HttpExchange ex) throws IOException {
