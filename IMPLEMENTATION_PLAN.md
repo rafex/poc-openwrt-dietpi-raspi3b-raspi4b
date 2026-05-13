@@ -253,11 +253,43 @@ public class AnomalyDetector {
 
 ### 2.2 Checklist de implementación
 
-- [ ] AnomalyDetector.java creado
-- [ ] HourlyPatternAnalyzer.java creado
-- [ ] AnalysisWorker integrado con detectores
-- [ ] Tablas BD: hourly_patterns, anomalies_detected
+- [x] AnomalyDetector.java creado
+- [x] HourlyPatternAnalyzer.java creado
+- [x] AnalysisWorker integrado con detectores
+- [x] Tablas BD: hourly_patterns, anomalies_detected
+- [ ] Métodos en DatabaseClient para guardar/consultar anomalías
+- [ ] Endpoint GET /api/anomalies funcional
 - [ ] Test: Detección de anomalía
+- [ ] Test: Enriquecimiento de contexto LLM
+
+### 2.3 Implementación completada (sesión actual)
+
+✅ **AnomalyDetector.java**
+- Detección de anomalías con desviación estándar (2σ)
+- Mantiene histórico de 24h (máx 1440 muestras)
+- Calcula z-score para medir desviación
+- Genera descripciones en español con % de aumento
+
+✅ **HourlyPatternAnalyzer.java**
+- Media móvil exponencial (EMA) para suavizar datos
+- Patrón horario por dispositivo (0-23 horas)
+- Identifica horas pico y categoriza patrones
+- Describe cambios (3x mayor, 50% mayor, bajo)
+
+✅ **Esquema de BD**
+- `hourly_patterns`: device_ip, hour → avg_bytes_per_sec
+- `anomalies_detected`: batch_id, device_ip, z_score, descripción
+- Índices para búsquedas por dispositivo, timestamp, batch
+
+✅ **Integración en AnalysisWorker**
+- Instancia de anomalyDetector y hourlyAnalyzer
+- Extrae deviceIp y bytesPerSecond del payload
+- Enriquece contexto LLM con anomalías detectadas
+- Reporta patrones horarios para contexto inteligente
+
+✅ **Compilación**
+- 14 archivos Java compilados exitosamente
+- No hay errores de compilación
 
 ---
 
