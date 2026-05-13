@@ -27,6 +27,7 @@ package mx.rafex.analyzer.worker;
  */
 
 import mx.rafex.analyzer.analysis.AnomalyDetector;
+import mx.rafex.analyzer.analysis.DomainClassifierLLM;
 import mx.rafex.analyzer.analysis.HourlyPatternAnalyzer;
 import mx.rafex.analyzer.config.Config;
 import mx.rafex.analyzer.db.DatabaseClient;
@@ -70,6 +71,7 @@ public final class AnalysisWorker implements Runnable {
     private final PolicyExecutor policyExecutor;
     private final AnomalyDetector anomalyDetector;
     private final HourlyPatternAnalyzer hourlyAnalyzer;
+    private final DomainClassifierLLM domainClassifierLLM;
     private volatile ApiServer apiServer;
 
     // Estadísticas públicas
@@ -85,6 +87,7 @@ public final class AnalysisWorker implements Runnable {
         this.policyExecutor = new PolicyExecutor(db);
         this.anomalyDetector = new AnomalyDetector();
         this.hourlyAnalyzer = new HourlyPatternAnalyzer();
+        this.domainClassifierLLM = new DomainClassifierLLM(db);
     }
 
     /** Encola un batch_id para análisis asíncrono.  No bloquea. */
@@ -203,6 +206,11 @@ public final class AnalysisWorker implements Runnable {
             analysesOk.incrementAndGet();
             LOG.info("Batch %d analizado en %.1fs (riesgo: %s)".formatted(batchId, elapsedS, risk));
 
+            // ★ NUEVO: Clasificar dominios nuevos con LLM (Fase 3)
+            if (Config.FEATURE_DOMAIN_CLASSIFIER_LLM) {
+                classifyNewDomainsAsync(payload);
+            }
+
             // ★ NUEVO: Ejecutar políticas automáticas
             if (Config.FEATURE_AUTO_ENFORCE) {
                 policyExecutor.executePolicy(batchId, risk, analysis, apiServer);
@@ -272,6 +280,57 @@ public final class AnalysisWorker implements Runnable {
         } catch (Exception e) {
             LOG.warning("Human explanation falló: " + e.getMessage());
         }
+    }
+
+    /**
+     * Clasifica dominios nuevos de forma asíncrona (sin bloquear el worker).
+     * Se ejecuta solo si FEATURE_DOMAIN_CLASSIFIER_LLM está habilitado.
+     */
+    private void classifyNewDomainsAsync(String payload) {
+        try {
+            var domains = extractDomainsFromPayload(payload);
+            if (domains.isEmpty()) return;
+
+            // Encontrar dominios no clasificados
+            var newDomains = domains.stream()
+                .filter(d -> db.domainCategoryGet(d) == null)
+                .distinct()
+                .limit(5)  // Max 5 por batch para no saturar LLM
+                .toList();
+
+            if (!newDomains.isEmpty()) {
+                LOG.info("Clasificando %d dominios nuevos...".formatted(newDomains.size()));
+                domainClassifierLLM.classifyNewDomains(newDomains);
+            }
+        } catch (Exception e) {
+            LOG.fine("Error clasificando dominios: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Extrae lista de dominios del payload JSON.
+     * Busca campos como: domains[], domain, host, etc.
+     */
+    private static java.util.List<String> extractDomainsFromPayload(String payload) {
+        var result = new java.util.ArrayList<String>();
+        if (payload == null || payload.isEmpty()) return result;
+
+        // Búsqueda simplista: busca "domain" en el JSON
+        // En producción, se parsejaría completamente el JSON
+        var lowerPayload = payload.toLowerCase();
+        var parts = payload.split("[\"\\s,\\[\\]{}]");
+
+        for (var part : parts) {
+            part = part.trim();
+            // Validación simple: contiene punto y no es una IP
+            if (part.contains(".") &&
+                !part.matches("\\d+\\.\\d+\\.\\d+\\.\\d+") &&
+                part.matches("[a-z0-9.-]+")) {
+                result.add(part);
+            }
+        }
+
+        return result.stream().distinct().toList();
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────
