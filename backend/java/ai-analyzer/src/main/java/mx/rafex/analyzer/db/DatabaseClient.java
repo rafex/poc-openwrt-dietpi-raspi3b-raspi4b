@@ -291,4 +291,42 @@ public final class DatabaseClient implements AutoCloseable {
     public String reportListRecent(long limit) {
         return readAndFree(DbLibrary.report_list_recent(handle, limit), "[]");
     }
+
+    // ── Anomalías detectadas (Fase 2) ──────────────────────────────────────
+
+    /**
+     * Registra una anomalía detectada usando la tabla policy_actions.
+     * Las anomalías se almacenan con action='anomaly' y detalles JSON.
+     */
+    public long anomalyInsert(long batchId, String deviceIp, String ts, double bytesPerSecond,
+                              double typicalBytes, double stdDev, double zScore, String description) {
+        // Construir JSON manualmente para evitar dependencia de Json
+        StringBuilder json = new StringBuilder("{");
+        json.append("\"device_ip\":\"").append(deviceIp).append("\",");
+        json.append("\"bytes_per_sec\":").append(bytesPerSecond).append(",");
+        json.append("\"typical_bytes_per_sec\":").append(typicalBytes).append(",");
+        json.append("\"stddev\":").append(stdDev).append(",");
+        json.append("\"z_score\":").append(zScore).append(",");
+        json.append("\"description\":\"").append(description.replace("\"", "\\\"")).append("\"");
+        json.append("}");
+
+        return policyActionInsert(ts, "anomaly", "Anomalía detectada: " + description, json.toString());
+    }
+
+    /**
+     * Lista las anomalías detectadas más recientes.
+     * (En la práctica, devuelve acciones de tipo 'anomaly' recientes)
+     */
+    public String anomalyListRecent(long limit) {
+        // Retorna acciones de tipo 'anomaly' ordenas por timestamp DESC
+        return "[]";  // TODO: Requiere soporte en DbLibrary
+    }
+
+    /**
+     * Lista las anomalías de un dispositivo específico.
+     */
+    public String anomalyListByDevice(String deviceIp, long limit) {
+        // Retorna acciones de tipo 'anomaly' para device_ip específico
+        return "[]";  // TODO: Requiere soporte en DbLibrary
+    }
 }

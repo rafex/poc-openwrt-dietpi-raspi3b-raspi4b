@@ -214,13 +214,13 @@ public final class ApiServer {
         String data;
         if (deviceIp != null && !deviceIp.isBlank()) {
             // Retornar anomalías para un dispositivo específico
-            data = "[]";  // TODO: Implementar en DatabaseClient
+            data = db.anomalyListByDevice(deviceIp, Long.parseLong(limit));
         } else {
             // Retornar todas las anomalías recientes
-            data = "[]";  // TODO: Implementar en DatabaseClient
+            data = db.anomalyListRecent(Long.parseLong(limit));
         }
 
-        json(ex, 200, data);
+        json(ex, 200, data != null ? data : "[]");
     }
 
     private void handleStats(HttpExchange ex) throws IOException {

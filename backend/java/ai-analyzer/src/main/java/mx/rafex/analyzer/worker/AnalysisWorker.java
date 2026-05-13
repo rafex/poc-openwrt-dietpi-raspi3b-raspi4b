@@ -148,6 +148,34 @@ public final class AnalysisWorker implements Runnable {
             boolean anomalyDetected = anomalyDetector.isAnomaly(deviceIp, bytesPerSecond);
             String anomalyDescription = anomalyDetector.describeAnomaly(deviceIp, bytesPerSecond);
 
+            // Guardar anomalía en BD si fue detectada
+            if (anomalyDetected) {
+                try {
+                    double zScore = anomalyDetector.getZScore(deviceIp, bytesPerSecond);
+                    double mean = anomalyDetector.getMean(deviceIp);
+                    double stdDev = anomalyDetector.getStdDev(deviceIp);
+                    var ts = ISO.format(Instant.now());
+                    db.anomalyInsert(batchId, deviceIp, ts, bytesPerSecond, mean, stdDev, zScore, anomalyDescription);
+                    LOG.info("Anomalía registrada para " + deviceIp + ": z-score=" + String.format("%.2f", zScore));
+
+                    // Broadcast SSE de anomalía detectada
+                    if (apiServer != null) {
+                        var eventData = new java.util.LinkedHashMap<String, Object>();
+                        eventData.put("event", "anomaly_detected");
+                        eventData.put("batch_id", batchId);
+                        eventData.put("device_ip", deviceIp);
+                        eventData.put("timestamp", ts);
+                        eventData.put("bytes_per_sec", bytesPerSecond);
+                        eventData.put("typical_bytes_per_sec", mean);
+                        eventData.put("z_score", zScore);
+                        eventData.put("description", anomalyDescription);
+                        apiServer.broadcast(Json.obj(eventData));
+                    }
+                } catch (Exception e) {
+                    LOG.warning("Error guardando anomalía: " + e.getMessage());
+                }
+            }
+
             hourlyAnalyzer.recordConsumption(deviceIp, hour, bytesPerSecond);
             String patternDescription = hourlyAnalyzer.describePattern(deviceIp, hour, bytesPerSecond);
 
