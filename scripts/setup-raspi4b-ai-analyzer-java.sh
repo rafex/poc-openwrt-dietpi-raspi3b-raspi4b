@@ -91,6 +91,7 @@ SECRETS_FILE="$REPO_DIR/secrets/raspi4b.yaml"
 AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-/root/.config/sops/age/keys.txt}"
 GROQ_API_KEY=""
 GROQ_MODEL_VAL="qwen/qwen3-32b"
+SEARCH_API_TOKEN=""
 
 if [[ -f "$SECRETS_FILE" && -f "$AGE_KEY_FILE" ]]; then
     log_info "Descifrando secretos con sops+age..."
@@ -102,15 +103,18 @@ if [[ -f "$SECRETS_FILE" && -f "$AGE_KEY_FILE" ]]; then
        sops -d --output-type dotenv "$SECRETS_FILE" > "$_STMP" 2>/dev/null; then
         GROQ_API_KEY="$(grep '^GROQ_API_KEY=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || echo '')"
         GROQ_MODEL_VAL="$(grep '^GROQ_MODEL=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || echo 'qwen/qwen3-32b')"
+        SEARCH_API_TOKEN="$(grep '^SEARCH_API_TOKEN=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || echo '')"
         rm -f "$_STMP"; trap - EXIT
-        [[ -n "$GROQ_API_KEY" ]] && log_ok "GROQ_API_KEY: ${#GROQ_API_KEY} chars" \
-                                   || log_info "GROQ_API_KEY vacío — solo llama.cpp"
+        [[ -n "$GROQ_API_KEY" ]]       && log_ok   "GROQ_API_KEY: ${#GROQ_API_KEY} chars" \
+                                       || log_info  "GROQ_API_KEY vacío — solo llama.cpp"
+        [[ -n "$SEARCH_API_TOKEN" ]]   && log_ok   "SEARCH_API_TOKEN: ${#SEARCH_API_TOKEN} chars (OSINT/Bing habilitado)" \
+                                       || log_info  "SEARCH_API_TOKEN vacío — OSINT solo con PHOMBER"
     else
         rm -f "$_STMP"; trap - EXIT
-        log_warn "sops no pudo descifrar — desplegando sin Groq"
+        log_warn "sops no pudo descifrar — desplegando sin Groq ni SearchAPI"
     fi
 elif [[ ! -f "$SECRETS_FILE" ]]; then
-    log_info "secrets/raspi4b.yaml no encontrado — sin Groq"
+    log_info "secrets/raspi4b.yaml no encontrado — sin Groq ni SearchAPI"
 elif [[ ! -f "$AGE_KEY_FILE" ]]; then
     log_warn "Clave age no encontrada: $AGE_KEY_FILE"
     log_warn "Ejecuta: bash scripts/secrets-push-key.sh"
@@ -181,6 +185,15 @@ N_PREDICT=256
 GROQ_API_KEY=${GROQ_API_KEY}
 GROQ_MODEL=${GROQ_MODEL_VAL}
 GROQ_MAX_TOKENS=1024
+
+# ── OSINT (SearchAPI.io — opcional) ─────────────────────────────────────────
+# SEARCH_API_TOKEN se descifra de secrets/raspi4b.yaml con sops+age.
+# Si está vacío el enrichment OSINT solo usa PHOMBER (modo degradado).
+SEARCH_API_TOKEN=${SEARCH_API_TOKEN}
+FEATURE_OSINT=true
+OSINT_MIN_SEVERITY=HIGH
+PHOMBER_TIMEOUT=25
+OSINT_LLM_TIMEOUT=60
 
 PORT=5000
 ROUTER_IP=${_ROUTER_IP}

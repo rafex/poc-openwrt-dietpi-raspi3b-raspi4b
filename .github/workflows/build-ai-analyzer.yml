@@ -200,10 +200,9 @@ jobs:
 
       - name: Compilar (sin native image, sin libanalyzer_db)
         working-directory: backend/java/ai-analyzer
-        env:
-          SEARCH_API_TOKEN: ${{ secrets.SEARCH_API_TOKEN }}
         run: |
           # Compilar sin -Pnative; generate-sources ya agregó las cabeceras MIT
+          # SEARCH_API_TOKEN no se necesita en compilación — se lee en runtime desde la Pi
           mvn -q compile -DskipTests
 
   # ─── 5. Verificar crate Rust ──────────────────────────────────────────────

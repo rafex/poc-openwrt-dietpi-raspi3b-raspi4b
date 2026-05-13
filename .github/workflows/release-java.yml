@@ -138,11 +138,10 @@ jobs:
 
       - name: GraalVM Native Image arm64
         working-directory: backend/java/ai-analyzer
-        env:
-          SEARCH_API_TOKEN: ${{ secrets.SEARCH_API_TOKEN }}
         run: |
           # JAVA_HOME ya apunta a GraalVM 25 gracias a graalvm/setup-graalvm@v1
           # source/target Java 21 — compilación nativa ARM64 al ejecutar en runner ARM
+          # SEARCH_API_TOKEN no se necesita en compilación — se lee en runtime desde la Pi
           ./mvnw -q -Pnative package -DskipTests -Dnative.imageName=ai-analyzer
           cp target/ai-analyzer ai-analyzer-linux-arm64
           echo "Tamaño: $(du -sh ai-analyzer-linux-arm64)"
