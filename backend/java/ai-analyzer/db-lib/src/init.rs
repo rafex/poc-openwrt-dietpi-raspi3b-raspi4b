@@ -30,11 +30,15 @@ CREATE TABLE IF NOT EXISTS analyses (
 );
 
 CREATE TABLE IF NOT EXISTS policy_actions (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp   TEXT NOT NULL,
-    action      TEXT NOT NULL,
-    reason      TEXT,
-    details     TEXT
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id        INTEGER REFERENCES batches(id),
+    timestamp       TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    domain          TEXT,
+    reason          TEXT,
+    details         TEXT,
+    ssh_return_code INTEGER DEFAULT -1,
+    ssh_stderr      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ai_rules (
@@ -68,15 +72,17 @@ CREATE TABLE IF NOT EXISTS human_explanations (
 );
 
 CREATE TABLE IF NOT EXISTS network_alerts (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    batch_id    INTEGER NOT NULL REFERENCES batches(id),
-    timestamp   TEXT NOT NULL,
-    severity    TEXT NOT NULL,
-    alert_type  TEXT NOT NULL,
-    message     TEXT NOT NULL,
-    source_ip   TEXT,
-    domain      TEXT,
-    meta        TEXT
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id        INTEGER NOT NULL REFERENCES batches(id),
+    timestamp       TEXT NOT NULL,
+    severity        TEXT NOT NULL,
+    alert_type      TEXT NOT NULL,
+    message         TEXT NOT NULL,
+    source_ip       TEXT,
+    domain          TEXT,
+    meta            TEXT,
+    action_taken    TEXT DEFAULT 'none',
+    action_details  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS domain_categories (
