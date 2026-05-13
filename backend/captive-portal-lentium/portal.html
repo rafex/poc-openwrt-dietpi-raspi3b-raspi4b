@@ -588,7 +588,11 @@
         }
         if (ctx && ctx.risk_message) {
           riskBox.style.display = 'block';
-          riskBox.textContent = 'Aviso IA: ' + ctx.risk_message;
+          const sev = (ctx.risk_severity || 'BAJO').toUpperCase();
+          riskBox.style.borderColor = sev === 'ALTO' ? '#e53935' : sev === 'MEDIO' ? '#f0ad4e' : '#8ab8e6';
+          riskBox.style.background  = sev === 'ALTO' ? '#fdecea' : sev === 'MEDIO' ? '#fff8e8' : '#e8f3ff';
+          riskBox.style.color       = sev === 'ALTO' ? '#b71c1c' : sev === 'MEDIO' ? '#7a4b00' : '#0b3a66';
+          riskBox.textContent = '🤖 IA · ' + ctx.risk_message;
         } else {
           riskBox.style.display = 'none';
           riskBox.textContent = '';

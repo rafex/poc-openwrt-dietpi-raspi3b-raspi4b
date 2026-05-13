@@ -1105,7 +1105,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "warning": warned,
                 "warning_message": "NO NO NO es sitio no" if warned else "",
                 "risk_message": ai_risk.get("message", ""),
-                "risk_severity": ai_risk.get("severity", "info"),
+                "risk_severity": ai_risk.get("risk", ai_risk.get("severity", "BAJO")),
             })
             return
 
