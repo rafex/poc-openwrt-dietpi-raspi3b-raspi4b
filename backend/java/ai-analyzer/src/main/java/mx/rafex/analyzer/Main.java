@@ -87,6 +87,7 @@ public final class Main {
         // 3. Servidor HTTP
         var mqtt   = new MqttConsumer(db, worker);  // necesario antes de ApiServer para pasarlo
         var server = new ApiServer(db, worker, mqtt);
+        worker.setApiServer(server);  // permitir que PolicyExecutor haga broadcast
         server.start();
 
         // 4. MQTT (no crítico si falla — HTTP ingest sigue funcionando)

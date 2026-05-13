@@ -28,6 +28,7 @@ package mx.rafex.analyzer.executor;
 
 import mx.rafex.analyzer.config.Config;
 import mx.rafex.analyzer.db.DatabaseClient;
+import mx.rafex.analyzer.http.ApiServer;
 import mx.rafex.analyzer.util.Json;
 
 import java.net.InetAddress;
@@ -78,8 +79,9 @@ public final class PolicyExecutor {
      * @param batchId    ID del batch analizado
      * @param risk       Nivel de riesgo: BAJO/MEDIO/ALTO
      * @param analysis   Texto del análisis del LLM
+     * @param apiServer  servidor API para broadcast SSE (puede ser null)
      */
-    public void executePolicy(long batchId, String risk, String analysis) {
+    public void executePolicy(long batchId, String risk, String analysis, ApiServer apiServer) {
         if (!Config.FEATURE_AUTO_ENFORCE) {
             LOG.fine("PolicyExecutor deshabilitado (FEATURE_AUTO_ENFORCE=false)");
             return;
@@ -93,7 +95,7 @@ public final class PolicyExecutor {
                 String domain = extractSocialDomain(analysis);
                 boolean success = executeBlockSocial(batchId, domain, hour);
                 if (success) {
-                    recordAction(batchId, "social_block", domain, hour);
+                    recordAction(batchId, "social_block", domain, hour, apiServer);
                 }
             }
 
@@ -102,7 +104,7 @@ public final class PolicyExecutor {
                 String domain = extractAdultDomain(analysis);
                 boolean success = executeBlockAdult(batchId, domain);
                 if (success) {
-                    recordAction(batchId, "adult_block", domain, hour);
+                    recordAction(batchId, "adult_block", domain, hour, apiServer);
                 }
             }
 
@@ -265,7 +267,7 @@ public final class PolicyExecutor {
         return "contenido-adultos";
     }
 
-    private void recordAction(long batchId, String action, String domain, int hour) {
+    private void recordAction(long batchId, String action, String domain, int hour, ApiServer apiServer) {
         try {
             var details = new LinkedHashMap<String, Object>();
             details.put("action", action);
@@ -273,15 +275,29 @@ public final class PolicyExecutor {
             details.put("hour", hour);
             details.put("executed_at", ISO.format(Instant.now()));
             details.put("ssh_enabled", Config.FEATURE_AUTO_ENFORCE_SSH);
+            details.put("batch_id", batchId);
 
+            var timestamp = ISO.format(Instant.now());
             db.policyActionInsert(
-                ISO.format(Instant.now()),
+                timestamp,
                 action,
                 domain + " bloqueado por política " + action,
                 Json.obj(details)
             );
 
             LOG.info("Acción registrada: " + action + " en " + domain);
+
+            // Broadcast SSE event
+            if (apiServer != null) {
+                var event = new LinkedHashMap<String, Object>();
+                event.put("event", "action_executed");
+                event.put("batch_id", batchId);
+                event.put("action", action);
+                event.put("domain", domain);
+                event.put("timestamp", timestamp);
+                event.put("details", details);
+                apiServer.broadcast(Json.obj(event));
+            }
 
         } catch (Exception e) {
             LOG.warning("Error registrando acción: " + e.getMessage());
