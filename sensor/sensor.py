@@ -28,8 +28,10 @@ import re
 import subprocess
 import threading
 import time
+import hashlib
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 import requests
@@ -47,6 +49,12 @@ ROUTER_USER    = os.environ.get("ROUTER_USER",     "root")
 SSH_KEY        = os.environ.get("SSH_KEY",         "/opt/keys/sensor")
 USE_ROUTER_SSH = os.environ.get("USE_ROUTER_SSH",  "true").lower() == "true"
 LOG_LEVEL      = os.environ.get("LOG_LEVEL",       "INFO")
+PCAP_EXPORT_ENABLED = os.environ.get("PCAP_EXPORT_ENABLED", "true").lower() == "true"
+PCAP_ROTATE_SECONDS = int(os.environ.get("PCAP_ROTATE_SECONDS", "30"))
+PCAP_DIR            = os.environ.get("PCAP_DIR", "/tmp/pcaps")
+PCAP_MAX_ZST_BYTES  = int(os.environ.get("PCAP_MAX_ZST_BYTES", str(4 * 1024 * 1024)))
+PCAP_TOPIC_BASE     = os.environ.get("PCAP_TOPIC_BASE", "rafexpi/sensor01/pcap")
+PCAP_ZSTD_LEVEL     = os.environ.get("PCAP_ZSTD_LEVEL", "1")
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -561,6 +569,145 @@ def send_batch(summary: dict):
         log.error("Error enviando batch: %s", e)
 
 
+def _mqtt_publish(topic: str, payload, qos: int = 1, timeout_s: float = 8.0) -> bool:
+    if _mqtt_client is None or not _mqtt_ready.is_set():
+        return False
+    try:
+        info = _mqtt_client.publish(topic, payload, qos=qos, retain=False)
+        if info.rc != mqtt.MQTT_ERR_SUCCESS:
+            return False
+        info.wait_for_publish(timeout=timeout_s)
+        return info.is_published()
+    except Exception as e:
+        log.warning("MQTT publish fallo topic=%s: %s", topic, e)
+        return False
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _compress_to_zst(src_path: Path) -> Path | None:
+    # Usa zstd del sistema para mantener baja CPU en Raspi.
+    try:
+        subprocess.run(
+            ["zstd", f"-{PCAP_ZSTD_LEVEL}", "-f", str(src_path), "-o", str(src_path) + ".zst"],
+            check=True,
+            capture_output=True,
+        )
+        return Path(str(src_path) + ".zst")
+    except Exception as e:
+        log.warning("No se pudo comprimir %s con zstd: %s", src_path.name, e)
+        return None
+
+
+def _publish_pcap_file(raw_path: Path):
+    zst_path = _compress_to_zst(raw_path)
+    if not zst_path or not zst_path.exists():
+        return
+    try:
+        size_zst = zst_path.stat().st_size
+        if size_zst <= 0 or size_zst > PCAP_MAX_ZST_BYTES:
+            log.warning("PCAP %s fuera de limite (%d bytes), se omite", zst_path.name, size_zst)
+            zst_path.unlink(missing_ok=True)
+            raw_path.unlink(missing_ok=True)
+            return
+
+        capture_id = f"{SENSOR_IP.replace('.', '-')}-{raw_path.stem}"
+        sha256 = _sha256_file(zst_path)
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        meta = {
+            "capture_id": capture_id,
+            "sensor_ip": SENSOR_IP,
+            "iface": INTERFACE,
+            "timestamp": now_iso,
+            "filename": zst_path.name,
+            "size_zst": size_zst,
+            "sha256": sha256,
+            "compression": "zstd",
+            "window_s": PCAP_ROTATE_SECONDS,
+        }
+        meta_ok = _mqtt_publish(f"{PCAP_TOPIC_BASE}/meta", json.dumps(meta, ensure_ascii=False), qos=1)
+        if not meta_ok:
+            log.warning("No se pudo publicar meta de %s", capture_id)
+            return
+
+        data_topic = f"{PCAP_TOPIC_BASE}/data/{capture_id}"
+        data_ok = _mqtt_publish(data_topic, zst_path.read_bytes(), qos=1, timeout_s=20.0)
+        if not data_ok:
+            log.warning("No se pudo publicar data de %s", capture_id)
+            return
+
+        done = {
+            "capture_id": capture_id,
+            "sensor_ip": SENSOR_IP,
+            "timestamp": now_iso,
+            "status": "published",
+            "size_zst": size_zst,
+            "sha256": sha256,
+        }
+        done_ok = _mqtt_publish(f"{PCAP_TOPIC_BASE}/done", json.dumps(done, ensure_ascii=False), qos=1)
+        if done_ok:
+            log.info("PCAP evidencia publicada: %s (%d bytes zst)", capture_id, size_zst)
+            zst_path.unlink(missing_ok=True)
+            raw_path.unlink(missing_ok=True)
+    finally:
+        # Si falló cualquier paso, conservar archivos para reintento.
+        pass
+
+
+def pcap_capture_thread(stop_event: threading.Event):
+    pdir = Path(PCAP_DIR)
+    pdir.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "tcpdump", "-i", INTERFACE, "-G", str(PCAP_ROTATE_SECONDS),
+        "-w", str(pdir / "cap-%Y%m%d-%H%M%S.pcap"),
+    ]
+    log.info("PCAP capture iniciado: %s", " ".join(cmd))
+    while not stop_event.is_set():
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            while not stop_event.is_set():
+                if proc.poll() is not None:
+                    break
+                stop_event.wait(1)
+            if stop_event.is_set() and proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=3)
+        except FileNotFoundError:
+            log.error("tcpdump no encontrado. Instala con: apt-get install -y tcpdump")
+            stop_event.wait(30)
+        except Exception as e:
+            log.error("Error en pcap_capture_thread: %s", e)
+            stop_event.wait(5)
+
+
+def pcap_publish_thread(stop_event: threading.Event):
+    pdir = Path(PCAP_DIR)
+    pdir.mkdir(parents=True, exist_ok=True)
+    log.info("PCAP publish thread activo: dir=%s topic=%s", str(pdir), PCAP_TOPIC_BASE)
+    while not stop_event.is_set():
+        try:
+            now = time.time()
+            for raw_path in sorted(pdir.glob("*.pcap")):
+                # Evita tomar el archivo que todavía puede estar escribiéndose.
+                if now - raw_path.stat().st_mtime < max(2, PCAP_ROTATE_SECONDS // 3):
+                    continue
+                _publish_pcap_file(raw_path)
+            stop_event.wait(5)
+        except Exception as e:
+            log.error("Error en pcap_publish_thread: %s", e)
+            stop_event.wait(5)
+
+
 # ─── Hilo de batch ────────────────────────────────────────────────────────────
 def batch_thread(aggregator: TrafficAggregator, stop_event: threading.Event):
     """Cada BATCH_INTERVAL segundos, genera y envía el resumen del batch."""
@@ -600,6 +747,8 @@ def main():
     log.info("  Intervalo: %ds", BATCH_INTERVAL)
     log.info("  Router SSH: %s (%s@%s)", "activo" if USE_ROUTER_SSH else "desactivado", ROUTER_USER, ROUTER_IP)
     log.info("  MQTT      : %s:%d  topic=%s", MQTT_HOST, MQTT_PORT, MQTT_TOPIC)
+    log.info("  PCAP extra: enabled=%s rotate=%ss dir=%s topic=%s max_zst=%d",
+             PCAP_EXPORT_ENABLED, PCAP_ROTATE_SECONDS, PCAP_DIR, PCAP_TOPIC_BASE, PCAP_MAX_ZST_BYTES)
     log.info("  HTTP fallback: %s", ANALYZER_URL)
     log.info("=" * 60)
 
@@ -618,9 +767,16 @@ def main():
 
     t_cap   = threading.Thread(target=capture_thread, args=(aggregator, stop_event), daemon=True)
     t_batch = threading.Thread(target=batch_thread,   args=(aggregator, stop_event), daemon=True)
+    t_pcap_cap = None
+    t_pcap_pub = None
 
     t_cap.start()
     t_batch.start()
+    if PCAP_EXPORT_ENABLED:
+        t_pcap_cap = threading.Thread(target=pcap_capture_thread, args=(stop_event,), daemon=True)
+        t_pcap_pub = threading.Thread(target=pcap_publish_thread, args=(stop_event,), daemon=True)
+        t_pcap_cap.start()
+        t_pcap_pub.start()
 
     try:
         while True:
@@ -630,6 +786,10 @@ def main():
         stop_event.set()
         t_cap.join(timeout=5)
         t_batch.join(timeout=5)
+        if t_pcap_cap:
+            t_pcap_cap.join(timeout=5)
+        if t_pcap_pub:
+            t_pcap_pub.join(timeout=5)
         log.info("Sensor detenido.")
 
 
