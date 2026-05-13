@@ -23,6 +23,7 @@ Variables de entorno:
 
 import json
 import logging
+import logging.handlers
 import os
 import re
 import subprocess
@@ -49,6 +50,10 @@ ROUTER_USER    = os.environ.get("ROUTER_USER",     "root")
 SSH_KEY        = os.environ.get("SSH_KEY",         "/opt/keys/sensor")
 USE_ROUTER_SSH = os.environ.get("USE_ROUTER_SSH",  "true").lower() == "true"
 LOG_LEVEL      = os.environ.get("LOG_LEVEL",       "INFO")
+LOG_DIR        = os.environ.get("LOG_DIR", "/var/log/demo-openwrt/sensor")
+LOG_FILE       = os.environ.get("LOG_FILE", "sensor.log")
+LOG_MAX_BYTES  = int(os.environ.get("LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+LOG_BACKUP_COUNT = int(os.environ.get("LOG_BACKUP_COUNT", "5"))
 PCAP_EXPORT_ENABLED = os.environ.get("PCAP_EXPORT_ENABLED", "true").lower() == "true"
 PCAP_ROTATE_SECONDS = int(os.environ.get("PCAP_ROTATE_SECONDS", "30"))
 PCAP_DIR            = os.environ.get("PCAP_DIR", "/tmp/pcaps")
@@ -56,12 +61,41 @@ PCAP_MAX_ZST_BYTES  = int(os.environ.get("PCAP_MAX_ZST_BYTES", str(4 * 1024 * 10
 PCAP_TOPIC_BASE     = os.environ.get("PCAP_TOPIC_BASE", "rafexpi/sensor01/pcap")
 PCAP_ZSTD_LEVEL     = os.environ.get("PCAP_ZSTD_LEVEL", "1")
 
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s %(levelname)-5s [%(funcName)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
-log = logging.getLogger("sensor")
+def _setup_logger() -> logging.Logger:
+    logger = logging.getLogger("sensor")
+    logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    logger.propagate = False
+    if logger.handlers:
+        return logger
+
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-5s [%(funcName)s] %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+
+    log_path = Path(LOG_DIR)
+    try:
+        log_path.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        log_path = Path("/tmp/demo-openwrt/sensor")
+        log_path.mkdir(parents=True, exist_ok=True)
+        logger.warning("Sin permisos en LOG_DIR, usando fallback: %s", str(log_path))
+
+    fh = logging.handlers.RotatingFileHandler(
+        log_path / LOG_FILE,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    return logger
+
+
+log = _setup_logger()
 
 # Campos tshark capturados (orden importante — índices usados en parser)
 TSHARK_FIELDS = [
