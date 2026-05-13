@@ -136,9 +136,10 @@ public final class ApiServer {
         server.createContext("/api/ingest",      this::handleIngest);
         server.createContext("/api/chat",        this::handleChat);
         server.createContext("/api/whitelist",   this::handleWhitelist);
-        server.createContext("/api/profiles",    this::handleProfiles);
-        server.createContext("/api/reports",     this::handleReports);
-        server.createContext("/api/summaries",   this::handleSummaries);
+        server.createContext("/api/profiles",         this::handleProfiles);
+        server.createContext("/api/reports",          this::handleReports);
+        server.createContext("/api/summaries",        this::handleSummaries);
+        server.createContext("/api/portal/risk-message", this::handlePortalRiskMessage);
 
         // ── SSE ───────────────────────────────────────────────────────────────
         server.createContext("/events",          this::handleSse);
@@ -157,7 +158,7 @@ public final class ApiServer {
                     {"service":"ai-analyzer","version":"1.0.0",
                      "endpoints":["/health","/api/analyses","/api/alerts","/api/actions","/api/anomalies",
                      "/api/stats","/api/ingest","/api/chat","/api/whitelist",
-                     "/api/profiles","/api/reports","/api/summaries","/events"],
+                     "/api/profiles","/api/reports","/api/summaries","/api/portal/risk-message","/events"],
                      "ui":"served by frontend (Node.js/Vite)"}
                     """.strip());
             } else {
@@ -348,6 +349,73 @@ public final class ApiServer {
     private void handleProfiles(HttpExchange ex) throws IOException {
         if (!"GET".equals(ex.getRequestMethod())) { json(ex, 405, Json.error("Método no permitido")); return; }
         json(ex, 200, db.deviceProfileList());
+    }
+
+    /**
+     * GET /api/portal/risk-message?ip=192.168.1.X
+     *
+     * <p>Retorna un mensaje de riesgo dinámico para el portal cautivo.
+     * El portal Lentium consulta este endpoint al mostrar la página de autenticación.
+     *
+     * <p>Respuesta:
+     * <pre>
+     * { "ip": "...", "risk": "ALTO|MEDIO|BAJO", "message": "...", "timestamp": "..." }
+     * </pre>
+     */
+    private void handlePortalRiskMessage(HttpExchange ex) throws IOException {
+        if (!"GET".equals(ex.getRequestMethod())) {
+            json(ex, 405, Json.error("Método no permitido"));
+            return;
+        }
+
+        var ip = queryParam(ex, "ip", "");
+
+        // Consultar análisis reciente del IP
+        String risk = "BAJO";
+        String message;
+
+        if (!ip.isBlank()) {
+            try {
+                // Buscar alertas recientes del IP
+                var alertsJson = db.alertListRecent(20);
+                if (alertsJson != null && alertsJson.contains(ip)) {
+                    if (alertsJson.contains("\"severity\":\"critical\"")
+                        || alertsJson.contains("\"severity\":\"high\"")) {
+                        risk = "ALTO";
+                    } else if (alertsJson.contains("\"severity\":\"medium\"")) {
+                        risk = "MEDIO";
+                    }
+                }
+
+                // Si no hay alertas, revisar últimos análisis
+                if ("BAJO".equals(risk)) {
+                    var analysesJson = db.analysisListRecent(5);
+                    if (analysesJson != null
+                        && (analysesJson.contains("\"risk\":\"ALTO\"")
+                            || analysesJson.contains("\"risk_level\":\"ALTO\""))) {
+                        risk = "MEDIO"; // Riesgo general de red moderado
+                    }
+                }
+            } catch (Exception e) {
+                LOG.warning("Error consultando riesgo para " + ip + ": " + e.getMessage());
+            }
+        }
+
+        message = switch (risk) {
+            case "ALTO" -> "⚠️ Se ha detectado actividad sospechosa en esta red. "
+                         + "Evita compartir información sensible y usa solo sitios HTTPS.";
+            case "MEDIO" -> "ℹ️ La red está activa con tráfico moderado. "
+                          + "Navega con precaución y evita transacciones bancarias.";
+            default      -> "✅ La red opera con normalidad. "
+                          + "Usa conexiones HTTPS para mayor seguridad.";
+        };
+
+        var now = java.time.Instant.now().toString();
+        var resp = "{\"ip\":\"%s\",\"risk\":\"%s\",\"message\":\"%s\",\"timestamp\":\"%s\"}"
+            .formatted(ip.isBlank() ? "unknown" : ip, risk,
+                       message.replace("\"", "\\\""), now);
+
+        json(ex, 200, resp);
     }
 
     private void handleReports(HttpExchange ex) throws IOException {

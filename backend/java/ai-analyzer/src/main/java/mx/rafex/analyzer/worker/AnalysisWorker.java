@@ -27,6 +27,7 @@ package mx.rafex.analyzer.worker;
  */
 
 import mx.rafex.analyzer.analysis.AnomalyDetector;
+import mx.rafex.analyzer.analysis.DeviceProfiler;
 import mx.rafex.analyzer.analysis.DomainClassifierLLM;
 import mx.rafex.analyzer.analysis.HourlyPatternAnalyzer;
 import mx.rafex.analyzer.config.Config;
@@ -72,6 +73,7 @@ public final class AnalysisWorker implements Runnable {
     private final AnomalyDetector anomalyDetector;
     private final HourlyPatternAnalyzer hourlyAnalyzer;
     private final DomainClassifierLLM domainClassifierLLM;
+    private final DeviceProfiler deviceProfiler;
     private volatile ApiServer apiServer;
 
     // Estadísticas públicas
@@ -88,6 +90,7 @@ public final class AnalysisWorker implements Runnable {
         this.anomalyDetector = new AnomalyDetector();
         this.hourlyAnalyzer = new HourlyPatternAnalyzer();
         this.domainClassifierLLM = new DomainClassifierLLM(db);
+        this.deviceProfiler = new DeviceProfiler(db);
     }
 
     /** Encola un batch_id para análisis asíncrono.  No bloquea. */
@@ -209,6 +212,12 @@ public final class AnalysisWorker implements Runnable {
             // ★ NUEVO: Clasificar dominios nuevos con LLM (Fase 3)
             if (Config.FEATURE_DOMAIN_CLASSIFIER_LLM) {
                 classifyNewDomainsAsync(payload);
+            }
+
+            // ★ NUEVO: Actualizar perfil del dispositivo (Fase 4)
+            if (Config.FEATURE_DEVICE_PROFILING) {
+                var domains = extractDomainsFromPayload(payload);
+                deviceProfiler.updateProfile(deviceIp, domains);
             }
 
             // ★ NUEVO: Ejecutar políticas automáticas

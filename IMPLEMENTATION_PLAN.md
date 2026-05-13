@@ -1,8 +1,8 @@
 # Plan: Sistema de IA Interactivo con Acciones de Red y Dashboard en Tiempo Real
 
 **Fecha de creación:** Mayo 12, 2026  
-**Estado:** En Implementación - Fase 2  
-**Realismo POC:** ✅ Fase 1 (70%) → 🔄 Fase 2 (85%) → Fase 3 (95%) → Fase 4 (99%)
+**Estado:** En Implementación - Fase 4  
+**Realismo POC:** ✅ F1(70%) → ✅ F2(85%) → ✅ F3(95%) → 🔄 F4(99%) → ⚪ F5 → ⚪ F6
 
 ---
 
@@ -22,12 +22,14 @@
 
 ## 🎯 OBJETIVOS POR FASE
 
-| Fase | Funcionalidades | Realismo | Tiempo Est. | Estado |
-|------|-----------------|----------|------------|--------|
-| **1** | F2 (Alertas) + F5 (Bloqueo Social) | 70% | 2-3 días | ✅ Completada |
-| **2** | F3 (Patrones) + F1 (Anomalías) | 85% | 3-4 días | 🟡 En progreso |
-| **3** | F4 (Clasificación LLM) + Dashboard | 95% | 2-3 días | ⚪ Pendiente |
-| **4** | F6 (Device Profiling) + Predicción | 99% | 4-5 días | ⚪ Pendiente |
+| Fase | Funcionalidades (ref TODO-AI.md) | Realismo | Tiempo Est. | Estado |
+|------|----------------------------------|----------|------------|--------|
+| **1** | Alertas automáticas + Bloqueo Social (TODO F2+F5) | 70% | 2-3 días | ✅ Completada |
+| **2** | Patrones horarios + Anomalías (TODO F3+F1) | 85% | 3-4 días | ✅ Completada |
+| **3** | Clasificación LLM de dominios + Dashboard (TODO F4) | 95% | 2-3 días | ✅ Completada |
+| **4** | Device Profiling heurístico (TODO F6) | 97% | 4-5 días | 🟡 En progreso |
+| **5** | Mensajes dinámicos para portal cautivo (TODO Fase 4) | 98% | 1-2 días | ⚪ Pendiente |
+| **6** | Testing end-to-end + integración completa | 99% | 2-3 días | ⚪ Pendiente |
 
 ---
 
@@ -385,26 +387,156 @@ public class AnomalyDetector {
 
 ---
 
-## 🏗️ FASE 4: DEVICE PROFILING + PREDICCIÓN (F6)
+## 🏗️ FASE 4: DEVICE PROFILING HEURÍSTICO (TODO-AI Fase 6)
 
 **Duración:** 4-5 días  
-**Realismo:** 99%  
-**Status:** ⚪ Pendiente
+**Realismo:** 97%  
+**Status:** 🟡 En progreso
+
+**Referencia TODO-AI.md:** Fase 6 — Motor heurístico + LLM opcional para clasificar dispositivos (iPhone, Android, Smart TV, laptop, IoT)
 
 ### 4.1 DeviceProfiler.java
 
-**Detecta:** Celular vs Computadora, patrones de uso, categorías típicas
+**Archivo:** `backend/java/ai-analyzer/src/main/java/mx/rafex/analyzer/analysis/DeviceProfiler.java`
 
-### 4.2 BehaviorPredictor.java
+**Detecta:** tipo de dispositivo (móvil, desktop, smart TV, IoT), patrones de uso, categorías típicas  
+**Algoritmo:** heurística basada en patrones de dominio (ua-platform, Apple/Google/Android dominios)
 
-**Predice:** Comportamiento futuro basado en histórico
+### 4.2 Integración en AnalysisWorker
 
-### 4.3 Checklist de implementación
+- Instanciar `DeviceProfiler` en constructor
+- Llamar `updateProfile()` después de cada análisis LLM
+- Guardar perfil en BD vía `DatabaseClient.deviceProfileUpsert()`
 
-- [ ] DeviceProfiler.java creado
-- [ ] BehaviorPredictor.java creado
-- [ ] Tablas BD: device_profiles, behavior_predictions
-- [ ] Visualizaciones en dashboard
+### 4.3 Endpoint GET /api/devices/profile
+
+- Lista perfiles de dispositivos detectados
+- Incluye: IP, tipo, confianza, razones, última actualización
+
+### 4.4 Visualización en dashboard
+
+- Panel en `/actions.pug` o nueva página `/devices.pug`
+- Tabla: IP, tipo inferido, porcentaje confianza, categorías de tráfico
+
+### 4.5 Checklist de implementación
+
+- [x] DeviceProfiler.java creado con lógica heurística
+- [x] Integración en AnalysisWorker (flag FEATURE_DEVICE_PROFILING)
+- [x] Endpoint GET /api/profiles ya existía en ApiServer
+- [x] Compilación exitosa (19 archivos .class)
+- ⚪ Panel de dispositivos en frontend (página /devices.pug)
+- ⚪ Test: clasificación de dispositivo por dominios
+
+---
+
+## 📡 FASE 5: MENSAJES DINÁMICOS PARA PORTAL CAUTIVO (TODO-AI Fase 4)
+
+**Duración:** 1-2 días  
+**Realismo:** 98%  
+**Status:** ⚪ Pendiente
+
+**Referencia TODO-AI.md:** Fase 4 — El analyzer expone `/api/portal/risk-message?ip=...` y el portal Lentium muestra advertencia dinámica.
+
+### 5.1 Endpoint GET /api/portal/risk-message
+
+**En ApiServer.java:**
+```
+GET /api/portal/risk-message?ip=192.168.1.50
+→ { "ip": "192.168.1.50", "risk": "ALTO", "message": "...", "timestamp": "..." }
+```
+
+**Lógica:**
+1. Buscar análisis reciente del IP (último batch donde sensor_ip = ip)
+2. Buscar alertas recientes del IP
+3. Si riesgo ALTO → mensaje de advertencia fuerte
+4. Si riesgo MEDIO → aviso moderado
+5. Si sin datos → mensaje estático informativo
+
+### 5.2 Integración con Portal Lentium
+
+**En portal/backend.js o portal/captive.js:**
+```javascript
+// Al mostrar la página de autenticación
+const riskResp = await fetch(`http://192.168.1.167:5000/api/portal/risk-message?ip=${clientIp}`)
+const { message, risk } = await riskResp.json()
+if (risk !== 'BAJO') showWarningBanner(message)
+```
+
+### 5.3 Checklist de implementación
+
+- [x] Endpoint GET /api/portal/risk-message en ApiServer
+- [x] Lógica de consulta: alertas recientes + análisis de red por IP
+- [x] Mensajes en español por nivel de riesgo (BAJO/MEDIO/ALTO)
+- [x] Fallback si no hay datos (200 OK con mensaje estático)
+- [x] Compilación exitosa (19 archivos .class)
+- ⚪ Integración en Portal Lentium (pendiente de implementar en portal)
+- ⚪ Test: consulta por IP con datos y sin datos
+
+---
+
+## ✅ FASE 6: TESTING END-TO-END + INTEGRACIÓN COMPLETA
+
+**Duración:** 2-3 días  
+**Realismo:** 99%  
+**Status:** ⚪ Pendiente
+
+### 6.1 Tests del flujo completo
+
+**Escenario A: Bloqueo social automático**
+```bash
+# 1. Enviar batch con instagram.com a las 20:00
+curl -X POST http://localhost:5000/api/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"sensor_ip":"192.168.1.50","domains":[{"domain":"instagram.com","bytes":5000000}]}'
+
+# 2. Verificar alerta generada
+curl http://localhost:5000/api/alerts?limit=5
+
+# 3. Verificar acción ejecutada
+curl http://localhost:5000/api/actions?limit=5
+
+# 4. En router: verificar nftables
+ssh root@192.168.1.1 "nft list set ip captive blocked_social_ips"
+```
+
+**Escenario B: Detección de anomalía**
+```bash
+# 1. Enviar 10 batches "normales" (bytes=1000)
+for i in {1..10}; do
+  curl -X POST http://localhost:5000/api/ingest \
+    -d '{"sensor_ip":"192.168.1.100","bytes":"1000","payload":"normal"}'
+done
+
+# 2. Enviar batch anómalo (bytes=50000)
+curl -X POST http://localhost:5000/api/ingest \
+  -d '{"sensor_ip":"192.168.1.100","bytes":"50000","payload":"anomalo"}'
+
+# 3. Verificar anomalía en SSE y BD
+curl http://localhost:5000/api/anomalies?limit=5
+```
+
+**Escenario C: Portal cautivo dinámico**
+```bash
+# Consultar mensaje de riesgo para IP con tráfico de alto riesgo
+curl "http://localhost:5000/api/portal/risk-message?ip=192.168.1.50"
+```
+
+### 6.2 Verificación de dashboard /actions
+
+1. Abrir navegador: `http://localhost:5173/actions`
+2. Generar batch que active bloqueo social
+3. Verificar tabla de acciones actualizada sin recargar
+4. Verificar estadísticas (bloqueados, anomalías)
+5. Revisar log SSE en vivo
+
+### 6.3 Checklist de implementación
+
+- [ ] Test A: Bloqueo social automático end-to-end
+- [ ] Test B: Detección de anomalía + SSE
+- [ ] Test C: Portal cautivo dinámico
+- [ ] Test D: Dashboard /actions en tiempo real
+- [ ] Test E: Clasificación LLM de dominios nuevos
+- [ ] Test F: Device profiling con múltiples dispositivos
 
 ---
 
@@ -426,18 +558,20 @@ public class AnomalyDetector {
 | Día 1-2 | Fase 1: PolicyExecutor + bloqueo social | ✅ Completada |
 | Día 3-5 | Fase 2: Anomalías + patrones | ✅ Completada |
 | Día 6-7 | Fase 3: Dashboard + clasificación LLM | ✅ Completada |
-| Día 8-12 | Fase 4: Device profiling + predicción | 🟡 En progreso |
-| Día 13 | Testing + documentación | ⚪ Pendiente |
+| Día 8-10 | Fase 4: Device profiling heurístico | ✅ Backend listo |
+| Día 11 | Fase 5: Mensajes dinámicos portal cautivo | ✅ Backend listo |
+| Día 12-13 | Fase 6: Testing end-to-end + integración | ⚪ Pendiente |
+
+**Total estimado:** ~2 semanas para sistema al 99%
 
 ---
 
 ## 🔄 ESTADO ACTUAL - SESIÓN ACTUALIZADA
 
-**Fases completadas:** 1, 2, 3 (100%)  
-**Compilación:** ✅ 18 archivos .class sin errores  
-**Próximos pasos:** Fase 4 (Device Profiling) o Testing end-to-end
-
-**Total:** ~2 semanas para MVP realista al 95%
+**Fases completadas:** 1, 2, 3 (de 6)  
+**Backend Fase 4+5 implementado:** DeviceProfiler + /api/portal/risk-message  
+**Compilación:** ✅ 19 archivos .class sin errores  
+**Pendiente:** Frontend /devices.pug · integración portal Lentium · testing e2e (Fase 6)
 
 ---
 
