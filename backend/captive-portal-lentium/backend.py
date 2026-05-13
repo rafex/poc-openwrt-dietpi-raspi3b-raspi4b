@@ -9,6 +9,7 @@ import sqlite3
 import hashlib
 import json
 import logging
+import logging.handlers
 import time
 import os
 import socket
@@ -22,12 +23,47 @@ from pathlib import Path
 # Logging
 # =============================================================================
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s %(levelname)-8s [%(funcName)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
-log = logging.getLogger("captive-lentium")
+LOG_DIR = os.environ.get("LOG_DIR", "/var/log/demo-openwrt/captive-portal")
+LOG_FILE = os.environ.get("LOG_FILE", "captive-portal.log")
+LOG_MAX_BYTES = int(os.environ.get("LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+LOG_BACKUP_COUNT = int(os.environ.get("LOG_BACKUP_COUNT", "5"))
+
+
+def _setup_logger() -> logging.Logger:
+    logger = logging.getLogger("captive-lentium")
+    logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    logger.propagate = False
+    if logger.handlers:
+        return logger
+
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-8s [%(funcName)s] %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+
+    log_path = Path(LOG_DIR)
+    try:
+        log_path.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        log_path = Path("/tmp/demo-openwrt/captive-portal")
+        log_path.mkdir(parents=True, exist_ok=True)
+        logger.warning("Sin permisos en LOG_DIR, usando fallback: %s", str(log_path))
+
+    fh = logging.handlers.RotatingFileHandler(
+        log_path / LOG_FILE,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    return logger
+
+
+log = _setup_logger()
 
 # =============================================================================
 # Configuración
