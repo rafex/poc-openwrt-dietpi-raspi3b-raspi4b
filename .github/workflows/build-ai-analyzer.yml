@@ -1,4 +1,19 @@
-name: Build AI Analyzer (Rust + Java → arm64)
+name: CI — ai-analyzer (Java + Rust)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Verificación rápida en cada push a branch y en cada PR.
+#
+# Este workflow hace SOLO verificación ligera (compilación JVM + cargo check).
+# NO ejecuta GraalVM Native Image ni cargo build --release arm64.
+#
+# La compilación completa ocurre únicamente en release-java.yml:
+#   • Rust cdylib → libanalyzer_db-linux-arm64.so
+#   • GraalVM Native Image → ai-analyzer-linux-arm64
+#   • GitHub Release con ambos artefactos
+#   • Imagen Docker linux/arm64 → ghcr.io
+#
+# Trigger de release-java.yml: push de tag v*.*.* o v*.*.*-preview
+# ─────────────────────────────────────────────────────────────────────────────
 
 on:
   push:
@@ -13,168 +28,12 @@ on:
       - 'backend/java/ai-analyzer/**'
       - 'backend/java/ai-analyzer/db-lib/**'
 
-permissions:
-  contents: write   # para publicar releases
-
 jobs:
-  # ─── 1. Compilar Rust → libanalyzer_db-linux-arm64.so ─────────────────────
-  build-rust-arm64:
-    name: Rust cdylib (aarch64-linux)
-    runs-on: ubuntu-24.04-arm
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Instalar Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Caché Cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            backend/java/ai-analyzer/db-lib/target
-          key: rust-arm64-${{ hashFiles('backend/java/ai-analyzer/db-lib/Cargo.lock') }}
-          restore-keys: rust-arm64-
-
-      - name: Build cdylib arm64 nativo
-        working-directory: backend/java/ai-analyzer/db-lib
-        run: |
-          cargo build --release
-          # Copiar artefacto con nombre canónico
-          cp target/release/libanalyzer_db.so \
-             ../../libanalyzer_db-linux-arm64.so
-          file ../../libanalyzer_db-linux-arm64.so
-          file ../../libanalyzer_db-linux-arm64.so | grep -Eiq 'aarch64|arm64' || {
-            echo "ERROR: libanalyzer_db-linux-arm64.so no es ARM64"
-            exit 1
-          }
-
-      - name: Validar símbolos ABI de libanalyzer_db
-        working-directory: backend/java
-        run: |
-          set -euo pipefail
-          for sym in rule_upsert osint_insert osint_is_cached osint_list_recent; do
-            nm -D libanalyzer_db-linux-arm64.so | grep -w "$sym" || {
-              echo "ERROR: libanalyzer_db-linux-arm64.so no exporta $sym"
-              exit 1
-            }
-          done
-          echo "✅ Todos los símbolos ABI validados"
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: libanalyzer_db-linux-arm64
-          path: backend/java/libanalyzer_db-linux-arm64.so
-          retention-days: 7
-
-  # ─── 2. Compilar Java + GraalVM Native Image → ai-analyzer-linux-arm64 ────
-  build-java-native-arm64:
-    name: GraalVM Native Image (aarch64-linux)
-    runs-on: ubuntu-24.04-arm
-    needs: build-rust-arm64
-
-    steps:
-      - uses: actions/checkout@v4
-
-      # GraalVM 25 compila código Java 21 (source/target en pom.xml se mantiene en 21)
-      # Ventajas vs GraalVM 21: mejor PGO, menor footprint, startup más rápido
-      - name: Instalar GraalVM CE 25 (compila código Java 21)
-        uses: graalvm/setup-graalvm@v1
-        with:
-          java-version: '25'
-          distribution: 'graalvm-community'
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Dependencias de build Native Image
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y zlib1g-dev libstdc++-11-dev
-
-      - name: Caché Maven
-        uses: actions/cache@v4
-        with:
-          path: ~/.m2/repository
-          key: maven-${{ hashFiles('backend/java/ai-analyzer/pom.xml') }}
-          restore-keys: maven-
-
-      - name: Descargar libanalyzer_db
-        uses: actions/download-artifact@v4
-        with:
-          name: libanalyzer_db-linux-arm64
-          path: backend/java/ai-analyzer/
-
-      - name: Compilar fat JAR
-        working-directory: backend/java/ai-analyzer
-        run: mvn -q package -DskipTests
-
-      - name: Build GraalVM Native Image arm64
-        working-directory: backend/java/ai-analyzer
-        run: |
-          # JAVA_HOME ya apunta a GraalVM 25 gracias a graalvm/setup-graalvm@v1
-          # El código fuente es Java 21 (source/target en pom.xml); GraalVM 25 compila
-          # bytecode Java 21. Runner ARM64 evita cross-compile ambiguo.
-          mvn -q -Pnative package -DskipTests -Dnative.imageName=ai-analyzer
-          # El binario queda en target/ai-analyzer
-          cp target/ai-analyzer ai-analyzer-linux-arm64
-          file ai-analyzer-linux-arm64
-          file ai-analyzer-linux-arm64 | grep -Eiq 'aarch64|arm64' || {
-            echo "ERROR: ai-analyzer-linux-arm64 no es ARM64"
-            exit 1
-          }
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ai-analyzer-linux-arm64
-          path: backend/java/ai-analyzer/ai-analyzer-linux-arm64
-          retention-days: 7
-
-  # ─── 3. Publicar Release en GitHub ────────────────────────────────────────
-  release:
-    name: Publicar Release
-    runs-on: ubuntu-latest
-    needs: [build-rust-arm64, build-java-native-arm64]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Descargar artefactos
-        uses: actions/download-artifact@v4
-        with:
-          path: dist/
-
-      - name: Determinar versión
-        id: version
-        run: |
-          echo "tag=v$(date '+%Y%m%d')-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Crear Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: "AI Analyzer ${{ steps.version.outputs.tag }}"
-          body: |
-            ## AI Analyzer — Release automático
-
-            Artefactos para Raspberry Pi 4B (arm64):
-            - `ai-analyzer-linux-arm64` — binario nativo (GraalVM, <80MB RAM, <100ms startup)
-            - `libanalyzer_db-linux-arm64.so` — wrapper SQLite (Rust, bundled SQLite)
-
-            ### Deploy en Pi4B
-            ```bash
-            bash scripts/setup-raspi4b-ai-analyzer.sh --download-release
-            ```
-          files: |
-            dist/ai-analyzer-linux-arm64/ai-analyzer-linux-arm64
-            dist/libanalyzer_db-linux-arm64/libanalyzer_db-linux-arm64.so
-          fail_on_unmatched_files: true
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # ─── 4. Verificar compilación Java (JVM) en cada PR ──────────────────────
+  # ── 1. Verificar compilación Java (JVM normal, sin GraalVM) ───────────────
+  #
+  # Objetivo: detectar errores de compilación en < 3 min, sin consumir
+  # runners ARM64 ni instalar GraalVM. La native image solo se genera
+  # en release-java.yml cuando se hace push de tag.
   verify-java:
     name: Verificar compilación Java (host)
     runs-on: ubuntu-latest
@@ -193,19 +52,23 @@ jobs:
         with:
           path: ~/.m2/repository
           key: maven-${{ hashFiles('backend/java/ai-analyzer/pom.xml') }}
+          restore-keys: maven-
 
       - name: Agregar cabeceras de licencia MIT
         working-directory: backend/java/ai-analyzer
         run: mvn license:update-file-header -q
 
-      - name: Compilar (sin native image, sin libanalyzer_db)
+      - name: Compilar (sin -Pnative, sin libanalyzer_db)
         working-directory: backend/java/ai-analyzer
         run: |
-          # Compilar sin -Pnative; generate-sources ya agregó las cabeceras MIT
-          # SEARCH_API_TOKEN no se necesita en compilación — se lee en runtime desde la Pi
+          # -Pnative requiere GraalVM + libanalyzer_db arm64 — solo en release-java.yml.
+          # SEARCH_API_TOKEN/GROQ_API_KEY se leen en runtime desde la Pi, no en compilación.
           mvn -q compile -DskipTests
 
-  # ─── 5. Verificar crate Rust ──────────────────────────────────────────────
+  # ── 2. Verificar crate Rust (cargo check + clippy) ────────────────────────
+  #
+  # Objetivo: detectar errores de tipos y warnings de Clippy sin compilar
+  # el cdylib completo (cargo build --release tarda ~5 min extra).
   verify-rust:
     name: Verificar crate Rust (host)
     runs-on: ubuntu-latest
@@ -223,6 +86,7 @@ jobs:
             ~/.cargo/git
             backend/java/ai-analyzer/db-lib/target
           key: rust-host-${{ hashFiles('backend/java/ai-analyzer/db-lib/Cargo.lock') }}
+          restore-keys: rust-host-
 
       - name: cargo check + clippy
         working-directory: backend/java/ai-analyzer/db-lib
