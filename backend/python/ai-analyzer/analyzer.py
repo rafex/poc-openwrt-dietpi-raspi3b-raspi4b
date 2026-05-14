@@ -30,6 +30,7 @@ import re
 import sqlite3
 import threading
 import time
+import hashlib
 from collections import Counter
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -46,7 +47,9 @@ from router_mcp import RouterMCP
 MQTT_HOST  = os.environ.get("MQTT_HOST",  "192.168.1.167")
 MQTT_PORT  = int(os.environ.get("MQTT_PORT",  "1883"))
 MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "rafexpi/sensor/batch")
+MQTT_PCAP_TOPIC_BASE = os.environ.get("MQTT_PCAP_TOPIC_BASE", "rafexpi/sensor01/pcap")
 DB_PATH    = os.environ.get("DB_PATH",    "/data/sensor.db")
+PCAP_STORE_DIR = os.environ.get("PCAP_STORE_DIR", "/data/pcap-evidence")
 LLAMA_URL     = os.environ.get("LLAMA_URL",     "http://192.168.1.167:8081")
 N_PREDICT     = int(os.environ.get("N_PREDICT",     "256"))
 MODEL_FORMAT  = os.environ.get("MODEL_FORMAT",  "tinyllama")  # tinyllama | qwen
@@ -182,6 +185,9 @@ stats = {
     "llama_calls":       0,
     "llama_errors":      0,
     "mqtt_connected":    False,
+    "pcap_received":     0,
+    "pcap_dedup":        0,
+    "pcap_invalid_sha":  0,
     "started_at":        datetime.now(timezone.utc).isoformat(),
 }
 
@@ -192,6 +198,8 @@ policy_state = {"social_block_active": False, "porn_block_enabled": PORN_BLOCK_E
 _DOMAIN_CACHE_TTL_S = 300
 _domain_cache: dict[str, tuple[dict, float]] = {}   # domain → (result, expires_at)
 _domain_cache_lock = threading.Lock()
+_pcap_meta_cache: dict[str, dict] = {}
+_pcap_cache_lock = threading.Lock()
 
 
 # ─── SQLite ───────────────────────────────────────────────────────────────────
@@ -321,6 +329,22 @@ def init_db():
             meta        TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS pcap_evidence (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            capture_id   TEXT NOT NULL UNIQUE,
+            sensor_ip    TEXT,
+            iface        TEXT,
+            topic        TEXT,
+            filename     TEXT NOT NULL,
+            storage_path TEXT NOT NULL,
+            compression  TEXT,
+            sha256       TEXT,
+            size_zst     INTEGER NOT NULL DEFAULT 0,
+            status       TEXT NOT NULL DEFAULT 'received',
+            received_at  TEXT NOT NULL,
+            meta         TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_batches_status   ON batches(status);
         CREATE INDEX IF NOT EXISTS idx_analyses_batch   ON analyses(batch_id);
         CREATE INDEX IF NOT EXISTS idx_analyses_created ON analyses(timestamp DESC);
@@ -365,6 +389,70 @@ def init_db():
     conn.commit()
     conn.close()
     log.info("SQLite inicializado en %s", DB_PATH)
+
+
+def db_get_pcap_by_capture_id(capture_id: str) -> dict | None:
+    conn = db_connect()
+    row = conn.execute(
+        "SELECT * FROM pcap_evidence WHERE capture_id=?",
+        (capture_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def db_upsert_pcap_meta(capture_id: str, meta: dict):
+    conn = db_connect()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO pcap_evidence (capture_id,sensor_ip,iface,topic,filename,storage_path,compression,sha256,size_zst,status,received_at,meta) "
+        "VALUES (?,?,?,?,?,?,?,?,?,'meta_only',?,?) "
+        "ON CONFLICT(capture_id) DO UPDATE SET "
+        "sensor_ip=excluded.sensor_ip,iface=excluded.iface,topic=excluded.topic,filename=excluded.filename,"
+        "compression=excluded.compression,sha256=excluded.sha256,size_zst=excluded.size_zst,meta=excluded.meta",
+        (
+            capture_id,
+            str(meta.get("sensor_ip", "")),
+            str(meta.get("iface", "")),
+            str(meta.get("topic", "")),
+            str(meta.get("filename", f"{capture_id}.pcap.zst")),
+            str(meta.get("storage_path", "")),
+            str(meta.get("compression", "zstd")),
+            str(meta.get("sha256", "")),
+            int(meta.get("size_zst", 0) or 0),
+            now,
+            json.dumps(meta, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def db_set_pcap_received(capture_id: str, *, storage_path: str, filename: str, topic: str, sha256: str, size_zst: int, meta: dict):
+    conn = db_connect()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO pcap_evidence (capture_id,sensor_ip,iface,topic,filename,storage_path,compression,sha256,size_zst,status,received_at,meta) "
+        "VALUES (?,?,?,?,?,?,?,?,?,'received',?,?) "
+        "ON CONFLICT(capture_id) DO UPDATE SET "
+        "topic=excluded.topic,filename=excluded.filename,storage_path=excluded.storage_path,sha256=excluded.sha256,"
+        "size_zst=excluded.size_zst,status='received',received_at=excluded.received_at,meta=excluded.meta",
+        (
+            capture_id,
+            str(meta.get("sensor_ip", "")),
+            str(meta.get("iface", "")),
+            topic,
+            filename,
+            storage_path,
+            str(meta.get("compression", "zstd")),
+            sha256,
+            int(size_zst),
+            now,
+            json.dumps(meta, ensure_ascii=False),
+        ),
+    )
+    conn.commit()
+    conn.close()
 
 
 def db_store_batch(summary: dict) -> int:
@@ -2388,6 +2476,94 @@ def enqueue_batch(summary: dict) -> int:
     return batch_id
 
 
+def _pcap_store_dir() -> pathlib.Path:
+    d = pathlib.Path(PCAP_STORE_DIR)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(payload)
+    return h.hexdigest()
+
+
+def _on_pcap_meta(msg):
+    try:
+        meta = json.loads(msg.payload.decode("utf-8", errors="replace"))
+    except Exception as e:
+        log.warning("PCAP meta invalida: %s", e)
+        return
+    capture_id = str(meta.get("capture_id", "")).strip()
+    if not capture_id:
+        return
+    meta["topic"] = msg.topic
+    with _pcap_cache_lock:
+        _pcap_meta_cache[capture_id] = meta
+    db_upsert_pcap_meta(capture_id, meta)
+
+
+def _on_pcap_data(msg):
+    # Esperado: <base>/data/<capture_id>
+    parts = msg.topic.split("/")
+    if len(parts) < 2:
+        return
+    capture_id = parts[-1].strip()
+    if not capture_id or capture_id == "data":
+        log.warning("PCAP data topic sin capture_id: %s", msg.topic)
+        return
+
+    existing = db_get_pcap_by_capture_id(capture_id)
+    if existing and existing.get("status") == "received":
+        stats["pcap_dedup"] += 1
+        return
+
+    with _pcap_cache_lock:
+        meta = dict(_pcap_meta_cache.get(capture_id, {}))
+
+    payload = bytes(msg.payload or b"")
+    if not payload:
+        return
+    computed_sha = _sha256_bytes(payload)
+    expected_sha = str(meta.get("sha256", "")).strip().lower()
+    if expected_sha and computed_sha.lower() != expected_sha:
+        stats["pcap_invalid_sha"] += 1
+        log.warning("PCAP sha mismatch capture_id=%s expected=%s got=%s", capture_id, expected_sha, computed_sha)
+        return
+
+    filename = str(meta.get("filename") or f"{capture_id}.pcap.zst")
+    filename = filename.replace("/", "_")
+    out_path = _pcap_store_dir() / filename
+    if out_path.exists():
+        # Evita colisión por nombre; el id es lo importante para dedupe.
+        out_path = _pcap_store_dir() / f"{capture_id}.pcap.zst"
+    out_path.write_bytes(payload)
+    size_zst = out_path.stat().st_size
+    db_set_pcap_received(
+        capture_id,
+        storage_path=str(out_path),
+        filename=out_path.name,
+        topic=msg.topic,
+        sha256=computed_sha,
+        size_zst=size_zst,
+        meta=meta,
+    )
+    stats["pcap_received"] += 1
+    log.info("PCAP recibido: id=%s bytes=%d path=%s", capture_id, size_zst, str(out_path))
+
+
+def _on_pcap_done(msg):
+    try:
+        payload = json.loads(msg.payload.decode("utf-8", errors="replace"))
+    except Exception:
+        return
+    capture_id = str(payload.get("capture_id", "")).strip()
+    if not capture_id:
+        return
+    with _pcap_cache_lock:
+        _pcap_meta_cache.pop(capture_id, None)
+
+
 # ─── SSE broadcast ────────────────────────────────────────────────────────────
 def _broadcast_sse(result: dict):
     data = json.dumps(result, ensure_ascii=False)
@@ -2408,7 +2584,11 @@ def on_mqtt_connect(client, userdata, flags, rc):
         stats["mqtt_connected"] = True
         log.info("MQTT conectado a %s:%d", MQTT_HOST, MQTT_PORT)
         client.subscribe(MQTT_TOPIC, qos=1)
+        client.subscribe(f"{MQTT_PCAP_TOPIC_BASE}/meta", qos=1)
+        client.subscribe(f"{MQTT_PCAP_TOPIC_BASE}/done", qos=1)
+        client.subscribe(f"{MQTT_PCAP_TOPIC_BASE}/data/#", qos=1)
         log.info("Suscrito a topic: %s", MQTT_TOPIC)
+        log.info("Suscrito PCAP topic base: %s", MQTT_PCAP_TOPIC_BASE)
     else:
         log.warning("MQTT connection failed rc=%d", rc)
 
@@ -2420,6 +2600,15 @@ def on_mqtt_disconnect(client, userdata, rc):
 
 def on_mqtt_message(client, userdata, msg):
     try:
+        if msg.topic == f"{MQTT_PCAP_TOPIC_BASE}/meta":
+            _on_pcap_meta(msg)
+            return
+        if msg.topic == f"{MQTT_PCAP_TOPIC_BASE}/done":
+            _on_pcap_done(msg)
+            return
+        if msg.topic.startswith(f"{MQTT_PCAP_TOPIC_BASE}/data/"):
+            _on_pcap_data(msg)
+            return
         summary = json.loads(msg.payload.decode())
         enqueue_batch(summary)
     except json.JSONDecodeError as e:
@@ -2804,7 +2993,9 @@ def main():
     log.info("AI Analyzer — Raspi 4B")
     log.info("  Puerto HTTP  : %d", PORT)
     log.info("  MQTT broker  : %s:%d  topic=%s", MQTT_HOST, MQTT_PORT, MQTT_TOPIC)
+    log.info("  MQTT PCAP    : %s/{meta,data/<id>,done}", MQTT_PCAP_TOPIC_BASE)
     log.info("  SQLite DB    : %s", DB_PATH)
+    log.info("  PCAP store   : %s", PCAP_STORE_DIR)
     log.info("  llama.cpp    : %s", LLAMA_URL)
     log.info(
         "  Social policy: enabled=%s window=%02d-%02d tz=%s min_hits=%d",

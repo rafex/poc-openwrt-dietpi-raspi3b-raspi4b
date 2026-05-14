@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acciones — AI Analyzer</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  </head>
+  <body class="actions-page">
+    <nav class="navbar">
+      <div class="navbar-brand"><a class="brand-link" href="/dashboard"><span class="brand-icon">⬡</span><span class="brand-name">AI Analyzer</span></a></div>
+      <ul class="navbar-links">
+        <li><a class="nav-link" href="/dashboard" data-page="dashboard"><span class="nav-icon">📊</span><span>Dashboard</span></a></li>
+        <li><a class="nav-link" href="/actions" data-page="actions"><span class="nav-icon">🎬</span><span>Acciones</span></a></li>
+        <li><a class="nav-link" href="/devices" data-page="devices"><span class="nav-icon">📱</span><span>Dispositivos</span></a></li>
+        <li><a class="nav-link" href="/chat" data-page="chat"><span class="nav-icon">💬</span><span>Chat IA</span></a></li>
+        <li><a class="nav-link" href="/terminal" data-page="terminal"><span class="nav-icon">🖥</span><span>Terminal</span></a></li>
+        <li><a class="nav-link" href="/rulez" data-page="rulez"><span class="nav-icon">🛡</span><span>Reglas</span></a></li>
+        <li><a class="nav-link" href="/reports" data-page="reports"><span class="nav-icon">📋</span><span>Reportes</span></a></li>
+      </ul>
+      <div class="navbar-status"><span class="status-dot" id="status-dot"></span><span class="status-text" id="status-text">Conectando...</span></div>
+    </nav>
+    <main class="main-content">
+    </main>
+    <footer class="footer">
+      <p>AI Analyzer &copy; 2026 — Red WiFi con IA</p>
+    </footer>
+    <script type="module" src="/src/ts/actions.ts"></script>
+  </body>
+</html>
+<div class="page-header animate__animated animate__fadeInDown">
+  <h1>🎬 Acciones en Tiempo Real</h1>
+  <p class="subtitle">Decisiones de IA ejecutadas automáticamente en la red</p>
+</div>
+<div class="stats-grid">
+  <div class="stat-card animate__animated animate__fadeInUp">
+    <div class="stat-icon">🚫</div>
+    <div class="stat-label">Bloqueados (24h)</div>
+    <div class="stat-value" id="stat-blocks">—</div>
+  </div>
+  <div class="stat-card animate__animated animate__fadeInUp" style="animation-delay:.1s">
+    <div class="stat-icon">⚠️</div>
+    <div class="stat-label">Anomalías detectadas</div>
+    <div class="stat-value" id="stat-anomalies">—</div>
+  </div>
+  <div class="stat-card animate__animated animate__fadeInUp" style="animation-delay:.2s">
+    <div class="stat-icon">✅</div>
+    <div class="stat-label">Tasa de éxito</div>
+    <div class="stat-value" id="stat-success-rate">—%</div>
+  </div>
+  <div class="stat-card animate__animated animate__fadeInUp" style="animation-delay:.3s">
+    <div class="stat-icon">📊</div>
+    <div class="stat-label">Dominios clasificados</div>
+    <div class="stat-value" id="stat-domains-classified">—</div>
+  </div>
+</div>
+<div class="section animate__animated animate__fadeIn">
+  <div class="section-header">
+    <h2>Acciones ejecutadas recientemente</h2>
+    <button class="btn btn-sm" id="btn-refresh-actions">↻ Actualizar</button>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table" id="actions-table">
+      <thead>
+        <tr>
+          <th>Timestamp</th>
+          <th>Acción</th>
+          <th>Dispositivo / Dominio</th>
+          <th>Detalles</th>
+          <th>Estado SSH</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="text-muted">colspan="5" — Sin acciones aún —</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="section animate__animated animate__fadeIn">
+  <div class="section-header">
+    <h2>Anomalías detectadas</h2>
+    <div class="section-toggle">
+      <input id="toggle-anomalies" type="checkbox" checked>
+      <label for="toggle-anomalies">Ver detalles</label>
+    </div>
+  </div>
+  <div class="table-wrap" id="anomalies-section" style="display:none">
+    <table class="data-table" id="anomalies-table">
+      <thead>
+        <tr>
+          <th>Dispositivo IP</th>
+          <th>Timestamp</th>
+          <th>Consumo típico</th>
+          <th>Consumo actual</th>
+          <th>Z-score</th>
+          <th>Descripción</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="text-muted">colspan="6" — Sin anomalías aún —</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="section animate__animated animate__fadeIn">
+  <div class="section-header">
+    <h2>Dominios bloqueados (últimos 24h)</h2><span class="section-info">Total: <strong id="blocked-domains-count">0</strong></span>
+  </div>
+  <div class="chart-container">
+    <div class="chart" id="blocked-domains-chart">
+      <p class="text-muted">(cargando datos...)</p>
+    </div>
+  </div>
+</div>
+<div class="section animate__animated animate__fadeIn">
+  <div class="section-header">
+    <h2>Eventos en vivo (SSE)</h2>
+  </div>
+  <div class="log-box" id="sse-log" aria-live="polite">
+    <p class="text-muted">Escuchando eventos en tiempo real...</p>
+  </div>
+</div>
+<style>
+  #blocked-domains-chart {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+  .domain-block {
+    padding: 1rem;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+  .domain-block .domain-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+    word-break: break-all;
+  }
+  .domain-block .domain-count {
+    font-size: 1.5rem;
+    font-weight: 700;
+  }
+  .section-toggle {
+    margin-left: auto;
+  }
+  .section-toggle input[type="checkbox"] {
+    cursor: pointer;
+  }
+  .text-muted {
+    color: #999;
+    font-style: italic;
+  }
+</style>

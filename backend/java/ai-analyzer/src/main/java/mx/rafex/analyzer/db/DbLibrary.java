@@ -141,6 +141,25 @@ public final class DbLibrary {
     private static final MethodHandle MH_REPORT_INSERT              = find("report_insert",              FunctionDescriptor.of(C_LONG, C_PTR, C_PTR, C_PTR, C_PTR));
     private static final MethodHandle MH_REPORT_LIST_RECENT         = find("report_list_recent",         FunctionDescriptor.of(C_PTR,  C_PTR, C_LONG));
 
+    // osint_enrichments
+    // osint_insert(handle, alert_id, batch_id, target, target_type, source,
+    //              phomber_raw, bing_raw, llm_result, risk, summary_es, queried_at, expires_at) -> i64
+    private static final MethodHandle MH_OSINT_INSERT         = find("osint_insert",
+        FunctionDescriptor.of(C_LONG, C_PTR, C_LONG, C_LONG,
+            C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR));
+    // osint_is_cached(handle, target, source, now_iso) -> i64
+    private static final MethodHandle MH_OSINT_IS_CACHED      = find("osint_is_cached",
+        FunctionDescriptor.of(C_LONG, C_PTR, C_PTR, C_PTR, C_PTR));
+    // osint_list_recent(handle, limit) -> *mut c_char
+    private static final MethodHandle MH_OSINT_LIST_RECENT    = find("osint_list_recent",
+        FunctionDescriptor.of(C_PTR, C_PTR, C_LONG));
+    // osint_get_detail(handle, id) -> *mut c_char
+    private static final MethodHandle MH_OSINT_GET_DETAIL     = find("osint_get_detail",
+        FunctionDescriptor.of(C_PTR, C_PTR, C_LONG));
+    // osint_pending_alerts(handle, min_severity, now_iso, limit) -> *mut c_char
+    private static final MethodHandle MH_OSINT_PENDING_ALERTS = find("osint_pending_alerts",
+        FunctionDescriptor.of(C_PTR, C_PTR, C_PTR, C_PTR, C_LONG));
+
     // ── Helpers de carga ─────────────────────────────────────────────────────
 
     private static MethodHandle find(String name, FunctionDescriptor desc) {
@@ -537,6 +556,58 @@ public final class DbLibrary {
     public static MemorySegment report_list_recent(MemorySegment h, long limit) {
         try { return (MemorySegment) MH_REPORT_LIST_RECENT.invokeExact(h, limit); }
         catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    // ── osint_enrichments ─────────────────────────────────────────────────────
+
+    /** Inserta o reemplaza un enriquecimiento OSINT. alert_id/batch_id = -1 si no aplica. */
+    public static long osint_insert(MemorySegment h,
+                                    long alertId, long batchId,
+                                    String target, String targetType, String source,
+                                    String phomberRaw, String bingRaw, String llmResult,
+                                    String risk, String summaryEs,
+                                    String queriedAt, String expiresAt) {
+        try (var a = Arena.ofConfined()) {
+            var phRaw = phomberRaw != null ? a.allocateFrom(phomberRaw) : MemorySegment.NULL;
+            var biRaw = bingRaw    != null ? a.allocateFrom(bingRaw)    : MemorySegment.NULL;
+            var llRaw = llmResult  != null ? a.allocateFrom(llmResult)  : MemorySegment.NULL;
+            var rsk   = risk       != null ? a.allocateFrom(risk)       : MemorySegment.NULL;
+            var sum   = summaryEs  != null ? a.allocateFrom(summaryEs)  : MemorySegment.NULL;
+            return (long) MH_OSINT_INSERT.invokeExact(h,
+                alertId, batchId,
+                a.allocateFrom(target), a.allocateFrom(targetType), a.allocateFrom(source),
+                phRaw, biRaw, llRaw, rsk, sum,
+                a.allocateFrom(queriedAt), a.allocateFrom(expiresAt));
+        } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** 1 si está en caché (expires_at > now), 0 si no. */
+    public static long osint_is_cached(MemorySegment h, String target, String source, String nowIso) {
+        try (var a = Arena.ofConfined()) {
+            return (long) MH_OSINT_IS_CACHED.invokeExact(h,
+                a.allocateFrom(target), a.allocateFrom(source), a.allocateFrom(nowIso));
+        } catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** Lista reciente sin campos raw (para endpoint LIST). */
+    public static MemorySegment osint_list_recent(MemorySegment h, long limit) {
+        try { return (MemorySegment) MH_OSINT_LIST_RECENT.invokeExact(h, limit); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** Detalle completo por ID (incluye phomber_raw, bing_raw, llm_result). */
+    public static MemorySegment osint_get_detail(MemorySegment h, long id) {
+        try { return (MemorySegment) MH_OSINT_GET_DETAIL.invokeExact(h, id); }
+        catch (Throwable t) { throw new RuntimeException(t); }
+    }
+
+    /** Alertas HIGH/CRITICAL sin enriquecimiento vigente. */
+    public static MemorySegment osint_pending_alerts(MemorySegment h, String minSeverity,
+                                                      String nowIso, long limit) {
+        try (var a = Arena.ofConfined()) {
+            return (MemorySegment) MH_OSINT_PENDING_ALERTS.invokeExact(h,
+                a.allocateFrom(minSeverity), a.allocateFrom(nowIso), limit);
+        } catch (Throwable t) { throw new RuntimeException(t); }
     }
 
     private DbLibrary() {}

@@ -9,11 +9,13 @@ import sqlite3
 import hashlib
 import json
 import logging
+import logging.handlers
 import time
 import os
 import socket
 import urllib.request
 import urllib.parse
+import urllib.error
 import mimetypes
 from pathlib import Path
 
@@ -21,12 +23,47 @@ from pathlib import Path
 # Logging
 # =============================================================================
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(
-    level=getattr(logging, LOG_LEVEL, logging.INFO),
-    format="%(asctime)s %(levelname)-8s [%(funcName)s] %(message)s",
-    datefmt="%Y-%m-%dT%H:%M:%S",
-)
-log = logging.getLogger("captive-lentium")
+LOG_DIR = os.environ.get("LOG_DIR", "/var/log/demo-openwrt/captive-portal")
+LOG_FILE = os.environ.get("LOG_FILE", "captive-portal.log")
+LOG_MAX_BYTES = int(os.environ.get("LOG_MAX_BYTES", str(5 * 1024 * 1024)))
+LOG_BACKUP_COUNT = int(os.environ.get("LOG_BACKUP_COUNT", "5"))
+
+
+def _setup_logger() -> logging.Logger:
+    logger = logging.getLogger("captive-lentium")
+    logger.setLevel(getattr(logging, LOG_LEVEL, logging.INFO))
+    logger.propagate = False
+    if logger.handlers:
+        return logger
+
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-8s [%(funcName)s] %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+
+    log_path = Path(LOG_DIR)
+    try:
+        log_path.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        log_path = Path("/tmp/demo-openwrt/captive-portal")
+        log_path.mkdir(parents=True, exist_ok=True)
+        logger.warning("Sin permisos en LOG_DIR, usando fallback: %s", str(log_path))
+
+    fh = logging.handlers.RotatingFileHandler(
+        log_path / LOG_FILE,
+        maxBytes=LOG_MAX_BYTES,
+        backupCount=LOG_BACKUP_COUNT,
+        encoding="utf-8",
+    )
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+    return logger
+
+
+log = _setup_logger()
 
 # =============================================================================
 # Configuración
@@ -51,6 +88,14 @@ R3_USER     = os.environ.get("SERVICE_RASPI3_USER", "root")
 R3_KEY      = os.environ.get("SERVICE_RASPI3_SSH_KEY", "/opt/keys/sensor")
 REPO_PATH   = os.environ.get("REPO_PATH", "/opt/repository/poc-openwrt-dietpi-raspi3b-raspi4b")
 AI_ANALYZER_URL = os.environ.get("AI_ANALYZER_URL", f"http://{R4_HOST}:5000")
+
+VALID_MX_STATES = {
+    "Aguascalientes", "Baja California", "Baja California Sur", "Campeche", "Chiapas", "Chihuahua",
+    "Ciudad de México", "Coahuila", "Colima", "Durango", "Guanajuato", "Guerrero", "Hidalgo", "Jalisco",
+    "México", "Michoacán", "Morelos", "Nayarit", "Nuevo León", "Oaxaca", "Puebla", "Querétaro",
+    "Quintana Roo", "San Luis Potosí", "Sinaloa", "Sonora", "Tabasco", "Tamaulipas", "Tlaxcala",
+    "Veracruz", "Yucatán", "Zacatecas",
+}
 
 # Alias explícitos para validaciones de IP reservadas
 RASPI3B_IP = os.environ.get("RASPI3B_IP", R3_HOST)
@@ -548,6 +593,53 @@ def _fetch_ai_risk_message(client_ip: str) -> dict:
     return {"enabled": False, "message": ""}
 
 
+def _search_mx_addresses(query: str, state: str = "", city: str = "", limit: int = 6) -> list[dict]:
+    q = (query or "").strip()
+    if len(q) < 4:
+        return []
+    state = (state or "").strip()
+    city = (city or "").strip()
+    if state not in VALID_MX_STATES or not city:
+        return []
+
+    safe_limit = max(1, min(int(limit or 6), 10))
+    composed_query = f"{q}, {city}, {state}, México"
+    params = urllib.parse.urlencode({
+        "format": "jsonv2",
+        "addressdetails": "1",
+        "limit": str(safe_limit),
+        "countrycodes": "mx",
+        "q": composed_query,
+    })
+    url = f"https://nominatim.openstreetmap.org/search?{params}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "captive-portal-lentium/1.0 (+https://captive.rafex.dev)",
+            "Accept-Language": "es-MX,es;q=0.9,en;q=0.7",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=4.5) as resp:
+            payload = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+        log.warning(f"Address proxy search failed: {e}")
+        return []
+
+    results: list[dict] = []
+    for item in (payload or []):
+        addr = item.get("address") or {}
+        results.append({
+            "display": item.get("display_name", ""),
+            "lat": item.get("lat", ""),
+            "lon": item.get("lon", ""),
+            "country": "MX",
+            "state": addr.get("state", state),
+            "city": addr.get("city") or addr.get("town") or addr.get("municipality") or addr.get("county") or city,
+        })
+    return results
+
+
 def _get_connected_clients() -> list[dict]:
     # IPs autorizadas actualmente en nftables.
     rc_set, set_stdout, _ = _router_ssh(
@@ -1013,8 +1105,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "warning": warned,
                 "warning_message": "NO NO NO es sitio no" if warned else "",
                 "risk_message": ai_risk.get("message", ""),
-                "risk_severity": ai_risk.get("severity", "info"),
+                "risk_severity": ai_risk.get("risk", ai_risk.get("severity", "BAJO")),
             })
+            return
+
+        if path == "/api/address/search":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            query = qs.get("q", [""])[0]
+            state = qs.get("state", [""])[0]
+            city = qs.get("city", [""])[0]
+            self._respond(200, {"ok": True, "results": _search_mx_addresses(query, state=state, city=city)})
             return
 
         log.warning(f"GET {self.path} — no encontrado")

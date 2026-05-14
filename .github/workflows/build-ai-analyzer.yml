@@ -51,14 +51,17 @@ jobs:
             exit 1
           }
 
-      - name: Validar símbolos ABI de libanalyzer_db (rule_upsert)
+      - name: Validar símbolos ABI de libanalyzer_db
         working-directory: backend/java
         run: |
           set -euo pipefail
-          nm -D libanalyzer_db-linux-arm64.so | grep -w 'rule_upsert' || {
-            echo "ERROR: libanalyzer_db-linux-arm64.so no exporta rule_upsert"
-            exit 1
-          }
+          for sym in rule_upsert osint_insert osint_is_cached osint_list_recent; do
+            nm -D libanalyzer_db-linux-arm64.so | grep -w "$sym" || {
+              echo "ERROR: libanalyzer_db-linux-arm64.so no exporta $sym"
+              exit 1
+            }
+          done
+          echo "✅ Todos los símbolos ABI validados"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -199,6 +202,7 @@ jobs:
         working-directory: backend/java/ai-analyzer
         run: |
           # Compilar sin -Pnative; generate-sources ya agregó las cabeceras MIT
+          # SEARCH_API_TOKEN no se necesita en compilación — se lee en runtime desde la Pi
           mvn -q compile -DskipTests
 
   # ─── 5. Verificar crate Rust ──────────────────────────────────────────────

@@ -33,6 +33,7 @@ import mx.rafex.analyzer.db.DatabaseClient;
 import mx.rafex.analyzer.llm.GroqClient;
 import mx.rafex.analyzer.llm.LlamaClient;
 import mx.rafex.analyzer.mqtt.MqttConsumer;
+import mx.rafex.analyzer.osint.OsintOrchestrator;
 import mx.rafex.analyzer.util.Json;
 import mx.rafex.analyzer.worker.AnalysisWorker;
 
@@ -72,6 +73,9 @@ import java.util.logging.Logger;
  *   GET    /api/profiles          → perfiles de dispositivos
  *   GET    /api/reports           → reportes de red
  *   GET    /api/summaries         → resúmenes periódicos
+ *   GET    /api/osint             → enriquecimientos OSINT recientes
+ *   GET    /api/osint/{id}        → detalle completo de un enriquecimiento
+ *   POST   /api/osint/enrich      → disparo manual de enriquecimiento OSINT
  *   GET    /events                → SSE tiempo real
  *   OPTIONS *                     → CORS preflight
  * </pre>
@@ -89,9 +93,10 @@ public final class ApiServer {
     private static final Logger LOG = Logger.getLogger(ApiServer.class.getName());
     private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_INSTANT.withZone(ZoneOffset.UTC);
 
-    private final DatabaseClient db;
-    private final AnalysisWorker worker;
-    private final MqttConsumer   mqtt;
+    private final DatabaseClient   db;
+    private final AnalysisWorker   worker;
+    private final MqttConsumer     mqtt;
+    private final OsintOrchestrator osint;
 
     /** Clientes SSE activos. */
     private final Set<SseClient> sseClients = ConcurrentHashMap.newKeySet();
@@ -105,6 +110,7 @@ public final class ApiServer {
         this.db     = db;
         this.worker = worker;
         this.mqtt   = mqtt;
+        this.osint  = new OsintOrchestrator(db);
 
         server = HttpServer.create(new InetSocketAddress(Config.PORT), 128);
         // ExecutorService de hilos virtuales — Project Loom
@@ -130,13 +136,17 @@ public final class ApiServer {
         server.createContext("/health",          this::handleHealth);
         server.createContext("/api/analyses",    this::handleAnalyses);
         server.createContext("/api/alerts",      this::handleAlerts);
+        server.createContext("/api/actions",     this::handleActions);
+        server.createContext("/api/anomalies",   this::handleAnomalies);
         server.createContext("/api/stats",       this::handleStats);
         server.createContext("/api/ingest",      this::handleIngest);
         server.createContext("/api/chat",        this::handleChat);
         server.createContext("/api/whitelist",   this::handleWhitelist);
-        server.createContext("/api/profiles",    this::handleProfiles);
-        server.createContext("/api/reports",     this::handleReports);
-        server.createContext("/api/summaries",   this::handleSummaries);
+        server.createContext("/api/profiles",         this::handleProfiles);
+        server.createContext("/api/reports",          this::handleReports);
+        server.createContext("/api/summaries",        this::handleSummaries);
+        server.createContext("/api/portal/risk-message", this::handlePortalRiskMessage);
+        server.createContext("/api/osint",            this::handleOsint);
 
         // ── SSE ───────────────────────────────────────────────────────────────
         server.createContext("/events",          this::handleSse);
@@ -153,9 +163,10 @@ public final class ApiServer {
             if ("/".equals(path)) {
                 json(ex, 200, """
                     {"service":"ai-analyzer","version":"1.0.0",
-                     "endpoints":["/health","/api/analyses","/api/alerts",
+                     "endpoints":["/health","/api/analyses","/api/alerts","/api/actions","/api/anomalies",
                      "/api/stats","/api/ingest","/api/chat","/api/whitelist",
-                     "/api/profiles","/api/reports","/api/summaries","/events"],
+                     "/api/profiles","/api/reports","/api/summaries","/api/portal/risk-message",
+                     "/api/osint","/events"],
                      "ui":"served by frontend (Node.js/Vite)"}
                     """.strip());
             } else {
@@ -195,6 +206,30 @@ public final class ApiServer {
         if (!"GET".equals(ex.getRequestMethod())) { json(ex, 405, Json.error("Método no permitido")); return; }
         var limit = queryParam(ex, "limit", "50");
         json(ex, 200, db.alertListRecent(Long.parseLong(limit)));
+    }
+
+    private void handleActions(HttpExchange ex) throws IOException {
+        if (!"GET".equals(ex.getRequestMethod())) { json(ex, 405, Json.error("Método no permitido")); return; }
+        var limit = queryParam(ex, "limit", "50");
+        var data = db.policyActionListRecent(Long.parseLong(limit));
+        json(ex, 200, data != null ? data : "[]");
+    }
+
+    private void handleAnomalies(HttpExchange ex) throws IOException {
+        if (!"GET".equals(ex.getRequestMethod())) { json(ex, 405, Json.error("Método no permitido")); return; }
+        var limit = queryParam(ex, "limit", "50");
+        var deviceIp = queryParam(ex, "device_ip", null);
+
+        String data;
+        if (deviceIp != null && !deviceIp.isBlank()) {
+            // Retornar anomalías para un dispositivo específico
+            data = db.anomalyListByDevice(deviceIp, Long.parseLong(limit));
+        } else {
+            // Retornar todas las anomalías recientes
+            data = db.anomalyListRecent(Long.parseLong(limit));
+        }
+
+        json(ex, 200, data != null ? data : "[]");
     }
 
     private void handleStats(HttpExchange ex) throws IOException {
@@ -322,6 +357,138 @@ public final class ApiServer {
     private void handleProfiles(HttpExchange ex) throws IOException {
         if (!"GET".equals(ex.getRequestMethod())) { json(ex, 405, Json.error("Método no permitido")); return; }
         json(ex, 200, db.deviceProfileList());
+    }
+
+    /**
+     * GET /api/portal/risk-message?ip=192.168.1.X
+     *
+     * <p>Retorna un mensaje de riesgo dinámico para el portal cautivo.
+     * El portal Lentium consulta este endpoint al mostrar la página de autenticación.
+     *
+     * <p>Respuesta:
+     * <pre>
+     * { "ip": "...", "risk": "ALTO|MEDIO|BAJO", "message": "...", "timestamp": "..." }
+     * </pre>
+     */
+    private void handlePortalRiskMessage(HttpExchange ex) throws IOException {
+        if (!"GET".equals(ex.getRequestMethod())) {
+            json(ex, 405, Json.error("Método no permitido"));
+            return;
+        }
+
+        var ip = queryParam(ex, "ip", "");
+
+        // Consultar análisis reciente del IP
+        String risk = "BAJO";
+        String message;
+
+        if (!ip.isBlank()) {
+            try {
+                // Buscar alertas recientes del IP
+                var alertsJson = db.alertListRecent(20);
+                if (alertsJson != null && alertsJson.contains(ip)) {
+                    if (alertsJson.contains("\"severity\":\"critical\"")
+                        || alertsJson.contains("\"severity\":\"high\"")) {
+                        risk = "ALTO";
+                    } else if (alertsJson.contains("\"severity\":\"medium\"")) {
+                        risk = "MEDIO";
+                    }
+                }
+
+                // Si no hay alertas, revisar últimos análisis
+                if ("BAJO".equals(risk)) {
+                    var analysesJson = db.analysisListRecent(5);
+                    if (analysesJson != null
+                        && (analysesJson.contains("\"risk\":\"ALTO\"")
+                            || analysesJson.contains("\"risk_level\":\"ALTO\""))) {
+                        risk = "MEDIO"; // Riesgo general de red moderado
+                    }
+                }
+            } catch (Exception e) {
+                LOG.warning("Error consultando riesgo para " + ip + ": " + e.getMessage());
+            }
+        }
+
+        message = switch (risk) {
+            case "ALTO" -> "⚠️ Se ha detectado actividad sospechosa en esta red. "
+                         + "Evita compartir información sensible y usa solo sitios HTTPS.";
+            case "MEDIO" -> "ℹ️ La red está activa con tráfico moderado. "
+                          + "Navega con precaución y evita transacciones bancarias.";
+            default      -> "✅ La red opera con normalidad. "
+                          + "Usa conexiones HTTPS para mayor seguridad.";
+        };
+
+        var now = java.time.Instant.now().toString();
+        var resp = "{\"ip\":\"%s\",\"risk\":\"%s\",\"message\":\"%s\",\"timestamp\":\"%s\"}"
+            .formatted(ip.isBlank() ? "unknown" : ip, risk,
+                       message.replace("\"", "\\\""), now);
+
+        json(ex, 200, resp);
+    }
+
+    /**
+     * Maneja {@code /api/osint}, {@code /api/osint/{id}} y
+     * {@code /api/osint/enrich}.
+     *
+     * <pre>
+     *   GET  /api/osint               → lista reciente (param limit, target)
+     *   GET  /api/osint/{id}          → detalle con campos raw
+     *   POST /api/osint/enrich        → disparo manual asíncrono
+     * </pre>
+     */
+    private void handleOsint(HttpExchange ex) throws IOException {
+        var method = ex.getRequestMethod();
+        var path   = ex.getRequestURI().getPath();
+
+        // POST /api/osint/enrich  — disparo manual
+        if ("POST".equals(method) && path.endsWith("/enrich")) {
+            if (!Config.FEATURE_OSINT) {
+                json(ex, 403, Json.error("OSINT deshabilitado"));
+                return;
+            }
+            var body      = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            var sourceIp  = Json.extractString(body, "source_ip");
+            var domain    = Json.extractString(body, "domain");
+            var mac       = Json.extractString(body, "mac");
+            var batchIdS  = Json.extractString(body, "batch_id");
+            long batchId  = batchIdS != null ? Long.parseLong(batchIdS) : -1L;
+
+            if ((sourceIp == null || sourceIp.isBlank())
+                    && (domain == null || domain.isBlank())
+                    && (mac == null || mac.isBlank())) {
+                json(ex, 400, Json.error("Se requiere al menos source_ip, domain o mac"));
+                return;
+            }
+            osint.enrichAsync(batchId, -1L, sourceIp, domain, mac, this);
+            json(ex, 202, "{\"status\":\"accepted\",\"batch_id\":" + batchId
+                          + ",\"target\":\"" + (sourceIp != null ? sourceIp : domain) + "\"}");
+            return;
+        }
+
+        // GET /api/osint/{id}  — detalle completo
+        if ("GET".equals(method)) {
+            // Detectar si la ruta tiene un ID numérico al final
+            var segments = path.replaceFirst("^/api/osint/?", "").split("/");
+            if (segments.length == 1 && !segments[0].isBlank() && segments[0].matches("\\d+")) {
+                long id   = Long.parseLong(segments[0]);
+                var  data = db.osintGetDetail(id);
+                json(ex, 200, data != null ? data : Json.error("Enriquecimiento no encontrado"));
+                return;
+            }
+
+            // GET /api/osint  — lista reciente
+            var limit  = queryParam(ex, "limit",  "50");
+            var target = queryParam(ex, "target", null);
+            var data   = db.osintListRecent(Long.parseLong(limit));
+            // Filtrado por target en memoria si se especificó
+            if (target != null && !target.isBlank() && data != null && !data.equals("[]")) {
+                if (!data.contains(target)) data = "[]";
+            }
+            json(ex, 200, data != null ? data : "[]");
+            return;
+        }
+
+        json(ex, 405, Json.error("Método no permitido"));
     }
 
     private void handleReports(HttpExchange ex) throws IOException {

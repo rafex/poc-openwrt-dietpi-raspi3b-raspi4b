@@ -33,11 +33,18 @@ import mx.rafex.analyzer.worker.AnalysisWorker;
 import org.eclipse.paho.client.mqttv3.*;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
+import java.security.MessageDigest;
 
 /**
  * Consumidor MQTT para el topic {@code rafexpi/sensor/batch}.
@@ -57,6 +64,7 @@ public final class MqttConsumer implements MqttCallback {
     private final DatabaseClient db;
     private final AnalysisWorker worker;
     private final AtomicBoolean connected = new AtomicBoolean(false);
+    private final Map<String, PcapMeta> pcapMetaCache = new ConcurrentHashMap<>();
 
     private MqttClient client;
 
@@ -82,9 +90,13 @@ public final class MqttConsumer implements MqttCallback {
 
             client.connect(opts);
             client.subscribe(Config.MQTT_TOPIC, 1);  // QoS 1 = al menos una vez
+            client.subscribe(Config.MQTT_PCAP_TOPIC_BASE + "/meta", 1);
+            client.subscribe(Config.MQTT_PCAP_TOPIC_BASE + "/done", 1);
+            client.subscribe(Config.MQTT_PCAP_TOPIC_BASE + "/data/#", 1);
 
             connected.set(true);
             LOG.info("MQTT conectado y suscrito a: " + Config.MQTT_TOPIC);
+            LOG.info("MQTT PCAP suscrito a base: " + Config.MQTT_PCAP_TOPIC_BASE);
 
         } catch (MqttException e) {
             LOG.warning("MQTT no disponible (%s) — arrancando sin MQTT. Paho reintentará.".formatted(e.getMessage()));
@@ -118,7 +130,20 @@ public final class MqttConsumer implements MqttCallback {
 
     @Override
     public void messageArrived(String topic, MqttMessage message) {
-        var payload = new String(message.getPayload(), java.nio.charset.StandardCharsets.UTF_8);
+        if (topic.equals(Config.MQTT_PCAP_TOPIC_BASE + "/meta")) {
+            onPcapMeta(message);
+            return;
+        }
+        if (topic.equals(Config.MQTT_PCAP_TOPIC_BASE + "/done")) {
+            onPcapDone(message);
+            return;
+        }
+        if (topic.startsWith(Config.MQTT_PCAP_TOPIC_BASE + "/data/")) {
+            onPcapData(topic, message);
+            return;
+        }
+
+        var payload = new String(message.getPayload(), StandardCharsets.UTF_8);
         var receivedAt = ISO.format(Instant.now());
 
         // Extraer sensor_ip del payload JSON si está disponible
@@ -142,6 +167,112 @@ public final class MqttConsumer implements MqttCallback {
             LOG.fine("Batch %d encolado para análisis".formatted(batchId));
         }
     }
+
+    private void onPcapMeta(MqttMessage message) {
+        var payload = new String(message.getPayload(), StandardCharsets.UTF_8);
+        var captureId = safeJson(payload, "capture_id");
+        if (captureId == null || captureId.isBlank()) return;
+        var meta = new PcapMeta(
+            captureId,
+            safeJson(payload, "sensor_ip"),
+            safeJson(payload, "iface"),
+            safeJson(payload, "filename"),
+            safeJson(payload, "sha256"),
+            safeLong(safeJson(payload, "size_zst"))
+        );
+        pcapMetaCache.put(captureId, meta);
+    }
+
+    private void onPcapDone(MqttMessage message) {
+        var payload = new String(message.getPayload(), StandardCharsets.UTF_8);
+        var captureId = safeJson(payload, "capture_id");
+        if (captureId == null || captureId.isBlank()) return;
+        pcapMetaCache.remove(captureId);
+    }
+
+    private void onPcapData(String topic, MqttMessage message) {
+        var captureId = topic.substring((Config.MQTT_PCAP_TOPIC_BASE + "/data/").length()).trim();
+        if (captureId.isBlank()) return;
+
+        try {
+            var dir = Path.of(Config.PCAP_STORE_DIR);
+            Files.createDirectories(dir);
+            // dedupe por archivo existente
+            var existingPath = dir.resolve(captureId + ".pcap.zst");
+            if (Files.exists(existingPath)) {
+                return;
+            }
+
+            byte[] data = message.getPayload();
+            if (data == null || data.length == 0) return;
+            if (data.length > Config.PCAP_MAX_ZST_BYTES) {
+                LOG.warning("PCAP descartado por tamaño capture_id=%s bytes=%d".formatted(captureId, data.length));
+                return;
+            }
+
+            var meta = pcapMetaCache.get(captureId);
+            var sha = sha256Hex(data);
+            if (meta != null && meta.sha256 != null && !meta.sha256.isBlank()
+                && !sha.equalsIgnoreCase(meta.sha256)) {
+                LOG.warning("PCAP sha256 inválido capture_id=%s expected=%s got=%s".formatted(captureId, meta.sha256, sha));
+                return;
+            }
+
+            var filename = (meta != null && meta.filename != null && !meta.filename.isBlank())
+                ? sanitizeFilename(meta.filename)
+                : captureId + ".pcap.zst";
+            var path = dir.resolve(filename);
+            if (Files.exists(path)) path = existingPath;
+            Files.write(path, data);
+
+            var now = ISO.format(Instant.now());
+            var details = new HashMap<String, Object>();
+            details.put("capture_id", captureId);
+            details.put("topic", topic);
+            details.put("storage_path", path.toString());
+            details.put("size_zst", data.length);
+            details.put("sha256", sha);
+            if (meta != null) {
+                details.put("sensor_ip", meta.sensorIp);
+                details.put("iface", meta.iface);
+            }
+            db.reportInsert(now, "pcap_evidence_received", mx.rafex.analyzer.util.Json.obj(details));
+            LOG.info("PCAP evidencia guardada capture_id=%s bytes=%d path=%s".formatted(captureId, data.length, path));
+        } catch (Exception e) {
+            LOG.warning("Error procesando PCAP data: " + e.getMessage());
+        }
+    }
+
+    private static String sanitizeFilename(String name) {
+        return name.replace("/", "_").replace("\\", "_");
+    }
+
+    private static String safeJson(String json, String key) {
+        try { return mx.rafex.analyzer.util.Json.extractString(json, key); }
+        catch (Exception ignored) { return null; }
+    }
+
+    private static long safeLong(String raw) {
+        if (raw == null || raw.isBlank()) return 0L;
+        try { return Long.parseLong(raw.trim()); } catch (Exception e) { return 0L; }
+    }
+
+    private static String sha256Hex(byte[] data) throws Exception {
+        MessageDigest md = MessageDigest.getInstance("SHA-256");
+        byte[] dig = md.digest(data);
+        StringBuilder sb = new StringBuilder(dig.length * 2);
+        for (byte b : dig) sb.append(String.format("%02x", b));
+        return sb.toString();
+    }
+
+    private record PcapMeta(
+        String captureId,
+        String sensorIp,
+        String iface,
+        String filename,
+        String sha256,
+        long sizeZst
+    ) {}
 
     @Override
     public void deliveryComplete(IMqttDeliveryToken token) {

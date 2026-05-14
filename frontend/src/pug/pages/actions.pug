@@ -1,0 +1,112 @@
+- var pageTitle = 'Acciones'; var pageId = 'actions'; var mainScript = '/src/ts/actions.ts';
+include /includes/_layout.pug
+
+block content
+  .page-header.animate__animated.animate__fadeInDown
+    h1 🎬 Acciones en Tiempo Real
+    p.subtitle Decisiones de IA ejecutadas automáticamente en la red
+
+  .stats-grid
+    .stat-card.animate__animated.animate__fadeInUp
+      .stat-icon 🚫
+      .stat-label Bloqueados (24h)
+      .stat-value#stat-blocks —
+    .stat-card.animate__animated.animate__fadeInUp(style="animation-delay:.1s")
+      .stat-icon ⚠️
+      .stat-label Anomalías detectadas
+      .stat-value#stat-anomalies —
+    .stat-card.animate__animated.animate__fadeInUp(style="animation-delay:.2s")
+      .stat-icon ✅
+      .stat-label Tasa de éxito
+      .stat-value#stat-success-rate —%
+    .stat-card.animate__animated.animate__fadeInUp(style="animation-delay:.3s")
+      .stat-icon 📊
+      .stat-label Dominios clasificados
+      .stat-value#stat-domains-classified —
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Acciones ejecutadas recientemente
+      button.btn.btn-sm#btn-refresh-actions ↻ Actualizar
+    .table-wrap
+      table.data-table#actions-table
+        thead
+          tr
+            th Timestamp
+            th Acción
+            th Dispositivo / Dominio
+            th Detalles
+            th Estado SSH
+        tbody
+          tr
+            td.text-muted colspan="5" — Sin acciones aún —
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Anomalías detectadas
+      .section-toggle
+        input#toggle-anomalies(type="checkbox" checked)
+        label(for="toggle-anomalies") Ver detalles
+    .table-wrap#anomalies-section(style="display:none")
+      table.data-table#anomalies-table
+        thead
+          tr
+            th Dispositivo IP
+            th Timestamp
+            th Consumo típico
+            th Consumo actual
+            th Z-score
+            th Descripción
+        tbody
+          tr
+            td.text-muted colspan="6" — Sin anomalías aún —
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Dominios bloqueados (últimos 24h)
+      span.section-info Total: #[strong#blocked-domains-count 0]
+    .chart-container
+      #blocked-domains-chart.chart
+        p.text-muted (cargando datos...)
+
+  .section.animate__animated.animate__fadeIn
+    .section-header
+      h2 Eventos en vivo (SSE)
+    #sse-log.log-box(aria-live="polite")
+      p.text-muted Escuchando eventos en tiempo real...
+
+  style.
+    #blocked-domains-chart {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+    .domain-block {
+      padding: 1rem;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-radius: 8px;
+      text-align: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    .domain-block .domain-name {
+      font-weight: 600;
+      font-size: 0.9rem;
+      margin-bottom: 0.5rem;
+      word-break: break-all;
+    }
+    .domain-block .domain-count {
+      font-size: 1.5rem;
+      font-weight: 700;
+    }
+    .section-toggle {
+      margin-left: auto;
+    }
+    .section-toggle input[type="checkbox"] {
+      cursor: pointer;
+    }
+    .text-muted {
+      color: #999;
+      font-style: italic;
+    }

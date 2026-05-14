@@ -225,4 +225,127 @@ El analizador también genera alertas **sin usar el LLM** mediante reglas determ
 
 ---
 
+## Compilar llama.cpp en Raspberry Pi 4B
+
+llama.cpp **ya no usa `make`** — migró a CMake. Si intentas usar `make` obtendrás un error. El script automatizado del repositorio es `scripts/setup-raspi4b-llama-build.sh`, pero también puedes compilar manualmente.
+
+### Directorio de trabajo
+
+```bash
+cd ~/llama.cpp          # o el path donde clonaste: /opt/repository/llama.cpp
+```
+
+> El script del repositorio usa `/opt/repository/llama.cpp` y el directorio de build `build-raspi4b`.
+
+---
+
+### Limpieza completa (cambiar flags o resolver errores)
+
+Si quieres limpiar **todo** (configuración + artefactos compilados):
+
+```bash
+rm -rf build-rpi4
+# o si usas el directorio del script del repositorio:
+rm -rf build-raspi4b
+```
+
+Si solo quieres limpiar los artefactos sin borrar la configuración de CMake:
+
+```bash
+cmake --build build-rpi4 --target clean
+```
+
+> Para cambiar flags de compilación **siempre** usa `rm -rf build-rpi4` — CMake cachea los flags y `--target clean` no los resetea.
+
+---
+
+### Compilar (manual)
+
+```bash
+cmake -B build-rpi4 \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DGGML_BLAS=ON \
+  -DGGML_BLAS_VENDOR=OpenBLAS \
+  -DCMAKE_C_FLAGS="-O3 -mcpu=cortex-a72 -mtune=cortex-a72" \
+  -DCMAKE_CXX_FLAGS="-O3 -mcpu=cortex-a72 -mtune=cortex-a72"
+
+cmake --build build-rpi4 -j4
+```
+
+#### Flags explicados
+
+| Flag | Propósito |
+|------|-----------|
+| `-DCMAKE_BUILD_TYPE=Release` | Optimizaciones completas, sin debug symbols |
+| `-DGGML_BLAS=ON` | Activa backend BLAS para multiplicación de matrices |
+| `-DGGML_BLAS_VENDOR=OpenBLAS` | Usa OpenBLAS (instalado en DietPi) |
+| `-mcpu=cortex-a72` | Target exacto de la Pi 4B (BCM2711) |
+| `-mtune=cortex-a72` | Scheduling de instrucciones optimizado para A72 |
+| `-O3` | Máximo nivel de optimización del compilador |
+| `-j4` | Compila con los 4 núcleos de la Pi |
+
+> El script `setup-raspi4b-llama-build.sh` usa flags adicionales más agresivos:  
+> `-march=armv8-a+crc+simd -fno-plt -pipe` — equivalentes para arquitectura ARMv8-A.
+
+---
+
+### Compilar con el script del repositorio
+
+El script automatiza dependencias, clonado, compilación e instalación de binarios en `/usr/local/bin/`:
+
+```bash
+# En la Raspi4B (como root):
+sudo bash scripts/setup-raspi4b-llama-build.sh
+
+# Recompilar aunque ya existan los binarios:
+sudo bash scripts/setup-raspi4b-llama-build.sh --force
+
+# Ver qué haría sin ejecutar:
+sudo bash scripts/setup-raspi4b-llama-build.sh --dry-run
+
+# Compilar una rama/tag específica de llama.cpp:
+sudo bash scripts/setup-raspi4b-llama-build.sh --branch b4946
+```
+
+O vía Justfile desde tu máquina:
+
+```bash
+just llama-build        # SSH a Raspi4B y ejecuta el script
+```
+
+---
+
+### Dependencias previas (DietPi)
+
+```bash
+apt-get install -y \
+  cmake \
+  build-essential \
+  libopenblas-dev \
+  git \
+  pkg-config
+```
+
+---
+
+### Verificar la compilación
+
+```bash
+# El binario principal que usamos:
+llama-server --version
+
+# Test rápido de inferencia:
+llama-cli \
+  -m /opt/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf \
+  -p "Hola, ¿qué es un cortafuegos?" \
+  -n 50 --no-mmap
+
+# Benchmark de velocidad (tokens/segundo):
+llama-bench \
+  -m /opt/models/tinyllama-1.1b-chat-v1.0.Q4_K_M.gguf \
+  -t 4
+```
+
+---
+
 ← [Portales](portales.md) | [Índice](../README.md) | [Software libre →](software-libre.md)

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dispositivos — AI Analyzer</title>
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+  </head>
+  <body class="devices-page">
+    <nav class="navbar">
+      <div class="navbar-brand"><a class="brand-link" href="/dashboard"><span class="brand-icon">⬡</span><span class="brand-name">AI Analyzer</span></a></div>
+      <ul class="navbar-links">
+        <li><a class="nav-link" href="/dashboard" data-page="dashboard"><span class="nav-icon">📊</span><span>Dashboard</span></a></li>
+        <li><a class="nav-link" href="/actions" data-page="actions"><span class="nav-icon">🎬</span><span>Acciones</span></a></li>
+        <li><a class="nav-link" href="/devices" data-page="devices"><span class="nav-icon">📱</span><span>Dispositivos</span></a></li>
+        <li><a class="nav-link" href="/chat" data-page="chat"><span class="nav-icon">💬</span><span>Chat IA</span></a></li>
+        <li><a class="nav-link" href="/terminal" data-page="terminal"><span class="nav-icon">🖥</span><span>Terminal</span></a></li>
+        <li><a class="nav-link" href="/rulez" data-page="rulez"><span class="nav-icon">🛡</span><span>Reglas</span></a></li>
+        <li><a class="nav-link" href="/reports" data-page="reports"><span class="nav-icon">📋</span><span>Reportes</span></a></li>
+      </ul>
+      <div class="navbar-status"><span class="status-dot" id="status-dot"></span><span class="status-text" id="status-text">Conectando...</span></div>
+    </nav>
+    <main class="main-content">
+    </main>
+    <footer class="footer">
+      <p>AI Analyzer &copy; 2026 — Red WiFi con IA</p>
+    </footer>
+    <script type="module" src="/src/ts/devices.ts"></script>
+  </body>
+</html>
+<div class="page-header animate__animated animate__fadeInDown">
+  <h1>📱 Perfiles de Dispositivos</h1>
+  <p class="subtitle">Identificación heurística de dispositivos en la red</p>
+</div>
+<div class="stats-grid">
+  <div class="stat-card animate__animated animate__fadeInUp">
+    <div class="stat-icon">📱</div>
+    <div class="stat-label">iPhones / iPads</div>
+    <div class="stat-value" id="stat-ios">—</div>
+  </div>
+  <div class="stat-card animate__animated animate__fadeInUp" style="animation-delay:.1s">
+    <div class="stat-icon">🤖</div>
+    <div class="stat-label">Dispositivos Android</div>
+    <div class="stat-value" id="stat-android">—</div>
+  </div>
+  <div class="stat-card animate__animated animate__fadeInUp" style="animation-delay:.2s">
+    <div class="stat-icon">📺</div>
+    <div class="stat-label">Smart TVs</div>
+    <div class="stat-value" id="stat-smart-tv">—</div>
+  </div>
+  <div class="stat-card animate__animated animate__fadeInUp" style="animation-delay:.3s">
+    <div class="stat-icon">💻</div>
+    <div class="stat-label">Laptops / Desktops</div>
+    <div class="stat-value" id="stat-laptop">—</div>
+  </div>
+</div>
+<div class="section animate__animated animate__fadeIn">
+  <div class="section-header">
+    <h2>Dispositivos identificados</h2>
+    <div class="section-controls">
+      <input class="filter-input" id="filter-type" type="text" placeholder="Filtrar por IP o tipo...">
+      <button class="btn btn-sm" id="btn-refresh-devices">↻ Actualizar</button>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="data-table" id="devices-table">
+      <thead>
+        <tr>
+          <th>IP del Dispositivo</th>
+          <th>Tipo detectado</th>
+          <th>Confianza</th>
+          <th>Indicadores clave</th>
+          <th>Última actividad</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="text-muted" colspan="5">— Cargando perfiles...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="section animate__animated animate__fadeIn">
+  <div class="section-header">
+    <h2>Distribución por tipo</h2>
+  </div>
+  <div class="chart-container">
+    <div class="chart-grid" id="device-type-chart">
+      <p class="text-muted">(cargando...)</p>
+    </div>
+  </div>
+</div>
+<div class="section animate__animated animate__fadeIn">
+  <div class="section-header">
+    <h2>Eventos en vivo (SSE)</h2>
+  </div>
+  <div class="log-box" id="sse-log" aria-live="polite">
+    <p class="text-muted">Escuchando eventos...</p>
+  </div>
+</div>
+<style>
+  .filter-input {
+    padding: 0.4rem 0.8rem;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .filter-input:focus {
+    border-color: #667eea;
+  }
+  .section-controls {
+    display: flex;
+    gap: 0.75rem;
+    align-items: center;
+    margin-left: auto;
+  }
+  .confidence-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .confidence-fill {
+    height: 8px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, #667eea, #764ba2);
+    min-width: 4px;
+  }
+  .confidence-label {
+    font-size: 0.85rem;
+    color: #555;
+    white-space: nowrap;
+  }
+  .device-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.25rem 0.65rem;
+    border-radius: 20px;
+    font-size: 0.85rem;
+    font-weight: 600;
+  }
+  .badge-ios      { background: #e8f4fd; color: #0066cc; }
+  .badge-android  { background: #e8f5e9; color: #2e7d32; }
+  .badge-smart_tv { background: #fff3e0; color: #e65100; }
+  .badge-iot      { background: #fce4ec; color: #c62828; }
+  .badge-laptop   { background: #f3e5f5; color: #6a1b9a; }
+  .badge-unknown  { background: #f5f5f5; color: #757575; }
+  .reasons-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .reason-tag {
+    background: #f0f0f0;
+    color: #444;
+    border-radius: 4px;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.75rem;
+    font-family: monospace;
+  }
+  .chart-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 1rem;
+    margin-top: 1rem;
+  }
+  .chart-card {
+    padding: 1.25rem;
+    border-radius: 10px;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  }
+  .chart-card .chart-icon {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+  }
+  .chart-card .chart-count {
+    font-size: 2rem;
+    font-weight: 700;
+  }
+  .chart-card .chart-label {
+    font-size: 0.85rem;
+    color: #666;
+    margin-top: 0.25rem;
+  }
+  .card-ios      { background: linear-gradient(135deg,#e8f4fd,#c9e3f7); }
+  .card-android  { background: linear-gradient(135deg,#e8f5e9,#c8e6c9); }
+  .card-smart_tv { background: linear-gradient(135deg,#fff3e0,#ffe0b2); }
+  .card-iot      { background: linear-gradient(135deg,#fce4ec,#f8bbd9); }
+  .card-laptop   { background: linear-gradient(135deg,#f3e5f5,#e1bee7); }
+  .card-unknown  { background: linear-gradient(135deg,#f5f5f5,#e0e0e0); }
+  .text-muted { color: #999; font-style: italic; }
+</style>

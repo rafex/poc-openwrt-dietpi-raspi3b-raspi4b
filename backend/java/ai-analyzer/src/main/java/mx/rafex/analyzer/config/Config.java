@@ -41,6 +41,9 @@ public final class Config {
     public static final String MQTT_HOST  = env("MQTT_HOST",  "192.168.1.167");
     public static final int    MQTT_PORT  = intEnv("MQTT_PORT", 1883);
     public static final String MQTT_TOPIC = env("MQTT_TOPIC", "rafexpi/sensor/batch");
+    public static final String MQTT_PCAP_TOPIC_BASE = env("MQTT_PCAP_TOPIC_BASE", "rafexpi/sensor01/pcap");
+    public static final String PCAP_STORE_DIR       = env("PCAP_STORE_DIR", "/data/pcap-evidence");
+    public static final long   PCAP_MAX_ZST_BYTES   = longEnv("PCAP_MAX_ZST_BYTES", 4L * 1024L * 1024L);
 
     // ── Base de datos ─────────────────────────────────────────────────────────
     public static final String DB_PATH = env("DB_PATH", "/data/sensor.db");
@@ -97,6 +100,23 @@ public final class Config {
     public static final boolean FEATURE_AUTO_REPORTS                 = boolEnv("FEATURE_AUTO_REPORTS",      true);
     public static final boolean FEATURE_HUMAN_EXPLAIN               = boolEnv("FEATURE_HUMAN_EXPLAIN",     true);
 
+    // ── Ejecución automática de políticas ──────────────────────────────────────
+    public static final boolean FEATURE_AUTO_ENFORCE           = boolEnv("FEATURE_AUTO_ENFORCE",           true);
+    public static final boolean FEATURE_AUTO_ENFORCE_SSH       = boolEnv("FEATURE_AUTO_ENFORCE_SSH",       true);
+    public static final int     POLICY_ACTION_TIMEOUT_S        = intEnv("POLICY_ACTION_TIMEOUT_S",         10);
+    public static final String  POLICY_LOG_PATH                = env("POLICY_LOG_PATH",                   "/var/log/ai-analyzer");
+
+    // ── OSINT ─────────────────────────────────────────────────────────────────
+    // SearchAPI.io actúa como proxy Bing (Bing Web Search API retirada agosto 2025).
+    // Soporta todos los operadores Bing, incluyendo el exclusivo ip:X.X.X.X.
+    // Sin SEARCH_API_TOKEN → sólo PHOMBER (modo degradado, completamente funcional).
+    public static final String  BING_API_KEY        = env("SEARCH_API_TOKEN",     "");
+    public static final String  BING_ENDPOINT       = env("BING_ENDPOINT",        "https://www.searchapi.io/api/v1/search");
+    public static final int     PHOMBER_TIMEOUT_S   = intEnv("PHOMBER_TIMEOUT",   25);
+    public static final int     OSINT_LLM_TIMEOUT_S = intEnv("OSINT_LLM_TIMEOUT", 60);
+    public static final String  OSINT_MIN_SEVERITY  = env("OSINT_MIN_SEVERITY",   "HIGH");
+    public static final boolean FEATURE_OSINT       = boolEnv("FEATURE_OSINT",    true);
+
     // ── Misc ──────────────────────────────────────────────────────────────────
     public static final String LOG_LEVEL          = env("LOG_LEVEL",       "INFO");
     public static final int    SUMMARY_INTERVAL_S = intEnv("SUMMARY_INTERVAL_S", 60);
@@ -110,6 +130,11 @@ public final class Config {
 
     private static int intEnv(String key, int def) {
         try { return Integer.parseInt(env(key, String.valueOf(def))); }
+        catch (NumberFormatException e) { return def; }
+    }
+
+    private static long longEnv(String key, long def) {
+        try { return Long.parseLong(env(key, String.valueOf(def))); }
         catch (NumberFormatException e) { return def; }
     }
 

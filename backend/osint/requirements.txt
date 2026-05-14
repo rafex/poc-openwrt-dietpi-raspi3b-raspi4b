@@ -1,0 +1,17 @@
+# osint_enricher.py — dependencias
+# pip install -r requirements.txt
+
+# PHOMBER y sus dependencias (instaladas automáticamente con phomber)
+phomber>=3.1.1
+
+# HTTP (ya incluido en phomber, listado explícitamente)
+requests>=2.31.0
+
+# Las siguientes son dependencias de phomber — se instalan con él:
+#   mac-vendor-lookup   → MAC → vendor (OUI database local)
+#   python-whois        → WHOIS de dominios
+#   dnspython           → DNS resolver
+#   phonenumbers        → metadata de teléfonos
+#   beautifulsoup4      → parsing HTML
+#   prompt_toolkit      → shell interactivo de phomber
+#   psutil              → info del sistema
