@@ -61,10 +61,19 @@ public final class DeviceProfiler {
         "apple-relay.apple.com", "certs.apple.com", "ocsp.apple.com"
     );
 
+    // NOTA: NO incluir dominios CDN genéricos de Google (gstatic.com, googleapis.com,
+    // google-analytics.com, googlevideo.com, goo.gl) — los accede CUALQUIER dispositivo
+    // (iOS, Linux, Windows). Solo se incluyen dominios exclusivos de Android.
     private static final Set<String> ANDROID_DOMAINS = Set.of(
-        "gstatic.com", "googleapis.com", "play.google.com", "android.com",
-        "googleplay.com", "google-analytics.com", "crashlytics.com",
-        "firebase.com", "firebaseio.com", "goo.gl", "googlevideo.com"
+        "play.google.com",              // Google Play Store (Android exclusivo)
+        "android.com",                  // portal de Android
+        "googleplay.com",               // Play Store alternativo
+        "crashlytics.com",              // SDK crash reporting (embebido en apps Android)
+        "firebase.com",                 // Firebase SDK (mayoritariamente Android)
+        "firebaseio.com",               // Firebase Realtime Database
+        "android.clients.google.com",   // cliente GMS (Google Mobile Services)
+        "mtalk.google.com",             // Firebase Cloud Messaging (push notifications)
+        "connectivitycheck.gstatic.com" // Android connectivity check (exclusivo de AOSP)
     );
 
     private static final Set<String> SMART_TV_DOMAINS = Set.of(

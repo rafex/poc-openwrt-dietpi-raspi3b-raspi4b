@@ -220,9 +220,21 @@ public final class AnalysisWorker implements Runnable {
             }
 
             // ★ NUEVO: Actualizar perfil del dispositivo (Fase 4)
+            // Perfila CADA IP cliente de top_talkers individualmente.
+            // El sensor_ip (Raspi3B) es el observador, NO un dispositivo cliente —
+            // atribuirle todos los dominios del batch causaría falsa clasificación Android.
             if (Config.FEATURE_DEVICE_PROFILING) {
-                var domains = extractDomainsFromPayload(payload);
-                deviceProfiler.updateProfile(deviceIp, domains);
+                var domains    = extractDomainsFromPayload(payload);
+                var clientIps  = extractClientIps(payload);
+                if (!clientIps.isEmpty()) {
+                    for (var clientIp : clientIps) {
+                        deviceProfiler.updateProfile(clientIp, domains);
+                    }
+                } else if (!Config.PROTECTED_IPS.contains(deviceIp)) {
+                    // Fallback: si top_talkers no tiene clientes, perfila sensor solo
+                    // si no es infraestructura conocida
+                    deviceProfiler.updateProfile(deviceIp, domains);
+                }
             }
 
             // ★ NUEVO: Ejecutar políticas automáticas
@@ -383,6 +395,52 @@ public final class AnalysisWorker implements Runnable {
             LOG.fine("No se pudo extraer bytes del payload: " + e.getMessage());
         }
         return 0.0;
+    }
+
+    /**
+     * Extrae las IPs de los clientes LAN del payload (campo {@code top_talkers}).
+     *
+     * <p>Solo se incluyen IPs privadas (RFC-1918) que NO estén en
+     * {@link Config#PROTECTED_IPS} (router, portal, Raspi3B, Raspi4B, etc.).
+     * Esto permite perfilar únicamente los dispositivos cliente reales, no
+     * el sensor/observador que genera los batches.
+     *
+     * @param payload JSON del batch tal como llegó del sensor
+     * @return lista de IPs cliente únicas (puede estar vacía)
+     */
+    private static java.util.List<String> extractClientIps(String payload) {
+        var result = new java.util.ArrayList<String>();
+        if (payload == null) return result;
+        var rawTalkers = Json.extractRaw(payload, "top_talkers");
+        if (rawTalkers == null) return result;
+        for (var part : rawTalkers.split("[\"\\s,\\[\\]{}:]")) {
+            part = part.trim();
+            if (part.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")
+                    && isPrivateLanIp(part)
+                    && !Config.PROTECTED_IPS.contains(part)) {
+                result.add(part);
+            }
+        }
+        return result.stream().distinct().toList();
+    }
+
+    /**
+     * Comprueba si {@code ip} pertenece a un rango privado RFC-1918.
+     *
+     * <p>Rangos: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16.
+     */
+    private static boolean isPrivateLanIp(String ip) {
+        if (ip.startsWith("192.168.")) return true;
+        if (ip.startsWith("10."))      return true;
+        // 172.16.x.x – 172.31.x.x
+        var parts = ip.split("\\.");
+        if (parts.length == 4 && "172".equals(parts[0])) {
+            try {
+                int second = Integer.parseInt(parts[1]);
+                return second >= 16 && second <= 31;
+            } catch (NumberFormatException ignored) { /* not a valid octet */ }
+        }
+        return false;
     }
 
     // ─── OSINT trigger ────────────────────────────────────────────────────────
