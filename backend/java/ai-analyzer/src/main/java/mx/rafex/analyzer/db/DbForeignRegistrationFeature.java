@@ -69,5 +69,27 @@ public final class DbForeignRegistrationFeature implements Feature {
         RuntimeForeignAccess.registerForDowncall(FunctionDescriptor.of(C_LONG, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR));
         RuntimeForeignAccess.registerForDowncall(FunctionDescriptor.of(C_LONG, C_PTR, C_PTR, C_LONG, C_PTR, C_PTR, C_PTR, C_PTR));
         RuntimeForeignAccess.registerForDowncall(FunctionDescriptor.of(C_LONG, C_PTR, C_LONG, C_PTR, C_PTR, C_PTR));
+
+        // ── OSINT (Fase 5 — añadidos al actualizar osint_enrichments) ─────────────
+        // osint_insert(handle, alert_id, batch_id, target, target_type, source,
+        //              phomber_raw, bing_raw, llm_result, risk, summary_es,
+        //              queried_at, expires_at) → i64
+        // GraalVM 25 / aarch64 computa este descriptor como (long×14)long — registrar
+        // el descriptor exacto usado en DbLibrary para que el leaf-type coincida.
+        RuntimeForeignAccess.registerForDowncall(FunctionDescriptor.of(C_LONG, C_PTR, C_LONG, C_LONG,
+            C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR, C_PTR));
+
+        // osint_is_cached(handle, target, source, now_iso) → i64
+        // Ya cubierto por: FunctionDescriptor.of(C_LONG, C_PTR, C_PTR, C_PTR, C_PTR)
+
+        // osint_list_recent(handle, limit) → *c_char
+        // Ya cubierto por: FunctionDescriptor.of(C_PTR, C_PTR, C_LONG)
+
+        // osint_get_detail(handle, id) → *c_char
+        // Ya cubierto por: FunctionDescriptor.of(C_PTR, C_PTR, C_LONG)
+
+        // osint_pending_alerts(handle, min_severity, now_iso, limit) → *c_char
+        // Nuevo: 3×C_PTR + C_LONG como params, retorna C_PTR
+        RuntimeForeignAccess.registerForDowncall(FunctionDescriptor.of(C_PTR, C_PTR, C_PTR, C_PTR, C_LONG));
     }
 }
