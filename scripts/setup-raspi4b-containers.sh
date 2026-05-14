@@ -538,8 +538,11 @@ Acciones recomendadas:
     fi
 
     log_info "Creando contenedor $CONTAINER_BACKEND ..."
+    # --replace garantiza que si el nombre sigue registrado en podman
+    # (tras rm fallido o BD interna inconsistente) se limpia automáticamente.
     run_cmd $PODMAN_BIN create \
-        --name  "$CONTAINER_BACKEND" \
+        --name    "$CONTAINER_BACKEND" \
+        --replace \
         --restart unless-stopped \
         --network host \
         --log-driver k8s-file \
@@ -647,7 +650,8 @@ _deploy_web() {
 
     log_info "Creando contenedor $CONTAINER_WEB ..."
     run_cmd $PODMAN_BIN create \
-        --name  "$CONTAINER_WEB" \
+        --name    "$CONTAINER_WEB" \
+        --replace \
         --restart unless-stopped \
         --network host \
         --log-driver k8s-file \
