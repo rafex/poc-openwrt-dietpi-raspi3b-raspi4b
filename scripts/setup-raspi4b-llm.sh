@@ -12,6 +12,14 @@ LLAMA_PIDFILE="/var/run/llama-server.pid"
 LLAMA_LOGFILE="/var/log/llama-server.log"
 CUSTOM_MODEL_PATH=""
 
+# ── Modelo preferido ───────────────────────────────────────────────────────────
+# Qwen2.5-1.5B-Instruct-Q4_K_M: mejor español y razonamiento que 0.5B,
+# ~16 tok/s en Pi 4B, cabe holgado en 4 GB RAM (~1.1 GB en disco).
+MODEL_DIR="/opt/models"
+MODEL_FILENAME="qwen2.5-1.5b-instruct-q4_k_m.gguf"
+MODEL_HF_REPO="Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+MODEL_HF_URL="https://huggingface.co/${MODEL_HF_REPO}/resolve/main/${MODEL_FILENAME}"
+
 parse_common_flags "$@"
 ARGS=("${REM_ARGS[@]}")
 REM_ARGS=()
@@ -36,6 +44,55 @@ need_root
 log_info "--- setup-raspi4b-llm ---"
 ensure_cmd bash curl
 
+# ── Descarga del modelo si no existe ─────────────────────────────────────────
+# Se omite si --model-path fue especificado (el usuario ya tiene el modelo).
+# Descarga a /opt/models/ con curl (sigue redirects de HuggingFace → CDN).
+# Si huggingface-cli está disponible lo usa como alternativa más robusta.
+download_model_if_needed() {
+  [ -n "$CUSTOM_MODEL_PATH" ] && return 0   # el usuario indicó un modelo propio
+
+  local dest="${MODEL_DIR}/${MODEL_FILENAME}"
+
+  # Ya descargado
+  if [ -f "$dest" ]; then
+    log_ok "Modelo ya existe: $dest ($(du -sh "$dest" 2>/dev/null | cut -f1))"
+    return 0
+  fi
+
+  # Buscar en HF cache (snapshot con symlink nombrado)
+  local hf_snap
+  hf_snap="$(find /root /home -maxdepth 14 -type f \
+    -path "*/models--Qwen--Qwen2.5-1.5B-Instruct-GGUF/snapshots/*/${MODEL_FILENAME}" \
+    2>/dev/null | head -1)"
+  if [ -n "$hf_snap" ]; then
+    log_ok "Modelo encontrado en HF cache: $hf_snap"
+    return 0
+  fi
+
+  log_info "Descargando ${MODEL_FILENAME} (~1.1 GB) — puede tardar varios minutos..."
+  run_cmd mkdir -p "$MODEL_DIR"
+
+  if $DRY_RUN; then
+    log_info "[dry-run] curl -fL $MODEL_HF_URL → $dest"
+    return 0
+  fi
+
+  if command -v huggingface-cli >/dev/null 2>&1; then
+    log_info "Usando huggingface-cli..."
+    huggingface-cli download "$MODEL_HF_REPO" "$MODEL_FILENAME" \
+      --local-dir "$MODEL_DIR" --local-dir-use-symlinks False \
+      && log_ok "Descarga completada: $dest" \
+      || die "huggingface-cli falló. Prueba manualmente: wget -O $dest $MODEL_HF_URL"
+  else
+    log_info "Usando curl (huggingface-cli no disponible)..."
+    curl -fL --progress-bar \
+      -o "${dest}.tmp" "$MODEL_HF_URL" \
+      && mv "${dest}.tmp" "$dest" \
+      && log_ok "Descarga completada: $dest ($(du -sh "$dest" | cut -f1))" \
+      || { rm -f "${dest}.tmp"; die "curl falló. Prueba: wget -O $dest $MODEL_HF_URL"; }
+  fi
+}
+
 find_llama_bin() {
   local c
   for c in \
@@ -59,26 +116,36 @@ find_model() {
   fi
 
   local f
+  # Prioridad: 1.5B → 0.5B → TinyLlama (último recurso)
   for f in \
+    /opt/models/qwen2.5-1.5b*.gguf \
+    /opt/models/Qwen2.5-1.5B*.gguf \
+    /opt/models/*qwen*1.5*.gguf \
+    /opt/llama.cpp/models/qwen2.5-1.5b*.gguf \
+    /opt/llama.cpp/models/*qwen*1.5*.gguf \
+    /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-1.5B-Instruct-GGUF/snapshots/*/*.gguf \
+    /home/*/.cache/huggingface/hub/models--Qwen--Qwen2.5-1.5B-Instruct-GGUF/snapshots/*/*.gguf \
     /opt/models/qwen2.5-0.5b*.gguf \
     /opt/models/Qwen2.5-0.5B*.gguf \
     /opt/models/*qwen*0.5*.gguf \
     /opt/llama.cpp/models/qwen2.5-0.5b*.gguf \
     /opt/llama.cpp/models/*qwen*0.5*.gguf \
+    /root/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct-GGUF/snapshots/*/*.gguf \
+    /home/*/.cache/huggingface/hub/models--Qwen--Qwen2.5-0.5B-Instruct-GGUF/snapshots/*/*.gguf \
     /opt/models/tinyllama*.gguf \
     /opt/llama.cpp/models/tinyllama*.gguf \
-    /root/.cache/llama.cpp/*/*.gguf \
-    /home/dietpi/.cache/llama.cpp/*/*.gguf \
-    /home/*/.cache/llama.cpp/*/*.gguf \
-    /home/*/.cache/llama.cpp/*/*/*.gguf \
     /root/.cache/huggingface/hub/models--*/snapshots/*/*.gguf \
-    /home/*/.cache/huggingface/hub/models--*/snapshots/*/*.gguf; do
+    /home/*/.cache/huggingface/hub/models--*/snapshots/*/*.gguf \
+    /root/.cache/llama.cpp/*/*.gguf \
+    /home/*/.cache/llama.cpp/*/*.gguf; do
     [ -f "$f" ] && { realpath "$f" 2>/dev/null || readlink -f "$f" || echo "$f"; return 0; }
   done
 
-  # Fallback robusto: busca Qwen/TinyLlama en rutas típicas de /home, /root y /opt.
+  # Fallback robusto: find en rutas típicas (1.5B primero, luego 0.5B, luego tinyllama)
   if command -v find >/dev/null 2>&1; then
-    f="$(find /home /root /opt -maxdepth 12 -type f \( -iname '*qwen*0.5*.gguf' -o -iname '*tinyllama*.gguf' \) 2>/dev/null | head -1)"
+    f="$(find /home /root /opt -maxdepth 14 -type f \
+      \( -iname '*qwen*1.5*.gguf' -o -iname '*qwen*0.5*.gguf' -o -iname '*tinyllama*.gguf' \) \
+      2>/dev/null | head -1)"
     [ -n "$f" ] && { realpath "$f" 2>/dev/null || readlink -f "$f" || echo "$f"; return 0; }
   fi
   return 1
@@ -86,9 +153,14 @@ find_model() {
 
 LLAMA_BIN="$(find_llama_bin || true)"
 [ -n "$LLAMA_BIN" ] || die "No se encontró binario llama-server"
+
+# Descargar Qwen2.5-1.5B-Instruct-Q4_K_M si no hay ningún modelo disponible
+download_model_if_needed
+
 MODEL_PATH="$(find_model || true)"
-[ -n "$MODEL_PATH" ] || die "No se encontró modelo .gguf (Qwen2.5-0.5B o TinyLlama).
-Sugerencia: usa --model-path=/ruta/al/modelo.gguf"
+[ -n "$MODEL_PATH" ] || die "No se encontró modelo .gguf.
+Sugerencia: usa --model-path=/ruta/al/modelo.gguf
+  o deja que el script lo descargue en ${MODEL_DIR}/${MODEL_FILENAME}"
 
 log_ok "Binario: $LLAMA_BIN"
 log_ok "Modelo : $MODEL_PATH"
@@ -115,7 +187,7 @@ MODEL="$MODEL_PATH"
 PORT=$LLAMA_PORT
 PIDFILE="$LLAMA_PIDFILE"
 LOGFILE="$LLAMA_LOGFILE"
-CTX_SIZE=4096
+CTX_SIZE=2048
 THREADS=4
 N_PARALLEL=1
 do_start() {

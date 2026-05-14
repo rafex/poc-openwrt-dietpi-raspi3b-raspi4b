@@ -193,8 +193,8 @@ MQTT_TOPIC=rafexpi/sensor/batch
 DB_PATH=/opt/analyzer/data/sensor.db
 
 LLAMA_URL=http://${_MQTT_HOST}:8081
-MODEL_FORMAT=tinyllama
-N_PREDICT=256
+MODEL_FORMAT=qwen
+N_PREDICT=128
 
 GROQ_API_KEY=${GROQ_API_KEY}
 GROQ_MODEL=${GROQ_MODEL_VAL}

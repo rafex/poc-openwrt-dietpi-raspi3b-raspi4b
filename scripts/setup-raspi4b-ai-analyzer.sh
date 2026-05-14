@@ -181,8 +181,8 @@ DB_PATH=/data/sensor.db
 
 # ── llama.cpp (fallback local) ────────────────────────────────────────────────
 LLAMA_URL=http://${_MQTT_HOST}:8081
-MODEL_FORMAT=tinyllama
-N_PREDICT=256
+MODEL_FORMAT=qwen
+N_PREDICT=128
 
 # ── Groq API ──────────────────────────────────────────────────────────────────
 GROQ_API_KEY=${GROQ_KEY_VAL}
