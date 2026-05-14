@@ -21,7 +21,8 @@ export default defineConfig({
         target:      'http://localhost:5000',
         changeOrigin: false,
       },
-      // SSE: Vite dev server ya no bufferiza streaming, no hace falta configure
+      // SSE — backend expone /events (no /api/stream).
+      // Vite dev server ya no bufferiza streaming, no se necesita config extra.
       '/events': {
         target:       'http://localhost:5000',
         changeOrigin: false,

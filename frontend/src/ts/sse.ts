@@ -10,7 +10,7 @@ let handlers: SseHandler[] = []
 export function connectSse(): void {
   if (source) return
 
-  source = new EventSource('/api/stream')
+  source = new EventSource('/events')
 
   source.onopen = () => {
     setStatus('online', 'En línea')
