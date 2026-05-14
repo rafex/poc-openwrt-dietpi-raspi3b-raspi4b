@@ -50,8 +50,8 @@ public final class Config {
 
     // ── llama.cpp ─────────────────────────────────────────────────────────────
     public static final String LLAMA_URL    = env("LLAMA_URL",    "http://192.168.1.167:8081");
-    public static final int    N_PREDICT    = intEnv("N_PREDICT",    256);
-    public static final String MODEL_FORMAT = env("MODEL_FORMAT", "tinyllama");
+    public static final int    N_PREDICT    = intEnv("N_PREDICT",    128);   // Qwen2.5-0.5B: 128 tok bastan para riesgo+hallazgos
+    public static final String MODEL_FORMAT = env("MODEL_FORMAT", "qwen");   // ChatML (Qwen2.5-Instruct); usar "tinyllama" si vuelves a TinyLlama
 
     // ── Groq ──────────────────────────────────────────────────────────────────
     public static final String  GROQ_API_KEY      = env("GROQ_API_KEY", "");
