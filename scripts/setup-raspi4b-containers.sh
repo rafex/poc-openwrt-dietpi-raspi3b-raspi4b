@@ -162,11 +162,27 @@ SECRETS_FILE="$REPO_DIR/secrets/raspi4b.yaml"
 AGE_KEY_FILE="${SOPS_AGE_KEY_FILE:-/root/.config/sops/age/keys.txt}"
 GROQ_API_KEY=""
 GROQ_MODEL_VAL="qwen/qwen3-32b"
+SEARCH_API_TOKEN=""
 
+# ── Preservar SEARCH_API_TOKEN existente del env file de la Pi ───────────────
+# El token NO pasa por el repo ni por CI. El operador lo escribe una sola vez
+# en /etc/ai-analyzer.env; los re-deploys lo leen y conservan aquí.
+if [[ -f "$ENV_FILE" ]]; then
+    _existing_token="$(grep '^SEARCH_API_TOKEN=' "$ENV_FILE" 2>/dev/null \
+        | head -1 | cut -d= -f2- | tr -d '"' || true)"
+    if [[ -n "$_existing_token" ]]; then
+        SEARCH_API_TOKEN="$_existing_token"
+        log_ok "SEARCH_API_TOKEN preservado de $ENV_FILE (${#SEARCH_API_TOKEN} chars)"
+    else
+        log_info "SEARCH_API_TOKEN vacío — OSINT solo con PHOMBER"
+        log_info "  Para activarlo tras el deploy: edita $ENV_FILE y añade SEARCH_API_TOKEN=<tu_token>"
+    fi
+fi
+
+# ── Secretos vía sops+age (GROQ_API_KEY — opcional) ──────────────────────────
 if [[ -f "$SECRETS_FILE" ]]; then
     if [[ ! -f "$AGE_KEY_FILE" ]]; then
-        log_warn "Clave age no encontrada: $AGE_KEY_FILE"
-        log_warn "Desplegando sin secretos (Groq deshabilitado)"
+        log_info "sops: clave age no encontrada — omitiendo descifrado"
     else
         log_info "Descifrando secretos con sops+age..."
         _STMP=$(mktemp /dev/shm/sops-XXXXXX 2>/dev/null || mktemp)
@@ -177,10 +193,14 @@ if [[ -f "$SECRETS_FILE" ]]; then
            sops -d --output-type dotenv "$SECRETS_FILE" > "$_STMP" 2>/dev/null; then
             GROQ_API_KEY="$(grep '^GROQ_API_KEY=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || true)"
             GROQ_MODEL_VAL="$(grep '^GROQ_MODEL=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || echo 'qwen/qwen3-32b')"
+            # SEARCH_API_TOKEN desde sops solo si no vino del env file existente
+            if [[ -z "$SEARCH_API_TOKEN" ]]; then
+                SEARCH_API_TOKEN="$(grep '^SEARCH_API_TOKEN=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || true)"
+            fi
             rm -f "$_STMP"; trap - EXIT
             [[ -n "$GROQ_API_KEY" ]] \
-                && log_ok "Secretos descifrados — GROQ_API_KEY: ${#GROQ_API_KEY} chars" \
-                || log_info "Secretos descifrados — GROQ_API_KEY vacío (modo llama.cpp local)"
+                && log_ok "GROQ_API_KEY: ${#GROQ_API_KEY} chars" \
+                || log_info "GROQ_API_KEY vacío — modo llama.cpp local"
         else
             rm -f "$_STMP"; trap - EXIT
             log_warn "sops no pudo descifrar $SECRETS_FILE — continuando sin Groq"
@@ -251,6 +271,16 @@ N_PREDICT=256
 GROQ_API_KEY=${GROQ_API_KEY}
 GROQ_MODEL=${GROQ_MODEL_VAL}
 GROQ_MAX_TOKENS=1024
+
+# ── OSINT (SearchAPI.io — opcional) ──────────────────────────────────────────
+# SEARCH_API_TOKEN se lee y preserva del env file existente en cada re-deploy.
+# Para activarlo tras el primer deploy: edita este archivo y añade tu token.
+# El token NO va al repo ni al CI — solo existe en esta Pi (chmod 600).
+SEARCH_API_TOKEN=${SEARCH_API_TOKEN}
+FEATURE_OSINT=true
+OSINT_MIN_SEVERITY=HIGH
+PHOMBER_TIMEOUT=25
+OSINT_LLM_TIMEOUT=60
 
 # ── Red e infraestructura ─────────────────────────────────────────────────────
 PORT=5000
@@ -490,8 +520,13 @@ Opciones:
     if [[ "$BACKEND" == "java" ]]; then
         log_info "Validando ABI Java↔Rust en imagen..."
         if ! $PODMAN_BIN run --rm --entrypoint sh "$image_name" -lc \
-            'test -f /opt/ai-analyzer/lib/libanalyzer_db.so && grep -a -q "rule_upsert" /opt/ai-analyzer/lib/libanalyzer_db.so'; then
-            die "ABI incompatible detectada en imagen: la librería Rust no exporta 'rule_upsert'.
+            'lib=/opt/ai-analyzer/lib/libanalyzer_db.so
+             test -f "$lib" || exit 1
+             for sym in rule_upsert osint_insert osint_is_cached osint_list_recent; do
+               grep -a -q "$sym" "$lib" || { echo "FALTA: $sym"; exit 1; }
+             done'; then
+            die "ABI incompatible detectada en imagen: libanalyzer_db.so no exporta
+uno o más símbolos requeridos (rule_upsert, osint_insert, osint_is_cached, osint_list_recent).
 Esto indica desalineación entre el binario Java y libanalyzer_db.so.
 
 Acciones recomendadas:
@@ -499,7 +534,7 @@ Acciones recomendadas:
      bash scripts/setup-raspi4b-containers.sh --backend=java --release=vX.Y.Z-preview
   2) Re-publicar release/image asegurando que Java + lib Rust se construyan en el mismo run."
         fi
-        log_ok "ABI Java↔Rust OK en imagen (símbolo rule_upsert presente)"
+        log_ok "ABI Java↔Rust OK en imagen (rule_upsert + símbolos OSINT presentes)"
     fi
 
     log_info "Creando contenedor $CONTAINER_BACKEND ..."
