@@ -312,15 +312,29 @@ until curl -sf "http://127.0.0.1:5000/health" >/dev/null 2>&1; do
 done
 log_ok "ai-analyzer responde en :5000 (${WAIT}s)"
 
-for ep in /health /dashboard /terminal /rulez /chat /reports; do
+# Verificar endpoints de la API Java directamente en :5000 (no pasa por nginx).
+# Las páginas HTML (/dashboard, /terminal, /chat…) las sirve nginx — aquí
+# solo probamos rutas que el backend Java responde con 200.
+for ep in /health "/api/analyses?limit=1" "/api/alerts?limit=1" "/api/stats"; do
     code="$(curl -s -o /dev/null -w '%{http_code}' \
         --connect-timeout 5 --max-time 10 \
-        "http://${PI_IP}:5000${ep}" 2>/dev/null || echo 000)"
+        "http://127.0.0.1:5000${ep}" 2>/dev/null || echo 000)"
     case "$code" in
-        200|301|302) log_ok "${ep}  HTTP ${code}" ;;
-        *)           log_warn "${ep}  HTTP ${code} (inesperado)" ;;
+        200|204) log_ok "  :5000${ep}  HTTP ${code}" ;;
+        *)       log_warn "  :5000${ep}  HTTP ${code} (inesperado)" ;;
     esac
 done
+
+# Verificar POST /api/terminal a través del backend
+term_code="$(curl -s -o /dev/null -w '%{http_code}' \
+    -X POST -H 'Content-Type: application/json' \
+    -d '{"cmd":"echo ok"}' \
+    --connect-timeout 5 --max-time 10 \
+    "http://127.0.0.1:5000/api/terminal" 2>/dev/null || echo 000)"
+case "$term_code" in
+    200) log_ok "  :5000/api/terminal  HTTP ${term_code} (terminal ok)" ;;
+    *)   log_warn "  :5000/api/terminal  HTTP ${term_code} (inesperado — binario desactualizado?)" ;;
+esac
 
 if [[ -n "${GROQ_API_KEY:-}" ]]; then
     GROQ_STATUS="$(curl -sf "http://127.0.0.1:5000/health" 2>/dev/null \
