@@ -93,6 +93,22 @@ GROQ_API_KEY=""
 GROQ_MODEL_VAL="qwen/qwen3-32b"
 SEARCH_API_TOKEN=""
 
+# ── Leer SEARCH_API_TOKEN existente del env file de la Pi ─────────────────────
+# El token NO viaja por el repo ni por CI. El operador lo escribe UNA VEZ
+# directamente en /etc/ai-analyzer.env (chmod 600). Los re-deploys lo preservan.
+if [[ -f "$ENV_FILE" ]]; then
+    _existing_token="$(grep '^SEARCH_API_TOKEN=' "$ENV_FILE" 2>/dev/null \
+        | head -1 | cut -d= -f2- | tr -d '"' || true)"
+    if [[ -n "$_existing_token" ]]; then
+        SEARCH_API_TOKEN="$_existing_token"
+        log_ok "SEARCH_API_TOKEN preservado de $ENV_FILE (${#SEARCH_API_TOKEN} chars)"
+    else
+        log_info "SEARCH_API_TOKEN vacío — OSINT solo con PHOMBER"
+        log_info "  Para activarlo: edita $ENV_FILE y añade SEARCH_API_TOKEN=<tu_token>"
+    fi
+fi
+
+# ── Secretos vía sops+age (GROQ_API_KEY — opcional) ───────────────────────────
 if [[ -f "$SECRETS_FILE" && -f "$AGE_KEY_FILE" ]]; then
     log_info "Descifrando secretos con sops+age..."
     _STMP=$(mktemp /dev/shm/sops-XXXXXX 2>/dev/null || mktemp)
@@ -103,21 +119,19 @@ if [[ -f "$SECRETS_FILE" && -f "$AGE_KEY_FILE" ]]; then
        sops -d --output-type dotenv "$SECRETS_FILE" > "$_STMP" 2>/dev/null; then
         GROQ_API_KEY="$(grep '^GROQ_API_KEY=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || echo '')"
         GROQ_MODEL_VAL="$(grep '^GROQ_MODEL=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || echo 'qwen/qwen3-32b')"
-        SEARCH_API_TOKEN="$(grep '^SEARCH_API_TOKEN=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || echo '')"
+        # SEARCH_API_TOKEN desde sops solo si no vino del env file existente
+        if [[ -z "$SEARCH_API_TOKEN" ]]; then
+            SEARCH_API_TOKEN="$(grep '^SEARCH_API_TOKEN=' "$_STMP" | head -1 | cut -d= -f2- | tr -d '"' || echo '')"
+        fi
         rm -f "$_STMP"; trap - EXIT
-        [[ -n "$GROQ_API_KEY" ]]       && log_ok   "GROQ_API_KEY: ${#GROQ_API_KEY} chars" \
-                                       || log_info  "GROQ_API_KEY vacío — solo llama.cpp"
-        [[ -n "$SEARCH_API_TOKEN" ]]   && log_ok   "SEARCH_API_TOKEN: ${#SEARCH_API_TOKEN} chars (OSINT/Bing habilitado)" \
-                                       || log_info  "SEARCH_API_TOKEN vacío — OSINT solo con PHOMBER"
+        [[ -n "$GROQ_API_KEY" ]] && log_ok  "GROQ_API_KEY: ${#GROQ_API_KEY} chars" \
+                                 || log_info "GROQ_API_KEY vacío — solo llama.cpp"
     else
         rm -f "$_STMP"; trap - EXIT
-        log_warn "sops no pudo descifrar — desplegando sin Groq ni SearchAPI"
+        log_warn "sops no pudo descifrar $SECRETS_FILE — continuando sin Groq"
     fi
-elif [[ ! -f "$SECRETS_FILE" ]]; then
-    log_info "secrets/raspi4b.yaml no encontrado — sin Groq ni SearchAPI"
-elif [[ ! -f "$AGE_KEY_FILE" ]]; then
-    log_warn "Clave age no encontrada: $AGE_KEY_FILE"
-    log_warn "Ejecuta: bash scripts/secrets-push-key.sh"
+elif [[ -f "$SECRETS_FILE" && ! -f "$AGE_KEY_FILE" ]]; then
+    log_info "sops: clave age no encontrada — omitiendo descifrado"
 fi
 
 if $ONLY_VERIFY; then
@@ -187,8 +201,9 @@ GROQ_MODEL=${GROQ_MODEL_VAL}
 GROQ_MAX_TOKENS=1024
 
 # ── OSINT (SearchAPI.io — opcional) ─────────────────────────────────────────
-# SEARCH_API_TOKEN se descifra de secrets/raspi4b.yaml con sops+age.
-# Si está vacío el enrichment OSINT solo usa PHOMBER (modo degradado).
+# SEARCH_API_TOKEN se lee del env file existente en cada re-deploy.
+# Para activarlo por primera vez: edita este archivo y añade tu token.
+# El token NO va al repo ni al CI — solo existe en esta Pi.
 SEARCH_API_TOKEN=${SEARCH_API_TOKEN}
 FEATURE_OSINT=true
 OSINT_MIN_SEVERITY=HIGH
