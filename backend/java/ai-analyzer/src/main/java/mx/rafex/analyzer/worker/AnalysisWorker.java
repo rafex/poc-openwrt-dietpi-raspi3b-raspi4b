@@ -262,19 +262,19 @@ public final class AnalysisWorker implements Runnable {
     // ─── LLM call ─────────────────────────────────────────────────────────────
 
     private String callLlm(String trafficSummary) {
-        var system = Config.FEATURE_DOMAIN_CLASSIFIER ?
-            """
-            Eres analista SOC para red WiFi pública.
-            IPs de infraestructura que NUNCA debes recomendar bloquear: %s.
-            Analiza este resumen de tráfico y responde en español con:
-            1) Riesgo (BAJO/MEDIO/ALTO)
-            2) 2-3 hallazgos accionables
-            3) Recomendación breve.
-            """.formatted(Config.PROTECTED_IPS)
-            :
-            """
-            Eres analista SOC. Responde en español: riesgo, hallazgos, recomendación.
-            """;
+        // Formato rígido de salida: minimiza tokens desperdiciados en preámbulos
+        // (Qwen2.5-1.5B con 128 tokens no puede permitirse "Aquí está mi análisis:").
+        // extractRisk() busca substring ALTO/MEDIO/BAJO — funciona con este formato.
+        var system = Config.FEATURE_DOMAIN_CLASSIFIER
+            ? """
+              Eres analista SOC de red WiFi pública.
+              IPs protegidas (NO bloquear nunca): %s.
+              Responde en español, SIN preámbulos, exactamente en este formato:
+              RIESGO: BAJO|MEDIO|ALTO
+              HALLAZGOS: hallazgo1; hallazgo2; hallazgo3
+              ACCIÓN: recomendación en una línea
+              """.formatted(Config.PROTECTED_IPS).strip()
+            : "Eres analista SOC. Responde en español SIN preámbulos — RIESGO: BAJO|MEDIO|ALTO, hallazgos breves, acción.";
 
         if (Config.GROQ_CHAT_ENABLED) {
             llamaCalls.incrementAndGet();
@@ -298,14 +298,22 @@ public final class AnalysisWorker implements Runnable {
 
     private void generateHumanExplanation(long batchId, String traffic, String ts) {
         try {
-            var prompt = "Resume en español para humanos la actividad de red en máximo 4 líneas.\n" +
-                "Incluye: dispositivo principal, dominios dominantes, nivel de actividad y riesgo práctico.\n" +
+            var prompt = "Resume en español para humanos la actividad de red en máximo 4 oraciones.\n" +
+                "Incluye: dispositivos activos, dominios dominantes, nivel de actividad y riesgo práctico.\n" +
                 "Datos:\n" + traffic;
             String text;
             if (Config.GROQ_CHAT_ENABLED) {
-                text = GroqClient.chatUser("Eres un asistente de red. Responde en español.", prompt);
+                text = GroqClient.chatUser(
+                    "Eres asistente de ciberseguridad doméstica. Explica en español sin tecnicismos.",
+                    prompt);
             } else {
-                text = LlamaClient.complete(LlamaClient.buildPrompt("Resume en español.", prompt), 128, 20);
+                // timeout 30 s: Qwen2.5-1.5B a ~16 tok/s necesita ~8 s de generación
+                // + prefill del payload (hasta 2000 chars) puede añadir otros 5-10 s.
+                text = LlamaClient.complete(
+                    LlamaClient.buildPrompt(
+                        "Eres asistente de red doméstica. Explica en español en máximo 4 oraciones cortas.",
+                        prompt),
+                    128, 30);
             }
             db.humanExplanationInsert(batchId, ts, text, null);
         } catch (Exception e) {

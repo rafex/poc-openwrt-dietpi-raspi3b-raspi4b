@@ -143,10 +143,23 @@ public final class LlamaClient {
      */
     public static String buildPrompt(String systemPrompt, String userContent) {
         return switch (Config.MODEL_FORMAT.toLowerCase()) {
-            case "qwen" -> "<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n"
+            // ChatML — Qwen2.5-Instruct, Qwen3, Mistral-Instruct v0.3+, etc.
+            case "qwen", "chatml" ->
+                "<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n"
                 .formatted(systemPrompt, userContent);
-            default ->   // tinyllama
+            // TinyLlama / Zephyr (<s> + </s> como separadores)
+            case "tinyllama", "zephyr" ->
                 "<|system|>\n%s</s>\n<|user|>\n%s</s>\n<|assistant|>\n"
+                .formatted(systemPrompt, userContent);
+            // Llama-3 Instruct
+            case "llama3" ->
+                "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n%s<|eot_id|>"
+                + "<|start_header_id|>user<|end_header_id|>\n%s<|eot_id|>"
+                + "<|start_header_id|>assistant<|end_header_id|>\n"
+                .formatted(systemPrompt, userContent);
+            // Fallback seguro: ChatML (mismo que qwen)
+            default ->
+                "<|im_start|>system\n%s<|im_end|>\n<|im_start|>user\n%s<|im_end|>\n<|im_start|>assistant\n"
                 .formatted(systemPrompt, userContent);
         };
     }

@@ -124,15 +124,22 @@ public final class DomainClassifierLLM {
 
     private String callLlmForClassification(String prompt) {
         if (Config.GROQ_CHAT_ENABLED) {
-            return GroqClient.chatUser(
-                "Eres experto en clasificación de sitios web. Responde en español.",
-                prompt
+            // Temperatura 0.2: clasificación determinista, no creativa.
+            // chatUser() usa 0.7 — demasiado alto para este caso.
+            return GroqClient.chat(
+                java.util.List.of(
+                    java.util.Map.of("role", "system",
+                        "content", "Eres experto en clasificación de sitios web. "
+                            + "Responde ÚNICAMENTE en formato dominio.com:categoría (una por línea)."),
+                    java.util.Map.of("role", "user", "content", prompt)
+                ), 0.2, 200
             );
         }
 
-        // Fallback a llama.cpp local
+        // Fallback a llama.cpp local — system prompt repite el formato esperado
+        // para que Qwen2.5-1.5B no añada preámbulos ni explicaciones.
         var fullPrompt = LlamaClient.buildPrompt(
-            "Clasifica estos dominios correctamente.",
+            "Clasifica dominios. Responde ÚNICAMENTE con: dominio.com:categoría (una línea por dominio, sin más texto).",
             prompt
         );
         return LlamaClient.complete(fullPrompt, 200, 30);
