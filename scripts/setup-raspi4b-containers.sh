@@ -445,17 +445,45 @@ _stop_backend_services() {
         run_cmd systemctl stop ai-analyzer.service || true
     fi
 
-    # 2. Detener y eliminar cualquier contenedor que pueda ocupar el puerto 5000
+    # 2. Limpiar overlays stale del storage de podman.
+    # Hay dos casos posibles (ambos producen "directory not empty" en podman create):
+    #   a) El overlay está montado en el kernel pero podman no lo sabe → umount -l
+    #   b) El merged/ NO está montado pero tiene archivos huérfanos → rm -rf merged/
+    # Tratamos ambos casos: primero umount, luego borramos merged/ no-montados.
+    _OVERLAY_BASE="/var/lib/containers/storage/overlay"
+
+    # a) Desmontar overlays montados en el kernel
+    if grep -q "$_OVERLAY_BASE" /proc/mounts 2>/dev/null; then
+        log_info "Desmontando overlays stale del kernel (umount -l)..."
+        grep "$_OVERLAY_BASE" /proc/mounts \
+            | awk '{print $2}' | sort -r \
+            | while read -r _mp; do
+                umount -l "$_mp" 2>/dev/null && \
+                    log_info "  desmontado: $_mp" || true
+              done
+    fi
+
+    # b) Borrar directorios merged/ que existen pero NO están montados (archivos huérfanos)
+    if [[ -d "$_OVERLAY_BASE" ]]; then
+        find "$_OVERLAY_BASE" -maxdepth 2 -name merged -type d 2>/dev/null \
+            | while read -r _md; do
+                if ! mountpoint -q "$_md" 2>/dev/null; then
+                    rm -rf "$_md" 2>/dev/null && \
+                        log_info "  merged stale borrado: $_md" || true
+                fi
+              done
+    fi
+
+    # 3. Detener y eliminar cualquier contenedor que pueda ocupar el puerto 5000
     for old_name in ai-analyzer ai-analyzer-java ai-analyzer-python; do
         if $PODMAN_BIN container exists "$old_name" 2>/dev/null; then
             local state
             state="$($PODMAN_BIN inspect --format '{{.State.Status}}' "$old_name" 2>/dev/null || echo unknown)"
             log_info "Contenedor $old_name encontrado (estado: $state) — deteniendo y eliminando..."
             run_cmd $PODMAN_BIN stop -t 10 "$old_name" 2>/dev/null || true
-            # cleanup desmonta el overlay antes de rm — evita "directory not empty"
             $PODMAN_BIN container cleanup "$old_name" 2>/dev/null || true
             if ! $PODMAN_BIN rm -f "$old_name" 2>/dev/null; then
-                log_warn "$old_name: rm falló (overlay stale) — forzando system prune..."
+                log_warn "$old_name: rm falló — segundo intento con system prune..."
                 $PODMAN_BIN system prune -f 2>/dev/null || true
                 $PODMAN_BIN rm -f "$old_name" 2>/dev/null || true
             fi
@@ -549,8 +577,15 @@ Acciones recomendadas:
     fi
 
     log_info "Creando contenedor $CONTAINER_BACKEND ..."
-    # Limpieza defensiva: si el storage sigue inconsistente tras el stop,
-    # container cleanup desmonta el overlay antes de que create intente --replace.
+    # Segundo pase defensivo: borrar merged/ no-montados antes de que --replace
+    # intente hacer mount sobre ellos ("directory not empty").
+    _OVERLAY_BASE="/var/lib/containers/storage/overlay"
+    if [[ -d "$_OVERLAY_BASE" ]]; then
+        find "$_OVERLAY_BASE" -maxdepth 2 -name merged -type d 2>/dev/null \
+            | while read -r _md; do
+                mountpoint -q "$_md" 2>/dev/null || rm -rf "$_md" 2>/dev/null || true
+              done
+    fi
     $PODMAN_BIN container cleanup "$CONTAINER_BACKEND" 2>/dev/null || true
     # --replace garantiza que si el nombre sigue registrado en podman
     # (tras rm fallido o BD interna inconsistente) se limpia automáticamente.
