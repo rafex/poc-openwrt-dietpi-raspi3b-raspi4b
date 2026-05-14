@@ -111,6 +111,11 @@ public final class ApiServer {
         "/proc/net/", "/proc/meminfo", "/proc/cpuinfo", "/proc/loadavg",
         "/proc/uptime", "/proc/version", "/sys/class/net/"
     );
+
+    /** Prompt de sistema compartido para el chat (Groq y llama.cpp). */
+    private static final String CHAT_SYSTEM_PROMPT =
+        "Eres TARS, asistente de seguridad de red WiFi pública. " +
+        "Responde en español, conciso y sin preámbulos.";
     private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_INSTANT.withZone(ZoneOffset.UTC);
 
     private final DatabaseClient   db;
@@ -320,23 +325,40 @@ public final class ApiServer {
 
             var now = ISO.format(Instant.now());
             db.chatSessionUpsert(sessionId, now);
+            // Insertar la pregunta ANTES de leer historial — así el historial
+            // ya contiene el turno actual del usuario y buildLlamaChatPrompt
+            // puede construir el prompt completo de una sola vez.
             db.chatMessageInsert(sessionId, now, "user", question, null);
 
-            // Llamar al LLM (en hilo virtual, pero ya estamos en uno)
-            String answer;
+            String answer  = null;
             String provider;
+
+            // ── 1. Intentar Groq (si está configurado) ────────────────────────
             if (Config.GROQ_CHAT_ENABLED) {
                 var history = db.chatMessageHistory(sessionId, 10);
-                var msgs = buildChatMessages(history, question);
-                answer   = GroqClient.chat(msgs, 0.7, 0);
-                provider = "groq";
+                var msgs    = buildChatMessages(history, question);
+                // 512 tokens para chat: razonable sin arriesgar timeouts
+                var groqAnswer = GroqClient.chat(msgs, 0.7, 512);
+                if (!groqAnswer.startsWith("[Error")) {
+                    answer   = groqAnswer;
+                    provider = "groq";
+                } else {
+                    LOG.warning("Groq chat falló (%s), usando llama.cpp como fallback"
+                        .formatted(groqAnswer));
+                    provider = "llama (fallback)";
+                }
             } else {
-                var prompt = LlamaClient.buildPrompt(
-                    "Eres asistente de seguridad de red WiFi. Responde en español.",
-                    question
-                );
-                answer   = LlamaClient.complete(prompt, Config.N_PREDICT, 30);
                 provider = "llama";
+            }
+
+            // ── 2. llama.cpp local — primario o fallback ──────────────────────
+            if (answer == null) {
+                // Historial últimos 6 mensajes (≈3 turnos) para no superar
+                // CTX_SIZE=2048 (sistema ~20 tok + 3 turnos ~300 tok + output 128)
+                var history = db.chatMessageHistory(sessionId, 6);
+                var prompt  = buildLlamaChatPrompt(CHAT_SYSTEM_PROMPT, history);
+                // 45 s: Qwen2.5-1.5B ~16 tok/s, prefill con historial puede tardar
+                answer = LlamaClient.complete(prompt, Config.N_PREDICT, 45);
             }
 
             db.chatMessageInsert(sessionId, ISO.format(Instant.now()), "assistant", answer,
@@ -714,8 +736,7 @@ public final class ApiServer {
     /** Reconstruye la lista de mensajes para el contexto del chat a partir del historial JSON. */
     private static List<Map<String, String>> buildChatMessages(String historyJson, String latestQuestion) {
         var msgs = new ArrayList<Map<String, String>>();
-        msgs.add(Map.of("role", "system", "content",
-            "Eres TARS, asistente de seguridad de red WiFi. Responde en español."));
+        msgs.add(Map.of("role", "system", "content", CHAT_SYSTEM_PROMPT));
 
         // Parseo simplificado: el historial es un JSON array de objetos
         // Suficiente para recuperar role + content de cada mensaje
@@ -738,6 +759,59 @@ public final class ApiServer {
         }
         // El mensaje del usuario ya está en el historial (lo insertamos antes de llamar aquí)
         return msgs;
+    }
+
+    /**
+     * Construye un prompt multi-turno para llama.cpp a partir del historial de BD.
+     *
+     * <p>El historial ya incluye el mensaje actual del usuario (insertado antes de
+     * llamar a este método). El prompt termina con el marcador de turno del asistente
+     * para que el modelo continúe directamente con la respuesta.
+     *
+     * <p>Soporta formatos ChatML (qwen/chatml/default) y TinyLlama/Zephyr.
+     * CTX_SIZE=2048: limitar historial a 6 mensajes (≈3 turnos) para no excederlo.
+     */
+    private static String buildLlamaChatPrompt(String system, String historyJson) {
+        var sb  = new StringBuilder();
+        var fmt = Config.MODEL_FORMAT.toLowerCase();
+        // TinyLlama/Zephyr usan </s> como separador; todo lo demás usa ChatML.
+        boolean chatml = !"tinyllama".equals(fmt) && !"zephyr".equals(fmt);
+
+        // System turn
+        if (chatml) {
+            sb.append("<|im_start|>system\n").append(system).append("<|im_end|>\n");
+        } else {
+            sb.append("<|system|>\n").append(system).append("</s>\n");
+        }
+
+        // History turns
+        if (historyJson != null && !historyJson.equals("[]")) {
+            var arr = historyJson.strip();
+            int i = 1;
+            while (i < arr.length() - 1) {
+                int start = arr.indexOf('{', i);
+                if (start < 0) break;
+                int end = findClose(arr, start, '{', '}');
+                if (end < 0) break;
+                var obj     = arr.substring(start, end + 1);
+                var role    = Json.extractString(obj, "role");
+                var content = Json.extractString(obj, "content");
+                if (role != null && content != null && !"system".equals(role)) {
+                    if (chatml) {
+                        sb.append("<|im_start|>").append(role).append("\n")
+                          .append(content).append("<|im_end|>\n");
+                    } else {
+                        sb.append("user".equals(role) ? "<|user|>" : "<|assistant|>")
+                          .append("\n").append(content).append("</s>\n");
+                    }
+                }
+                i = end + 1;
+            }
+        }
+
+        // Abrir turno del asistente — el modelo continúa aquí
+        sb.append(chatml ? "<|im_start|>assistant\n" : "<|assistant|>\n");
+        return sb.toString();
     }
 
     private static int findClose(String s, int open, char openC, char closeC) {
