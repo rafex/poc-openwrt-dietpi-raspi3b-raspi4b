@@ -76,6 +76,7 @@ import java.util.logging.Logger;
  *   GET    /api/osint             → enriquecimientos OSINT recientes
  *   GET    /api/osint/{id}        → detalle completo de un enriquecimiento
  *   POST   /api/osint/enrich      → disparo manual de enriquecimiento OSINT
+ *   POST   /api/terminal          → ejecutar comando de diagnóstico (allowlist)
  *   GET    /events                → SSE tiempo real
  *   OPTIONS *                     → CORS preflight
  * </pre>
@@ -91,6 +92,25 @@ import java.util.logging.Logger;
 public final class ApiServer {
 
     private static final Logger LOG = Logger.getLogger(ApiServer.class.getName());
+
+    // ── Terminal: allowlist de comandos de diagnóstico ────────────────────────
+    //
+    // Solo el primer token del comando se valida contra esta lista.
+    // 'cat' tiene además una restricción de ruta (solo /proc/ y /sys/class/net/).
+    // El objetivo es permitir diagnóstico de red sin exponer rm, chmod, sudo, etc.
+    private static final Set<String> TERMINAL_ALLOWED_CMDS = Set.of(
+        "ip", "arp", "ss", "uptime", "free", "df",
+        "journalctl", "ping", "nft", "systemctl", "ps",
+        "netstat", "dig", "nslookup", "traceroute",
+        "uname", "date", "hostname", "whoami", "echo",
+        "cat", "iwconfig", "iwlist", "nmcli", "ifconfig"
+    );
+
+    // 'cat' solo puede leer de rutas seguras (sin /etc/passwd, /proc/sched_debug, etc.)
+    private static final Set<String> CAT_ALLOWED_PREFIXES = Set.of(
+        "/proc/net/", "/proc/meminfo", "/proc/cpuinfo", "/proc/loadavg",
+        "/proc/uptime", "/proc/version", "/sys/class/net/"
+    );
     private static final DateTimeFormatter ISO = DateTimeFormatter.ISO_INSTANT.withZone(ZoneOffset.UTC);
 
     private final DatabaseClient   db;
@@ -147,6 +167,7 @@ public final class ApiServer {
         server.createContext("/api/summaries",        this::handleSummaries);
         server.createContext("/api/portal/risk-message", this::handlePortalRiskMessage);
         server.createContext("/api/osint",            this::handleOsint);
+        server.createContext("/api/terminal",         this::handleTerminal);
 
         // ── SSE ───────────────────────────────────────────────────────────────
         server.createContext("/events",          this::handleSse);
@@ -166,7 +187,7 @@ public final class ApiServer {
                      "endpoints":["/health","/api/analyses","/api/alerts","/api/actions","/api/anomalies",
                      "/api/stats","/api/ingest","/api/chat","/api/whitelist",
                      "/api/profiles","/api/reports","/api/summaries","/api/portal/risk-message",
-                     "/api/osint","/events"],
+                     "/api/osint","/api/terminal","/events"],
                      "ui":"served by frontend (Node.js/Vite)"}
                     """.strip());
             } else {
@@ -489,6 +510,123 @@ public final class ApiServer {
         }
 
         json(ex, 405, Json.error("Método no permitido"));
+    }
+
+    /**
+     * POST /api/terminal — ejecuta un comando de diagnóstico y retorna su salida.
+     *
+     * <p>Body: {@code {"cmd":"ip a"}}
+     *
+     * <p>Respuesta: {@code {"stdout":"...","stderr":"...","exit_code":0}}
+     *
+     * <p>Seguridad: solo se permite ejecutar comandos cuyo primer token esté
+     * en {@link #TERMINAL_ALLOWED_CMDS}. «cat» tiene restricción adicional
+     * de ruta ({@link #CAT_ALLOWED_PREFIXES}). Los comandos se ejecutan con
+     * timeout de 15 segundos y la salida se trunca a 8 KB.
+     */
+    private void handleTerminal(HttpExchange ex) throws IOException {
+        if (!"POST".equals(ex.getRequestMethod())) {
+            json(ex, 405, Json.error("Método no permitido"));
+            return;
+        }
+
+        var body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+        var cmd  = Json.extractString(body, "cmd");
+        if (cmd == null || cmd.isBlank()) {
+            json(ex, 400, Json.error("Falta campo cmd"));
+            return;
+        }
+        cmd = cmd.strip();
+
+        // ── Validar primer token ───────────────────────────────────────────
+        var firstToken = cmd.split("\\s+")[0].toLowerCase(java.util.Locale.ROOT);
+        if (!TERMINAL_ALLOWED_CMDS.contains(firstToken)) {
+            var resp = new LinkedHashMap<String, Object>();
+            resp.put("stdout", "");
+            resp.put("stderr",
+                "Comando no permitido: '" + firstToken + "'\n" +
+                "Comandos disponibles: " +
+                String.join(", ", new TreeSet<>(TERMINAL_ALLOWED_CMDS)));
+            resp.put("exit_code", 126);
+            json(ex, 200, Json.obj(resp));
+            return;
+        }
+
+        // 'cat' solo puede leer rutas seguras (/proc/net/*, /sys/class/net/*, etc.)
+        if ("cat".equals(firstToken)) {
+            var tokens = cmd.split("\\s+");
+            boolean safe = tokens.length >= 2 &&
+                CAT_ALLOWED_PREFIXES.stream().anyMatch(tokens[1]::startsWith);
+            if (!safe) {
+                var resp = new LinkedHashMap<String, Object>();
+                resp.put("stdout", "");
+                resp.put("stderr",
+                    "cat: ruta no permitida.\n" +
+                    "Rutas permitidas: " + String.join(", ", CAT_ALLOWED_PREFIXES));
+                resp.put("exit_code", 126);
+                json(ex, 200, Json.obj(resp));
+                return;
+            }
+        }
+
+        // ── Ejecutar con timeout de 15 s ──────────────────────────────────
+        final var cmdFinal = cmd;
+        try {
+            var pb = new ProcessBuilder("/bin/sh", "-c", cmdFinal);
+            pb.environment().put("LC_ALL", "C");   // salida ASCII estable
+
+            var proc   = pb.start();
+            var stdout = new StringBuilder();
+            var stderr = new StringBuilder();
+
+            // Leer stdout + stderr en hilos virtuales para evitar deadlock de pipe buffer
+            var t1 = Thread.ofVirtual().start(() -> {
+                try (var is = proc.getInputStream()) {
+                    stdout.append(new String(is.readAllBytes(), StandardCharsets.UTF_8));
+                } catch (IOException ignored) { /* proceso terminado */ }
+            });
+            var t2 = Thread.ofVirtual().start(() -> {
+                try (var is = proc.getErrorStream()) {
+                    stderr.append(new String(is.readAllBytes(), StandardCharsets.UTF_8));
+                } catch (IOException ignored) { /* proceso terminado */ }
+            });
+
+            boolean done = proc.waitFor(15, TimeUnit.SECONDS);
+            if (!done) {
+                proc.destroyForcibly();
+                var resp = new LinkedHashMap<String, Object>();
+                resp.put("stdout", "");
+                resp.put("stderr", "Timeout: el comando tardó más de 15 s y fue terminado.");
+                resp.put("exit_code", -1);
+                json(ex, 200, Json.obj(resp));
+                return;
+            }
+
+            t1.join(2_000);
+            t2.join(2_000);
+
+            var out = stdout.toString();
+            var err = stderr.toString();
+
+            // Truncar salidas largas
+            if (out.length() > 8_192) out = out.substring(0, 8_192) + "\n…[salida truncada a 8 KB]";
+            if (err.length() > 4_096) err = err.substring(0, 4_096) + "\n…[error truncado a 4 KB]";
+
+            var resp = new LinkedHashMap<String, Object>();
+            resp.put("stdout",    out);
+            resp.put("stderr",    err);
+            resp.put("exit_code", proc.exitValue());
+            json(ex, 200, Json.obj(resp));
+
+            LOG.info("Terminal: [%s] → exit=%d".formatted(cmdFinal, proc.exitValue()));
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            json(ex, 500, Json.error("Interrumpido"));
+        } catch (Exception e) {
+            LOG.warning("Terminal error: " + e.getMessage());
+            json(ex, 500, Json.error("Error ejecutando comando: " + e.getMessage()));
+        }
     }
 
     private void handleReports(HttpExchange ex) throws IOException {
