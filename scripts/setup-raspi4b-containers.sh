@@ -452,7 +452,13 @@ _stop_backend_services() {
             state="$($PODMAN_BIN inspect --format '{{.State.Status}}' "$old_name" 2>/dev/null || echo unknown)"
             log_info "Contenedor $old_name encontrado (estado: $state) — deteniendo y eliminando..."
             run_cmd $PODMAN_BIN stop -t 10 "$old_name" 2>/dev/null || true
-            run_cmd $PODMAN_BIN rm -f "$old_name" 2>/dev/null || true
+            # cleanup desmonta el overlay antes de rm — evita "directory not empty"
+            $PODMAN_BIN container cleanup "$old_name" 2>/dev/null || true
+            if ! $PODMAN_BIN rm -f "$old_name" 2>/dev/null; then
+                log_warn "$old_name: rm falló (overlay stale) — forzando system prune..."
+                $PODMAN_BIN system prune -f 2>/dev/null || true
+                $PODMAN_BIN rm -f "$old_name" 2>/dev/null || true
+            fi
         fi
     done
 
@@ -480,7 +486,12 @@ _stop_web_services() {
         state="$($PODMAN_BIN inspect --format '{{.State.Status}}' "$CONTAINER_WEB" 2>/dev/null || echo unknown)"
         log_info "Contenedor $CONTAINER_WEB encontrado (estado: $state) — deteniendo y eliminando..."
         run_cmd $PODMAN_BIN stop -t 10 "$CONTAINER_WEB" 2>/dev/null || true
-        run_cmd $PODMAN_BIN rm -f "$CONTAINER_WEB" 2>/dev/null || true
+        $PODMAN_BIN container cleanup "$CONTAINER_WEB" 2>/dev/null || true
+        if ! $PODMAN_BIN rm -f "$CONTAINER_WEB" 2>/dev/null; then
+            log_warn "$CONTAINER_WEB: rm falló (overlay stale) — forzando system prune..."
+            $PODMAN_BIN system prune -f 2>/dev/null || true
+            $PODMAN_BIN rm -f "$CONTAINER_WEB" 2>/dev/null || true
+        fi
     fi
 }
 
@@ -538,6 +549,9 @@ Acciones recomendadas:
     fi
 
     log_info "Creando contenedor $CONTAINER_BACKEND ..."
+    # Limpieza defensiva: si el storage sigue inconsistente tras el stop,
+    # container cleanup desmonta el overlay antes de que create intente --replace.
+    $PODMAN_BIN container cleanup "$CONTAINER_BACKEND" 2>/dev/null || true
     # --replace garantiza que si el nombre sigue registrado en podman
     # (tras rm fallido o BD interna inconsistente) se limpia automáticamente.
     run_cmd $PODMAN_BIN create \
